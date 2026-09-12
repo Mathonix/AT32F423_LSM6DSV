@@ -1,0 +1,499 @@
+IST8310
+
+
+
+
+                        IST8310
+                    3D Magnetometer
+
+
+                                 Datasheet
+
+
+
+
+IST8310 Datasheet, Version 1.5               1
+IST8310
+
+                                                     Table of Contents
+
+ 1. GENERAL DESCRIPTION ............................................................................................ 3
+
+ 2. BLOCK DIAGRAM, PACKAGE DIMENSION AND APPLICATION CIRCUIT .. 4
+     2.1. Block diagram ..........................................................................................................................4
+
+     2.2. Package Dimensions and Pin Description ...............................................................................4
+
+     2.3. Application Circuit...................................................................................................................6
+
+ 3. OPERATIONAL MODES AND FUNCTIONAL DESCRIPTIONS ........................... 7
+     3.1. Operation modes ......................................................................................................................7
+
+     3.2. Interrupt Function ....................................................................................................................8
+
+     3.3. DRDY Function .......................................................................................................................8
+
+ 4. ELECTRICAL SPECIFICATIONS................................................................................ 8
+     4.1. Absolute Maximum Ratings ....................................................................................................8
+
+     4.2. Recommended Operating Conditions ......................................................................................9
+
+     4.3. Electrical Specifications ..........................................................................................................9
+
+     4.4. Magnetic Sensor Specifications .............................................................................................10
+
+     4.5. Power On Reset (POR) Specifications ..................................................................................10
+
+ 5. TECHNOLOGY OVERVIEW ....................................................................................... 11
+     5.1. AMR Technology ................................................................................................................... 11
+
+     5.2. High Reliability Planarized Structure Design ........................................................................ 11
+
+     5.3. Ultra-low Hysteresis Design .................................................................................................. 11
+
+     5.4. Magnetic Setting Mechanism ................................................................................................ 11
+
+ 6. ORDERING INFORMATION ...................................................................................... 12
+
+ 7. LEGAL DISCLAIMER .................................................................................................. 12
+     7.1. Warranty and Liability Disclaimer .........................................................................................12
+
+     7.2. Application Disclaimer ..........................................................................................................12
+
+     7.3. Disclaimer Regarding Changes .............................................................................................12
+
+
+IST8310 Datasheet, Version 1.5                                                                                                                  2
+IST8310
+
+1. General Description
+
+iSentek IST8310 is a 3-axis digital magnetometer with a 3.0 x 3.0 x 1.0 mm3, 16-pin LGA package. It
+is an integrated chip with 3-axis magnetic sensors, digital control logic, built-in temperature
+compensation circuit, and self-test function. IST8310 provides an I2C digital output with fast mode up
+to 400 kHz. The high output data rate, ultra-low hysteresis, excellent temperature drift, and low noise
+performance features make it a perfect candidate for high precision applications.
+Features
+   ⚫   High sensitivity of up to 330 LSB/Gauss.
+   ⚫   I2C slave, Fast Mode up to 400 kHz
+   ⚫   14 or 16 bits adjustable data output
+   ⚫   Wide dynamic range of ±1600 µT (X, Y-axis) and ±2500 µT (Z-axis)
+   ⚫   High output data rate of maximum 200 Hz
+   ⚫   Ultra-low hysteresis (< 0.1 %FS)
+   ⚫   Ultra-low sensitivity temperature drift (±0.016 %/°C)
+   ⚫   Ultra-low offset temperature drift (0.024 uT/°C)
+   ⚫   Wide operating temperature range (-40 ~ 85 °C)
+   ⚫   High precision temperature compensation
+   ⚫   Built-in self-test function
+   ⚫   Software and algorithm support are available (for tilt compensation, cross-axis compensation,
+       soft/hard-iron calibration and noise suppression)
+   ⚫   RoHS, HF and TSCA compliant
+Applications
+       o   Quadcopter/Drone Applications                       o   Industrial Applications
+       o   Augmented Reality Applications                      o   Magnetometry
+       o   Virtual Reality Applications                        o   IoT devices
+       o   Location Based Services                             o   Heading
+       o   Navigation Applications                             o   Gaming
+
+
+
+
+IST8310 Datasheet, Version 1.5                                                                         3
+IST8310
+
+2. Block Diagram, Package Dimension and Application Circuit
+
+
+  2.1. Block diagram
+
+                                               AVDD      VSS                   CAD0 CAD1
+
+
+
+                                                Regulator
+
+                                                                                                          SDA
+      3-Axis
+                                       Low                                           Digital              SCL
+      AMR               MUX            Noise                   ADC                   Control
+     Sensing                           AMP                                            Logic               DRDY
+     Elements
+                                                                                                          RSTN
+
+
+
+                                                                Temperature               OTP             VPP
+       Set/Reset          Clock            Trimming
+                                                                Compensation
+       Controller        Generator           Logic
+                                                                  Circuit
+
+
+
+          C1                                                                   DVDD
+
+                                       Figure 1. Block Diagram
+
+  2.2. Package Dimensions and Pin Description
+
+                     IST8310 LGA Top View (Looking Through)
+                                                                                       0.325
+                                 3.0                           0.625
+
+
+                                                   0.625
+
+                                                                                                 0.25
+
+
+               3.0
+
+                                                                                                 0.5
+
+
+
+                                                      0.05
+
+                                                                               0.5        0.05
+
+
+                                                                                                        Unit: mm
+                                                                                           Tolerance: ±0.1 mm
+
+
+
+
+IST8310 Datasheet, Version 1.5                                                                               4
+IST8310
+                                        IST8310 LGA Side View
+
+                                                                         1.0
+
+
+
+
+                                            IST8310 3D Top View
+
+                                                         Z+
+
+
+
+
+                                                                    X+
+
+                                                   Y+
+
+                                                                                                   Unit: mm
+                                                                                        Tolerance: ±0.1 mm
+
+         Pin      Name                                        Function
+          1       SCL            I2C serial clock
+          2       AVDD           Analog supply voltage, 1.72 ~ 3.6 V
+          3       NC             Not use
+          4       NC             Not use
+          5       CAD0           I2C slave address
+          6       CAD1           I2C slave address
+          7       VPP            Test pin, connection to DVDD is suggested,
+                                 Otherwise can be floating.
+          8       NC             Not use
+          9       VSS            GND
+          10      C1             Set/Reset function, 4.7 uF
+          11      VSS            GND
+          12      NC             Not use
+          13      DVDD           Digital supply voltage, 1.72 ~ 3.6 V
+          14      RSTN           Reset pin, resets registers by setting it to “Low”. Internally pulled
+                                 to “High” for floating connection. MCU connection is suggested.
+          15      DRDY           Data ready indication, output pin only
+          16      SDA            I2C serial data
+
+               *please refer to Figure 2.
+
+
+IST8310 Datasheet, Version 1.5                                                                           5
+IST8310
+
+  2.3. Application Circuit
+
+
+
+
+                                 Figure 2. Application Circuit
+
+
+
+
+IST8310 Datasheet, Version 1.5                                   6
+IST8310
+
+3. Operational Modes and Functional Descriptions
+
+
+  3.1. Operation modes
+
+ IST8310 has following operation modes:
+  (1) Standby Mode
+  (2) Single Measurement Mode
+  (3) Self-Test Mode
+                                                                        Active s ta te
+                  Initia l s ta te
+               a fte r powe r-on
+                                        Autom a tica lly
+                                     CNTL1(0x0Ah)=0x00h
+                 S ta nd-by                                    S ingle
+                                                                                     S e lf-Te s t
+                   Mode                                    Me a s ure me nt
+                                                                                       Mode
+                                                               Mode
+                                          Ma nua lly
+                                     CNTL1(0x0Ah)=0x01h
+
+
+
+
+     3.1.1. Standby Mode
+
+The initial mode (after power on) of IST8310 is Standby Mode. In Standby Mode, all internal circuits
+are off (except oscillator and regulator) and all registers are accessible. The latest state of data saved in
+Read/Write registers is maintained. Registers can be reset by soft reset or hard reset (through RSTN pin).
+As initial setting, please set Pulse Duration Control Register, PDCNTL(0x42h) = 0xC0h for
+performance optimization.
+
+     3.1.2. Single Measurement Mode
+
+When user writes 0x01h into Control Register 1, CNTL1(0x0Ah), IST8310 enters Single Measurement
+Mode and starts a single-time measurement. In Single Measurement Mode, the measured data are stored
+in data registers before IST8310 automatically transitions to Standby Mode. When entering Standby
+Mode, CNTL1(0x0Ah) turns to 0x00h automatically. Simultaneously, DRDY bit in STAT1 register turns
+to “1”. This is called “data ready”. When any of the measurement data registers or STAT2 register is
+read, DRDY bit turns to “0”. For the next measurement, user must write 0x01h into CNTL1(0x0Ah)
+again.
+The default minimum interval between measurements is 5 ms (ODR = 200 Hz). For lower noise
+performance, set Average Control Register, AVGCNTL(0x41h) to 0x24h (in Standby Mode) for 16x
+average times setup; the minimum interval between two measurements in this setup is 6 ms (ODR = 166
+
+IST8310 Datasheet, Version 1.5                                                                            7
+IST8310
+Hz).
+Please be aware that with the IST8310, ultra-low noise performance can be obtained through soft-
+averaging in driver. Please contact iSentek for technical details.
+
+       3.1.3. Self-Test Mode
+
+Self-Test Mode is used to validate the accuracy of the 3-axis outputs read in Single Measurement Mode.
+It is activated by setting Self-Test Register, STR(0x0Ch) to 0x40h; then all 3-axis outputs will change
+their polarity. User is able to compare the 3-axis output values before and after activating Self-Test Mode;
+if the absolute values are the same, then the IC is working correctly. This feature can be disabled by
+setting STR(0x0Ch) to 0x00h. Please set Temperature Compensation Control Register, TCCNTL (0x40h)
+to 0x01h to disable the temperature compensation function to prevent incorrect compensation when
+using this self-test function, and then set it back to 0x00h in real measurement.
+
+  3.2. Interrupt Function
+
+Interrupt function is used when there is a strong external magnetic field in the surrounding. When the
+absolute sum of measured 3-axis output values exceeds 1600 µT, the INT flag is activated. The INT flag
+is located in STAT2 register.
+
+  3.3. DRDY Function
+
+DRDY function is used when the output data is updated. The DRDY pin is used for monitoring the data
+ready output. After reading data from the output register, DRDY becomes low.
+
+
+4. Electrical Specifications
+
+
+  4.1. Absolute Maximum Ratings
+
+               Parameter                        Symbol                     Limits                 Unit
+Storage Temperature                        TSTG                          -40 to +150               °C
+Analog Supply Voltage                      AVDD                          -0.5 to +3.6              V
+Digital Supply Voltage                     DVDD                          -0.5 to +3.6              V
+Digital Input Voltage                      VIN                       -0.3 to DVDD + 0.3            V
+Electrostatic Discharge Voltage*1          VESD_HBM                     -4000 to 4000              V
+Electrostatic Discharge Voltage*   2
+                                           VESD_MM                       -350 to 350               V
+Reflow Classification                      JESD22-A113 with 260 °C Peak Temperature
+
+1. Human Body Model (HBM)
+
+
+IST8310 Datasheet, Version 1.5                                                                           8
+IST8310
+2. Machine Model (MM)
+
+  4.2. Recommended Operating Conditions
+
+                 Parameter                     Symbol    Min.         Typ.        Max.     Unit
+Operating Temperature                          TA        -40                      +85       °C
+Analog Supply Voltage                          AVDD      1.72         2.8          3.6      V
+Digital Supply Voltage                         DVDD      1.72         1.8          3.6      V
+
+  4.3. Electrical Specifications
+
+(Operating conditions: TA = +25 ℃; AVDD = 2.8 V; DVDD = 1.8 V; 4.7 µF ceramic capacitors tied
+to C1 pin with maximum allowed line width and 5 mm distance.)
+      Parameter            Symbol           Conditions         Min.      Typ.       Max     Unit
+Operating Current          IDD3A    Full operation, at                                       uA
+                                    1 sps                                    20
+                                    8 sps                                    72
+                                    10 sps                                   80
+                                    20 sps                                  140
+                                    50 sps                                  320
+                                    100 sps                                 600
+                                    200 sps                              1200
+Standby Current            ISTB                                              10              uA
+Output Data Rate           ODR                                  1                    200     Hz
+(ODR)
+Input Low Voltage          VIL                                  0                  DVDD         V
+                                                                                    *30%
+Input High Voltage         VIH                              DVDD                   DVDD         V
+                                                               *70%
+Output Low Voltage         VOL      IOL = +4 mA                 0                  DVDD         V
+                                                                                    *20%
+Output High Voltage        VOH      IOH = -100 uA           DVDD                   DVDD         V
+                                    (Except SCL and            *80%
+                                    SDA)
+
+
+
+
+IST8310 Datasheet, Version 1.5                                                                      9
+IST8310
+
+  4.4. Magnetic Sensor Specifications
+
+(Operating conditions: TA = +25 ℃; AVDD = 2.8 V; DVDD = 1.8 V; 4.7 µF ceramic capacitors tied
+to C1 pin with maximum allowed line width and 5 mm distance.)
+   Parameter            Symbol             Condition            Min.       Typ.       Max         Unit
+                      MDR_XY         TA = 25 °C                            ±1600
+Dynamic Range                                                                                      uT
+                      MDR_Z          TA = 25 °C                            ±2500
+                                     X-axis                                  1         1.5
+Linearity             LIN                                                                         %FS
+                                     Y, Z-axis                              0.1        0.5
+Resolution            RESO                                                  0.3                  uT/LSB
+Sensitivity           SEN                                                   3.3                  LSB/uT
+Zero Gauss
+                      ZGD            RMS value                              ±0.3                   uT
+Offset
+Hysteresis            HS                                                    0.1                   %FS
+Sensitivity
+Temperature           TD_S           -40 ~ 85 °C                          ±0.016                  %/°C
+Drift
+Zero-B Offset
+Temperature           TD_O           -40 ~ 85 °C                           0.024                  uT/°C
+Drift
+
+  4.5. Power On Reset (POR) Specifications
+
+        AVDD
+
+
+        PSTO
+
+        0v
+
+                        POR                                     PSOI
+                                                                                     POR
+
+
+         PSTO: Power Supply Turn Off voltage                        PSTO: max=0.1volt
+         PSOI: Power Supply Turn Off Interval                       PSOI: min=10ms
+         POR: Power On Reset                                        POR: max:50ms
+
+
+When POR circuit detects a rise of AVDD voltage, it resets all internal circuits and initializes all
+registers. After reset, IST8310 transits to Standby mode.
+
+
+
+
+IST8310 Datasheet, Version 1.5                                                                           10
+IST8310
+
+5. Technology Overview
+
+
+  5.1. AMR Technology
+
+IST8310, an iSentek patented magnetometer is designed based on Anisotropy Magnetoresistance (AMR)
+technology. The output is generated by the resistance change of the AMR resistors as the external
+magnetic field varies. The sensitivity is approximately 50 to 200 times greater than conventional Hall
+elements. The high sensitivity allows a higher output data rate (ODR), lower noise, and lower power
+consumption.
+
+  5.2. High Reliability Planarized Structure Design
+
+IST8310 consists of three full Wheatstone Bridges of AMR resistors. The three bridges detecting
+magnetic components in three orthogonal directions are wire-bonded to a control ASIC on a single chip.
+This planarized structure design enables outstanding stability to thermal shock, making our device
+highly reliable, whereas other known AMR magnetometers with z-axis sensors placed vertically on the
+substrate using 90-degree flip-chip packaging suffer from reliability issues.
+
+  5.3. Ultra-low Hysteresis Design
+
+iSentek has developed a specialized high permeability (μ) material for magnetic field detection. This
+high-μ material has ultra-low residual magnetization below 0.1 %FS in the field range as large as ±500G.
+The ultra-low hysteresis design prevents the magnetometer from experiencing dynamic offset after
+encountering a strong external magnetic field impact; that is, the angular accuracy is restored
+automatically without calibration after the removal of interference field. This feature fulfills the
+requirements for applications when real-time calibration is unavailable. No calibration is required in
+general conditions.
+
+  5.4. Magnetic Setting Mechanism
+
+AMR sensing resistors consist of permalloy thin film and metallization. Permalloy is a soft magnetic
+material. Irreversible magnetic rotation may occur when the strength of external magnetic field exceeds
+half of the anisotropy field of the sensing resistor, resulting in angular error induced by offset. To solve
+this issue, a magnetic setting mechanism has been introduced in IST8310. A magnetic field is generated
+within IST8310 to align the magnetization of AMR sensing resistors before every measurement. This
+auto-zeroing mechanism ensures the stability of IST8310’s angular accuracy throughout the operation.
+
+
+
+IST8310 Datasheet, Version 1.5                                                                           11
+IST8310
+
+6. Ordering Information
+
+       Order Number        Package Type           Packaging              Marking Information
+           IST8310          LGA – 16 pin       Tape and Reel: 5k                X1X2X30
+                                                 pieces per reel                  010●
+                                                                     X1: Last number of the year
+                                                                     X2X3: Week number
+                                                                     010: Product code of IST8310
+
+
+For more information on iSentek’s magnetic sensors, please send an email to sales@isentek.com or visit
+our website at www.isentek.com.
+US Patent 9,297,863, Taiwanese Patents I437249, I420128 and I463160 apply to our magnetic sensor
+technology described.
+
+7. Legal Disclaimer
+
+  7.1. Warranty and Liability Disclaimer
+
+iSentek Inc. guarantees the information in this datasheet. It is assumed that the specification is accurate
+and reliable. However, iSentek Inc. makes no warranties or claims regarding the accuracy or
+completeness of this information and takes no responsibility for the use of the information, nor does it
+convey any license under its patent rights or the rights of third parties.
+iSentek Inc. shall not be liable for any consequential, incidental, indirect, or punitive damages (including,
+but not limited to, profit loss, business interruption, and further expenses related to the removal,
+replacement, or rework of any products).
+
+  7.2. Application Disclaimer
+
+iSentek's products are unsuitable for life-critical and safety-critical applications. For the use of its
+products in such applications, iSentek disclaims all liability. The customer agrees to indemnify and hold
+iSentek harmless from and against all liabilities and losses.
+
+  7.3. Disclaimer Regarding Changes
+
+iSentek reserves the right to modify the contents of this datasheet, including specifications and
+descriptions, at any time and without prior notice. This document supersedes all previously issued
+information.
+
+
+
+IST8310 Datasheet, Version 1.5                                                                           12
+

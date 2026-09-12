@@ -1,4 +1,4 @@
-# AT32F423KCU7-4 + LSM6DSV 2 kHz BasicVQF, 1 kHz VOFA output
+# AT32F423KCU7-4 + LSM6DSV/IST8310 2 kHz official Full VQF
 
 TARGET   ?= lsm6dsv_spi_test
 MCU      := cortex-m4
@@ -11,6 +11,7 @@ INC_DIR  := inc
 BUILD    := build
 
 CC       := arm-none-eabi-gcc
+CXX      := arm-none-eabi-g++
 OBJCOPY  := arm-none-eabi-objcopy
 SIZE     := arm-none-eabi-size
 
@@ -21,11 +22,13 @@ PIO_GCC  := $(HOME)/.platformio/packages/toolchain-gccarmnoneeabi/bin
 endif
 ifneq ($(wildcard $(PIO_GCC)/arm-none-eabi-gcc.exe),)
 CC      := $(PIO_GCC)/arm-none-eabi-gcc
+CXX     := $(PIO_GCC)/arm-none-eabi-g++
 OBJCOPY := $(PIO_GCC)/arm-none-eabi-objcopy
 SIZE    := $(PIO_GCC)/arm-none-eabi-size
 endif
 ifneq ($(wildcard $(PIO_GCC)/arm-none-eabi-gcc),)
 CC      := $(PIO_GCC)/arm-none-eabi-gcc
+CXX     := $(PIO_GCC)/arm-none-eabi-g++
 OBJCOPY := $(PIO_GCC)/arm-none-eabi-objcopy
 SIZE    := $(PIO_GCC)/arm-none-eabi-size
 endif
@@ -37,7 +40,8 @@ SRCS := \
   $(SRC_DIR)/$(APP_MAIN) \
   $(SRC_DIR)/bsp.c \
   $(SRC_DIR)/lsm6dsv.c \
-  $(SRC_DIR)/vqf.c \
+  $(SRC_DIR)/ist8310.c \
+  $(SRC_DIR)/ws2812.c \
   $(SRC_DIR)/at32f423_clock.c \
   $(SRC_DIR)/at32f423_int.c \
   $(LIB)/libraries/cmsis/cm4/device_support/system_at32f423.c \
@@ -49,6 +53,10 @@ SRCS := \
   $(LIB)/libraries/drivers/src/at32f423_flash.c \
   $(LIB)/libraries/drivers/src/at32f423_pwc.c \
   $(LIB)/libraries/drivers/src/at32f423_dma.c
+
+CPPSRCS := \
+  $(SRC_DIR)/vqf_wrapper.cpp \
+  $(SRC_DIR)/vqf_full.cpp
 
 INCLUDES := \
   -I$(INC_DIR) \
@@ -62,16 +70,21 @@ CFLAGS := -mcpu=$(MCU) -mthumb -mfpu=fpv4-sp-d16 -mfloat-abi=hard \
   -O1 -g -Wall -ffunction-sections -fdata-sections \
   -fno-common -fno-builtin $(EXTRA_CFLAGS)
 
+CXXFLAGS := $(CFLAGS) -O3 -DVQF_SINGLE_PRECISION -std=gnu++14 -fno-exceptions -fno-rtti
+
 LDFLAGS := -mcpu=$(MCU) -mthumb -mfpu=fpv4-sp-d16 -mfloat-abi=hard \
   -T$(LDSCRIPT) -Wl,--gc-sections -Wl,-Map=$(BUILD)/$(TARGET).map \
   --specs=nano.specs --specs=nosys.specs -lm
 
 OBJS := $(patsubst %.c,$(BUILD)/%.o,$(notdir $(SRCS))) \
+        $(patsubst %.cpp,$(BUILD)/%.o,$(notdir $(CPPSRCS))) \
         $(BUILD)/startup_at32f423.o
 
 vpath %.c $(SRC_DIR) \
   $(LIB)/libraries/cmsis/cm4/device_support \
   $(LIB)/libraries/drivers/src
+
+vpath %.cpp $(SRC_DIR)
 
 .DEFAULT_GOAL := all
 .PHONY: all clean spi-matrix spi-safe-probe spi-observe spi-freq-sweep safe-idle
@@ -91,6 +104,9 @@ spi-freq-sweep:
 safe-idle:
 	$(MAKE) TARGET=safe_idle APP_MAIN=safe_idle_main.c all
 
+ist8310:
+	$(MAKE) TARGET=ist8310_test APP_MAIN=ist8310_test_main.c all
+
 all: $(BUILD)/$(TARGET).elf $(BUILD)/$(TARGET).hex $(BUILD)/$(TARGET).bin
 
 $(BUILD):
@@ -99,11 +115,14 @@ $(BUILD):
 $(BUILD)/%.o: %.c | $(BUILD)
 	$(CC) $(CFLAGS) -c $< -o $@
 
+$(BUILD)/%.o: %.cpp | $(BUILD)
+	$(CXX) $(CXXFLAGS) -c $< -o $@
+
 $(BUILD)/startup_at32f423.o: $(STARTUP) | $(BUILD)
 	$(CC) $(CFLAGS) -c $< -o $@
 
 $(BUILD)/$(TARGET).elf: $(OBJS)
-	$(CC) $(OBJS) $(LDFLAGS) -o $@
+	$(CXX) $(OBJS) $(LDFLAGS) -o $@
 	$(SIZE) $@
 
 $(BUILD)/$(TARGET).hex: $(BUILD)/$(TARGET).elf
@@ -114,5 +133,9 @@ $(BUILD)/$(TARGET).bin: $(BUILD)/$(TARGET).elf
 
 clean:
 	rm -rf $(BUILD)
+
+
+
+
 
 

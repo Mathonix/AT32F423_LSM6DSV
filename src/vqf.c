@@ -15,18 +15,61 @@
 #define G_TO_MS2 9.80665f
 #define DEG2RAD  0.017453292519943295f
 
-/* Rest / bias: VQF paper defaults, tau_bias shorter so a still board converges. */
-#define REST_TH_GYR   (1.5f * DEG2RAD)
-#define REST_TH_ACC   0.5f
-#define REST_MIN_T    1.0f
-#define REST_LP_TAU   0.5f
-#define BIAS_TAU      2.0f
-#define BIAS_CLIP     (2.0f * DEG2RAD)
+/*
+ * Gimbal-oriented tuning. Rest detection is conservative, while the
+ * stationary bias estimate converges faster after a confirmed rest state. Units are rad/s, m/s^2,
+ * and seconds.
+ */
+#ifndef VQF_REST_TH_GYR_BIAS_DPS
+#define VQF_REST_TH_GYR_BIAS_DPS 0.20f
+#endif
+#ifndef VQF_REST_TH_GYR_FAST_DPS
+#define VQF_REST_TH_GYR_FAST_DPS 0.60f
+#endif
+#ifndef VQF_REST_TH_ACC_MAG_MS2
+#define VQF_REST_TH_ACC_MAG_MS2  0.25f
+#endif
+#ifndef VQF_REST_TH_ACC_FAST_MS2
+#define VQF_REST_TH_ACC_FAST_MS2 0.50f
+#endif
+#ifndef VQF_REST_MIN_T
+#define VQF_REST_MIN_T           1.5f
+#endif
+#ifndef VQF_REST_LP_TAU
+#define VQF_REST_LP_TAU          0.5f
+#endif
+#ifndef VQF_BIAS_TAU
+#define VQF_BIAS_TAU             2.0f
+#endif
+#ifndef VQF_BIAS_CLIP_DPS
+#define VQF_BIAS_CLIP_DPS        2.0f
+#endif
+#ifndef VQF_TAU_ACC_DEFAULT
+#define VQF_TAU_ACC_DEFAULT      2.0f
+#endif
+
+#define REST_TH_GYR_BIAS (VQF_REST_TH_GYR_BIAS_DPS * DEG2RAD)
+#define REST_TH_GYR_FAST (VQF_REST_TH_GYR_FAST_DPS * DEG2RAD)
+#define REST_TH_ACC_MAG  VQF_REST_TH_ACC_MAG_MS2
+#define REST_TH_ACC_FAST VQF_REST_TH_ACC_FAST_MS2
+#define REST_MIN_T       VQF_REST_MIN_T
+#define REST_LP_TAU      VQF_REST_LP_TAU
+#define BIAS_TAU         VQF_BIAS_TAU
+#define BIAS_CLIP        (VQF_BIAS_CLIP_DPS * DEG2RAD)
+#define TAU_ACC_DEFAULT  VQF_TAU_ACC_DEFAULT
+#ifndef VQF_TAU_MAG_DEFAULT
+#define VQF_TAU_MAG_DEFAULT 3.0f
+#endif
+#define TAU_MAG_DEFAULT VQF_TAU_MAG_DEFAULT
 
 static float gyr_dt;
 static float acc_dt;
 static float tau_acc;
 static float acc_lp_k;
+static float tau_mag;
+static float mag_lp_k;
+static float mag_heading;
+static uint8_t mag_ready;
 
 static float gyr_quat[4];
 static float acc_quat[4];
@@ -34,6 +77,7 @@ static float last_acc_lp[3];
 static uint8_t acc_lp_inited;
 
 static float gyr_lp[3];
+static float rest_acc_lp[3];
 static float bias[3];
 static float rest_t;
 static uint8_t rest_lp_inited;
@@ -87,7 +131,11 @@ void vqf_init(float gyr_dt_, float acc_dt_)
 {
   gyr_dt = gyr_dt_;
   acc_dt = acc_dt_;
-  tau_acc = 2.0f;
+  tau_acc = TAU_ACC_DEFAULT;
+  tau_mag = TAU_MAG_DEFAULT;
+  mag_lp_k = 1.0f - expf(-0.02f / tau_mag);
+  mag_heading = 0.0f;
+  mag_ready = 0U;
   acc_lp_k = 1.0f - expf(-acc_dt / tau_acc);
 
   gyr_quat[0] = 1.0f;
@@ -97,10 +145,21 @@ void vqf_init(float gyr_dt_, float acc_dt_)
   memset(last_acc_lp, 0, sizeof(last_acc_lp));
   acc_lp_inited = 0;
   memset(gyr_lp, 0, sizeof(gyr_lp));
+  memset(rest_acc_lp, 0, sizeof(rest_acc_lp));
   memset(bias, 0, sizeof(bias));
   rest_t = 0.0f;
   rest_lp_inited = 0;
 }
+
+void vqf_set_tau_mag(float tau)
+{
+  if(tau < 0.2f) tau = 0.2f;
+  tau_mag = tau;
+  mag_lp_k = 1.0f - expf(-0.02f / tau_mag);
+}
+
+float vqf_get_tau_mag(void) { return tau_mag; }
+int vqf_get_mag_ready(void) { return mag_ready ? 1 : 0; }
 
 void vqf_set_gyr_bias(const float gyr_bias[3])
 {
@@ -165,6 +224,7 @@ void vqf_prime_rest(const float acc_ms2[3], const float gyr_bias[3])
   for(i = 0; i < 3; i++)
   {
     last_acc_lp[i] = acc_ms2[i];
+    rest_acc_lp[i] = acc_ms2[i];
   }
   acc_lp_inited = 1;
   vqf_set_acc_quat(acc_ms2);
@@ -172,6 +232,10 @@ void vqf_prime_rest(const float acc_ms2[3], const float gyr_bias[3])
 
 void vqf_set_tau_acc(float tau)
 {
+  if(tau < 0.05f)
+  {
+    tau = 0.05f;
+  }
   tau_acc = tau;
   acc_lp_k = 1.0f - expf(-acc_dt / tau_acc);
   acc_lp_inited = 0;
@@ -248,27 +312,49 @@ static void vqf_rest_bias(const float gyr[3], const float acc[3], float gyr_corr
 {
   float k_lp = gyr_dt / (REST_LP_TAU + gyr_dt);
   float k_b = gyr_dt / (BIAS_TAU + gyr_dt);
-  float gyr_n;
+  float gyr_bias_err[3];
+  float gyr_fast_err[3];
+  float acc_fast_err[3];
+  float gyr_bias_n;
+  float gyr_fast_n;
+  float acc_fast_n;
   float acc_n;
   int i;
 
   if(!rest_lp_inited)
   {
-    gyr_lp[0] = gyr[0];
-    gyr_lp[1] = gyr[1];
-    gyr_lp[2] = gyr[2];
+    for(i = 0; i < 3; i++)
+    {
+      gyr_lp[i] = gyr[i];
+      rest_acc_lp[i] = acc[i];
+    }
     rest_lp_inited = 1;
   }
   else
   {
-    gyr_lp[0] += k_lp * (gyr[0] - gyr_lp[0]);
-    gyr_lp[1] += k_lp * (gyr[1] - gyr_lp[1]);
-    gyr_lp[2] += k_lp * (gyr[2] - gyr_lp[2]);
+    for(i = 0; i < 3; i++)
+    {
+      gyr_lp[i] += k_lp * (gyr[i] - gyr_lp[i]);
+      rest_acc_lp[i] += k_lp * (acc[i] - rest_acc_lp[i]);
+    }
   }
 
-  gyr_n = vqf_norm3(gyr_lp);
-  acc_n = vqf_norm3(acc);
-  if((gyr_n < REST_TH_GYR) && (fabsf(acc_n - G_TO_MS2) < REST_TH_ACC))
+  for(i = 0; i < 3; i++)
+  {
+    /* Compare against the known bias, not against absolute angular rate. */
+    gyr_bias_err[i] = gyr_lp[i] - bias[i];
+    gyr_fast_err[i] = gyr[i] - gyr_lp[i];
+    acc_fast_err[i] = acc[i] - rest_acc_lp[i];
+  }
+  gyr_bias_n = vqf_norm3(gyr_bias_err);
+  gyr_fast_n = vqf_norm3(gyr_fast_err);
+  acc_fast_n = vqf_norm3(acc_fast_err);
+  acc_n = vqf_norm3(rest_acc_lp);
+
+  if((gyr_bias_n < REST_TH_GYR_BIAS) &&
+     (gyr_fast_n < REST_TH_GYR_FAST) &&
+     (acc_fast_n < REST_TH_ACC_FAST) &&
+     (fabsf(acc_n - G_TO_MS2) < REST_TH_ACC_MAG))
   {
     rest_t += gyr_dt;
   }
@@ -306,9 +392,44 @@ void vqf_update(const float gyr[3], const float acc[3])
   vqf_update_acc(acc);
 }
 
+int vqf_update_mag(const float mag[3])
+{
+  float m_earth[3];
+  float q6[4];
+  float n = vqf_norm3(mag);
+  float h;
+  if(n < 1.0e-6f || n > 2000.0f) return -1;
+  vqf_quat_multiply(acc_quat, gyr_quat, q6);
+  vqf_quat_rotate(q6, mag, m_earth);
+  h = atan2f(-m_earth[1], m_earth[0]);
+  if(!mag_ready) { mag_heading = h; mag_ready = 1U; }
+  else {
+    float e = h - mag_heading;
+    while(e > (float)M_PI) e -= 2.0f*(float)M_PI;
+    while(e < -(float)M_PI) e += 2.0f*(float)M_PI;
+    mag_heading += mag_lp_k * e;
+  }
+  return 0;
+}
+
 void vqf_get_quat6d(float q[4])
 {
   vqf_quat_multiply(acc_quat, gyr_quat, q);
+}
+
+void vqf_get_quat9d(float q[4])
+{
+  float q6[4], qc[4], z[4];
+  vqf_get_quat6d(q6);
+  /* mag_heading is the VQF heading-difference delta, not an absolute yaw.
+   * Applying delta to q6 makes gyro yaw changes cancel in the earth-frame
+   * magnetic heading during a stationary interval. */
+  z[0] = cosf(0.5f * mag_heading);
+  z[1] = 0.0f; z[2] = 0.0f; z[3] = sinf(0.5f * mag_heading);
+  vqf_quat_multiply(z, q6, qc);
+  vqf_normalize4(qc);
+  if(mag_ready) { q[0]=qc[0]; q[1]=qc[1]; q[2]=qc[2]; q[3]=qc[3]; }
+  else { q[0]=q6[0]; q[1]=q6[1]; q[2]=q6[2]; q[3]=q6[3]; }
 }
 
 void vqf_get_euler_deg(float *roll_deg, float *pitch_deg, float *yaw_deg)
@@ -321,7 +442,7 @@ void vqf_get_euler_deg(float *roll_deg, float *pitch_deg, float *yaw_deg)
   float sinp;
   float rad2deg = 180.0f / (float)M_PI;
 
-  vqf_get_quat6d(q);
+  vqf_get_quat9d(q);
   w = q[0];
   x = q[1];
   y = q[2];
@@ -340,4 +461,30 @@ void vqf_get_euler_deg(float *roll_deg, float *pitch_deg, float *yaw_deg)
   *roll_deg  = atan2f(2.0f * (w * x + y * z), 1.0f - 2.0f * (x * x + y * y)) * rad2deg;
   *pitch_deg = asinf(sinp) * rad2deg;
   *yaw_deg   = atan2f(2.0f * (w * z + x * y), 1.0f - 2.0f * (y * y + z * z)) * rad2deg;
+}
+
+void vqf_get_gyr_bias(float gyr_bias[3])
+{
+  if(gyr_bias == 0)
+  {
+    return;
+  }
+  gyr_bias[0] = bias[0];
+  gyr_bias[1] = bias[1];
+  gyr_bias[2] = bias[2];
+}
+
+float vqf_get_rest_time(void)
+{
+  return rest_t;
+}
+
+int vqf_get_rest_detected(void)
+{
+  return (rest_t >= REST_MIN_T) ? 1 : 0;
+}
+
+float vqf_get_tau_acc(void)
+{
+  return tau_acc;
 }

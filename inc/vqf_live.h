@@ -4,6 +4,7 @@
 #include <stdint.h>
 
 #define VQF_LIVE_MAGIC 0x56465131u /* "VQF1" */
+#define VQF_TUNE_MAGIC 0x56514654u /* "VQFT" */
 
 typedef struct
 {
@@ -31,8 +32,59 @@ typedef struct
   float ax;
   float ay;
   float az;
+  float bias_x;
+  float bias_y;
+  float bias_z;
+  float rest_time;
+  float tau_acc;
+  uint32_t rest_detected;
+  float mx;
+  float my;
+  float mz;
+  float mag_norm;
+  float tau_mag;
+  int32_t mag_err;
+  uint32_t mag_addr;
+  uint32_t mag_updates;
+  uint32_t mag_ready;
+  uint32_t mag_disturbed;
 } vqf_live_t;
 
+typedef struct
+{
+  uint32_t magic;
+  uint32_t seq;
+  uint32_t millis;
+  uint32_t fusion_hz;
+  uint32_t skip_n;
+  uint32_t rest_detected;
+  float roll;
+  float pitch;
+  float yaw;
+  float gx;
+  float gy;
+  float gz;
+  float ax;
+  float ay;
+  float az;
+  float bias_x;
+  float bias_y;
+  float bias_z;
+  float rest_time;
+  float tau_acc;
+  float mx;
+  float my;
+  float mz;
+  float mag_norm;
+  float tau_mag;
+  int32_t mag_err;
+  uint32_t mag_addr;
+  uint32_t mag_updates;
+  uint32_t mag_ready;
+  uint32_t mag_disturbed;
+} vqf_tune_live_t;
+
 extern volatile vqf_live_t vqf_live;
+extern volatile vqf_tune_live_t vqf_tune_live;
 
 #endif

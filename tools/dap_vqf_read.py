@@ -85,7 +85,7 @@ def main() -> int:
 
         # After flashing, wait for the first valid fused snapshot so sample 1
         # is a real attitude rather than the zero-initialized SRAM structure.
-        ready_deadline = time.perf_counter() + 3.0
+        ready_deadline = time.perf_counter() + 8.0
         while True:
             try:
                 target.halt()
