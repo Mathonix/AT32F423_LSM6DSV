@@ -1,0 +1,7 @@
+build/
+tools/__pycache__/
+*.pyc
+*.log
+*.map
+*.synctex.gz
+AT32F423_Firmware_Library/.git/

@@ -1,0 +1,9 @@
+device AT32F423KCU7-4
+si SWD
+speed 4000
+r
+h
+loadfile .\objects\lsm6dsv_spi_test.hex
+r
+g
+exit
