@@ -3,6 +3,7 @@
 
 #include "vqf_full.hpp"
 #include "vqf.h"
+#include "app_config.h"
 
 #include <cmath>
 #include <cstdint>
@@ -17,8 +18,8 @@ alignas(VQF) unsigned char g_storage[sizeof(VQF)];
 VQF* g_vqf = nullptr;
 float g_gyr_dt = 0.0005f;
 float g_acc_dt = 0.0005f;
-float g_tau_acc = 3.0f;
-float g_tau_mag = 6.0f;
+float g_tau_acc = APP_VQF_TAU_ACC;
+float g_tau_mag = APP_VQF_TAU_MAG;
 float g_rest_time = 0.0f;
 bool g_mag_ready = false;
 
@@ -45,18 +46,16 @@ extern "C" void vqf_init(float gyr_dt, float acc_dt)
     VQFParams params;
     params.tauAcc = g_tau_acc;
     params.tauMag = g_tau_mag;
-    params.motionBiasEstEnabled = true;
+    params.motionBiasEstEnabled = (APP_VQF_MOTION_BIAS_ENABLE != 0U);
     params.restBiasEstEnabled = true;
     params.magDistRejectionEnabled = true;
     // A fixed installation can boot without being rotated. Allow the first
     // stable norm/dip candidate to become the reference after the official
     // 5 s magNewFirstTime; later disturbances are still rejected normally.
     params.magNewMinGyr = 0.0f;
-    // Keep the official 2 deg/s gyro threshold: the LSM6DSV occasionally
-    // produces sub-2 deg/s noise excursions at 2 kHz while mechanically still.
-    // biasClip (also 2 deg/s by default) still prevents learning real motion.
-    params.restThGyr = 2.0f;
-    params.restThAcc = 0.5f;
+    // Preserve the previous deviation thresholds for this single-variable trial.
+    params.restThGyr = APP_VQF_REST_GYR_DPS;
+    params.restThAcc = APP_VQF_REST_ACC_MS2;
 
     // IST8310 is read at 50 Hz; main.c feeds the compute-heavy Full VQF
     // magnetic update at 10 Hz to preserve every 2 kHz gyro sample.
@@ -92,7 +91,8 @@ extern "C" void vqf_prime_rest(const float acc_ms2[3], const float gyr_bias[3])
 
     // Initialize Full VQF's second-order accelerometer filter and inclination
     // from the one-second stationary average already collected by main.c.
-    const unsigned n = static_cast<unsigned>(std::ceil(g_tau_acc / g_acc_dt)) + 1U;
+    const unsigned requested = static_cast<unsigned>(std::ceil(g_tau_acc / g_acc_dt)) + 1U;
+    const unsigned n = requested > APP_VQF_PRIME_MAX_SAMPLES ? APP_VQF_PRIME_MAX_SAMPLES : requested;
     const vqf_real_t a[3] = {acc_ms2[0], acc_ms2[1], acc_ms2[2]};
     for (unsigned i = 0; i < n; ++i) filter().updateAcc(a);
 }
@@ -178,3 +178,24 @@ extern "C" int vqf_get_mag_dist_detected(void)
 
 
 
+
+
+
+/* Read-only diagnostics at 20 Hz; no estimator parameter/state changes. */
+extern "C" void vqf_get_nine_diagnostic(float out[8])
+{
+    vqf_real_t q[4];
+    filter().getQuat6D(q);
+    const float k = 180.0f / static_cast<float>(M_PI);
+    const VQFState& state = filter().getState();
+    out[0] = std::atan2(2.0f*(q[0]*q[3] + q[1]*q[2]),
+                        1.0f - 2.0f*(q[2]*q[2] + q[3]*q[3])) * k;
+    out[1] = filter().getMagRefNorm();
+    out[2] = filter().getMagRefDip() * k;
+    out[3] = state.magRejectT;
+    out[4] = state.magCandidateT;
+    out[5] = state.lastMagCorrAngularRate * k;
+    out[6] = state.lastMagDisAngle * k;
+    vqf_real_t bias[3];
+    out[7] = filter().getBiasEstimate(bias) * k;
+}

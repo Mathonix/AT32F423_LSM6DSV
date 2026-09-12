@@ -9,7 +9,10 @@
 #include "ist8310.h"
 #include "ws2812.h"
 #include "vqf.h"
+#include "app_config.h"
 #include "vqf_live.h"
+#include "mag_calibration.h"
+#include "acc_calibration.h"
 
 #include <math.h>
 #include <string.h>
@@ -24,27 +27,37 @@
 #define G_TO_MS2             9.80665f
 #define SAMPLE_DT_CYCLES     ((uint32_t)(system_core_clock / (uint32_t)FUSION_HZ))
 #define DROP_DT_CYCLES       ((SAMPLE_DT_CYCLES * 3U) / 2U)
-#define CAL_GYR_REST_DPS     1.0f
-#define CAL_ACC_REST_MS2     0.8f
-#define CAL_REST_SECONDS     1U   /* startup stationary bias calibration */
-#define GYR_LPF_CUTOFF_HZ    40.0f /* reduce gyro noise before integration */
+#define CAL_GYR_REST_DPS APP_CAL_GYR_REST_DPS
+#define CAL_ACC_REST_MS2 APP_CAL_ACC_REST_MS2
+#define CAL_REST_SECONDS APP_CAL_REST_SECONDS   /* startup stationary bias calibration */
+#define GYR_LPF_CUTOFF_HZ APP_GYR_LPF_CUTOFF_HZ /* reduce gyro noise before integration */
 #define ERR_STREAK_RECOVER   20U
 #define MAG_PERIOD_N         40U /* read IST8310 at 50 Hz */
 #define MAG_VQF_DIV          5U  /* Full VQF magnetic update at 10 Hz */
-#define MAG_FUSION_ENABLE   0U  /* Temporarily use 6D gyro+acc only; keep IST8310 telemetry */
+#define MAG_FUSION_ENABLE   0U  /* 6D mode; retain calibrated/aligned magnetometer telemetry only */
 #define MAG_TIMEOUT_N        30U
 #define MAG_UT_PER_LSB       0.3f
-/* IST8310 calibration captured on 2026-09-12. Offsets are in uT and
- * diagonal scales compensate the first-order soft-iron axis mismatch. */
-#define MAG_OFF_X_UT         (-1.857855f)
-#define MAG_OFF_Y_UT         (-2.578339f)
-#define MAG_OFF_Z_UT         (+10.438437f)
-#define MAG_SCALE_X          (1.033989f)
-#define MAG_SCALE_Y          (0.991402f)
-#define MAG_SCALE_Z          (0.976373f)
+/* Separate raw capture ABI; leaves existing attitude telemetry unchanged. */
+volatile struct {
+  uint32_t magic, seq, millis, sample_n, fusion_enabled;
+  int32_t x, y, z;
+} mag_raw_live = {0x4D524157U, 0U, 0U, 0U, MAG_FUSION_ENABLE, 0, 0, 0};
+
+/* Separate 36-byte coherent ABI; legacy ax/ay/az remain nominal raw g. */
+volatile struct {
+  uint32_t magic, seq, millis;
+  float raw_g[3], corrected_g[3];
+} acc_cal_live = {0x4143434CU, 0U, 0U, {0}, {0}};
 
 volatile vqf_live_t vqf_live;
 volatile vqf_tune_live_t vqf_tune_live;
+/* Separate ABI: preserves all existing tune/VOFA layouts. */
+volatile struct {
+  uint32_t magic, seq;
+  vqf_tune_live_t snapshot;
+  float diagnostic[8]; /* yaw6, refNorm, refDipDeg, rejectT, candidateT,
+                       * corrRateDegS, disagreementDeg, biasSigmaDegS */
+} vqf_nine_live = {0x39565146U, 0U, {0}, {0}};
 
 #define VOFA_N_CH   16U
 #define VOFA_BYTES  ((VOFA_N_CH * 4U) + 4U)
@@ -235,7 +248,7 @@ int main(void)
       for(i = 0; i < 3U; i++)
       {
         gyr[i] = (float)raw.gyr[i] * GYR_DPS_PER_LSB * DEG2RAD;
-        acc[i] = (float)raw.acc[i] * ACC_G_PER_LSB * G_TO_MS2;
+        acc[i] = acc_calibrate_g(i, (float)raw.acc[i] * ACC_G_PER_LSB) * G_TO_MS2;
       }
       gyr_n = sqrtf(gyr[0] * gyr[0] + gyr[1] * gyr[1] + gyr[2] * gyr[2]);
       acc_n3 = sqrtf(acc[0] * acc[0] + acc[1] * acc[1] + acc[2] * acc[2]);
@@ -304,7 +317,7 @@ int main(void)
     for(i = 0; i < 3U; i++)
     {
       gyr[i] = (float)raw.gyr[i] * GYR_DPS_PER_LSB * DEG2RAD;
-      acc[i] = (float)raw.acc[i] * ACC_G_PER_LSB * G_TO_MS2;
+      acc[i] = acc_calibrate_g(i, (float)raw.acc[i] * ACC_G_PER_LSB) * G_TO_MS2;
     }
 
     /* 40 Hz gyro low-pass reduces white noise without changing the 2 kHz
@@ -345,11 +358,31 @@ int main(void)
         mag_pending = 0U;
         if(mag_err == 0)
         {
-          /* Convert to uT, remove hard-iron offset, then compensate the
-           * measured per-axis soft-iron scale mismatch. */
-          mag[0] = (((float)mag_raw[0] * MAG_UT_PER_LSB) - MAG_OFF_X_UT) * MAG_SCALE_X;
-          mag[1] = (((float)mag_raw[1] * MAG_UT_PER_LSB) - MAG_OFF_Y_UT) * MAG_SCALE_Y;
-          mag[2] = (((float)mag_raw[2] * MAG_UT_PER_LSB) - MAG_OFF_Z_UT) * MAG_SCALE_Z;
+          mag_raw_live.seq++;
+          __DMB();
+          mag_raw_live.millis = millis();
+          mag_raw_live.x = mag_raw[0];
+          mag_raw_live.y = mag_raw[1];
+          mag_raw_live.z = mag_raw[2];
+          mag_raw_live.sample_n++;
+          __DMB();
+          mag_raw_live.seq++;
+          /* Calibrate in IST8310 axes first, then map once into LSM6DSV axes.
+           * Raw telemetry above stays in original IST8310 register axes. */
+          {
+            float uncal_centered[3];
+            float calibrated_mag[3];
+            unsigned row, col;
+            for(row = 0; row < 3U; ++row)
+              uncal_centered[row] = (float)mag_raw[row] * MAG_UT_PER_LSB - mag_cal_offset[row];
+            for(row = 0; row < 3U; ++row)
+            {
+              calibrated_mag[row] = 0.0f;
+              for(col = 0; col < 3U; ++col)
+                calibrated_mag[row] += mag_cal_matrix[row][col] * uncal_centered[col];
+            }
+            mag_map_to_imu(calibrated_mag, mag);
+          }
           mag_read_n++;
           /* Official Full VQF's disturbance rejection uses atan2/asin and a
            * second-order filter. Run that at 10 Hz so it cannot steal a 2 kHz
@@ -422,6 +455,16 @@ int main(void)
 
       if((fusion_n % DAP_OUTPUT_DIV) == 0U)
       {
+        acc_cal_live.seq++;
+        __DMB();
+        acc_cal_live.millis = vqf_live.millis;
+        for(i = 0U; i < 3U; ++i)
+        {
+          acc_cal_live.raw_g[i] = (float)raw.acc[i] * ACC_G_PER_LSB;
+          acc_cal_live.corrected_g[i] = acc[i] / G_TO_MS2;
+        }
+        __DMB();
+        acc_cal_live.seq++;
         vqf_tune_live.seq++;
         __DMB();
         vqf_tune_live.millis = vqf_live.millis;
@@ -454,6 +497,17 @@ int main(void)
         vqf_tune_live.mag_disturbed = vqf_live.mag_disturbed;
         __DMB();
         vqf_tune_live.seq++;
+        vqf_nine_live.seq++;
+        __DMB();
+        vqf_nine_live.snapshot = vqf_tune_live;
+        {
+          float diagnostic[8];
+          unsigned j;
+          vqf_get_nine_diagnostic(diagnostic);
+          for(j = 0U; j < 8U; ++j) vqf_nine_live.diagnostic[j] = diagnostic[j];
+        }
+        __DMB();
+        vqf_nine_live.seq++;
       }
       vofa_send_justfloat((float)vofa_late);
     }
@@ -486,6 +540,9 @@ recover_or_continue:
   }
   }
 }
+
+
+
 
 
 

@@ -1,17 +1,18 @@
-#!/usr/bin/env python3
+﻿#!/usr/bin/env python3
 """Flash AT32F423 via WCH CMSIS-DAP, then read COM4 UART."""
 
 from __future__ import annotations
 
 import sys
 import time
+import argparse
 from pathlib import Path
 
 from pyocd.core.helpers import ConnectHelper
 
 HEX_PATH = Path(r"E:\Desktop\CV_resume\Program\AT32F423_LSM6DSV_SPI_Test\build\lsm6dsv_spi_test.hex")
-COM_PORT = "COM4"
-BAUD = 115200
+COM_PORT = None
+BAUD = 2000000
 
 FLASH_BASE = 0x40023C00
 FLASH_UNLOCK = FLASH_BASE + 0x04
@@ -175,14 +176,14 @@ def flash_target(mem: dict[int, int]) -> None:
         session.close()
 
 
-def read_uart(seconds=8.0) -> str:
+def read_uart(port: str, seconds=8.0, baud=BAUD) -> str:
     import serial
 
-    ser = serial.Serial(COM_PORT, BAUD, timeout=0.2)
+    ser = serial.Serial(port, baud, timeout=0.2)
     ser.reset_input_buffer()
     t0 = time.time()
     chunks: list[bytes] = []
-    print(f"listening {COM_PORT} {BAUD} for {seconds:.0f}s ...")
+    print(f"listening {port} {baud} for {seconds:.0f}s ...")
     while time.time() - t0 < seconds:
         data = ser.read(256)
         if data:
@@ -194,15 +195,24 @@ def read_uart(seconds=8.0) -> str:
 
 
 def main() -> int:
-    if not HEX_PATH.exists():
-        print("missing hex", HEX_PATH)
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--hex", type=Path, default=HEX_PATH)
+    ap.add_argument("--port", help="UART port; omit to skip UART logging")
+    ap.add_argument("--baud", type=int, default=BAUD)
+    ap.add_argument("--seconds", type=float, default=8.0)
+    args = ap.parse_args()
+    if not args.hex.exists():
+        print("missing hex", args.hex)
         return 1
-    mem = parse_hex(HEX_PATH)
+    mem = parse_hex(args.hex)
     print(f"hex bytes: {len(mem)}")
     flash_target(mem)
     time.sleep(0.4)
-    text = read_uart(8.0)
-    print("\n----- summary -----")
+    if not args.port:
+        print("UART logging skipped; flash completed successfully")
+        return 0
+    text = read_uart(args.port, args.seconds, args.baud)
+    print("`n----- summary -----")
     if "WHO_AM_I=0x70" in text or "OK  WHO_AM_I" in text:
         print("RESULT: LSM6DSV SPI OK (WHO_AM_I=0x70)")
         return 0
@@ -212,9 +222,13 @@ def main() -> int:
     if text.strip():
         print("RESULT: got UART but no WHO_AM_I line")
         return 3
-    print("RESULT: no UART data on COM4 (check PA0->DAPLink RX, 115200)")
+    print("RESULT: no UART data (check PA0->DAPLink RX and baud)")
     return 4
 
 
 if __name__ == "__main__":
     sys.exit(main())
+
+
+
+

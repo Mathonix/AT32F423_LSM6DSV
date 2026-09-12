@@ -16,6 +16,7 @@ void vqf_get_quat6d(float q[4]);
 void vqf_get_quat9d(float q[4]);
 void vqf_get_euler_deg(float *roll_deg, float *pitch_deg, float *yaw_deg);
 void vqf_get_gyr_bias(float gyr_bias[3]);
+void vqf_get_nine_diagnostic(float out[8]);
 float vqf_get_rest_time(void);
 int vqf_get_rest_detected(void);
 float vqf_get_tau_acc(void);
