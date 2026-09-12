@@ -1,9 +1,10 @@
-"""Enable LSM6DSV SFLP via WCH CMSIS-DAP SWD bitbang SPI.
-Record attitude every 5 s, 10 times, then print a table.
+﻿"""Enable LSM6DSV SFLP via WCH CMSIS-DAP SWD bitbang SPI.
+Record ten 1 s spot attitude samples, then print a table.
 """
 from __future__ import annotations
 
 import math
+import struct
 import time
 from pyocd.core.helpers import ConnectHelper
 
@@ -28,6 +29,7 @@ EMB_FUNC_FIFO_EN_A = 0x44
 SFLP_ODR = 0x5E
 
 TAG_SFLP_GAME = 0x13  # FIFO tag >> 3
+TAG_SFLP_GBIAS = 0x16  # FIFO tag >> 3
 
 WHO_AM_I_VAL = 0x70
 
@@ -145,21 +147,31 @@ def fifo_level(spi: DapSpi) -> int:
     return s1 | ((s2 & 0x01) << 8)
 
 
-def read_latest_game_quat(spi: DapSpi) -> tuple[int, int, int] | None:
-    n = fifo_level(spi)
-    latest = None
-    # drain, keep last game-rotation sample
-    limit = min(n, 80)
-    for _ in range(limit):
-        raw = spi.read_bytes(REG_FIFO_DATA_OUT_TAG, 7)
-        tag = raw[0] >> 3
-        if tag == TAG_SFLP_GAME:
-            s0 = raw[1] | (raw[2] << 8)
-            s1 = raw[3] | (raw[4] << 8)
-            s2 = raw[5] | (raw[6] << 8)
-            latest = (s0, s1, s2)
-    return latest
+def read_latest_sflp(spi: DapSpi):
+    """Return the latest game quaternion and GBIAS from fresh FIFO samples.
 
+    GBIAS payload is three little-endian int16 values in +/-125 dps format
+    (4.375 mdps/LSB), matching ST's lsm6dsv_sensor_fusion example.
+    """
+    latest_game = None
+    latest_gbias = None
+    deadline = time.time() + 1.5
+    while time.time() < deadline:
+        n = fifo_level(spi)
+        for _ in range(min(n, 64)):
+            raw = spi.read_bytes(REG_FIFO_DATA_OUT_TAG, 7)
+            tag = raw[0] >> 3
+            if tag == TAG_SFLP_GAME:
+                latest_game = (raw[1] | (raw[2] << 8),
+                               raw[3] | (raw[4] << 8),
+                               raw[5] | (raw[6] << 8))
+            elif tag == TAG_SFLP_GBIAS:
+                x, y, z = struct.unpack("<3h", bytes(raw[1:7]))
+                latest_gbias = (x * 0.004375, y * 0.004375, z * 0.004375)
+        if latest_game is not None:
+            return latest_game, latest_gbias
+        time.sleep(0.05)
+    return latest_game, latest_gbias
 
 def enable_sflp(spi: DapSpi) -> None:
     spi.write_reg(REG_CTRL3, 0x01)  # SW_RESET
@@ -179,8 +191,8 @@ def enable_sflp(spi: DapSpi) -> None:
     spi.write_reg(REG_FIFO_CTRL4, 0x00)
 
     spi.emb_enter()
-    spi.write_reg(EMB_FUNC_EN_A, 0x02)       # SFLP_GAME_EN
-    spi.write_reg(EMB_FUNC_FIFO_EN_A, 0x02)  # SFLP_GAME_FIFO_EN
+    spi.write_reg(EMB_FUNC_EN_A, 0x02)       # SFLP_GAME_EN (GBIAS is FIFO-select only)
+    spi.write_reg(EMB_FUNC_FIFO_EN_A, 0x22)  # SFLP_GAME_FIFO_EN(0x02) + SFLP_GBIAS_FIFO_EN(0x20)
     spi.write_reg(SFLP_ODR, 0x4B)            # 30 Hz, required bits
     spi.emb_exit()
 
@@ -195,12 +207,14 @@ def main() -> None:
     print("connecting WCH CMSIS-DAP ...")
     session = ConnectHelper.session_with_chosen_probe(
         target_override="cortex_m",
-        options={"connect_mode": "halt", "frequency": 1000000},
+        options={"connect_mode": "under-reset", "frequency": 400000, "resume_on_disconnect": False},
     )
     if session is None:
         raise SystemExit("no CMSIS-DAP probe")
     session.open()
     t = session.target
+    t.reset()
+    time.sleep(0.1)
     t.halt()
     spi = DapSpi(t)
     try:
@@ -222,14 +236,20 @@ def main() -> None:
             raise SystemExit("SFLP_GAME_EN did not stick")
 
         rows = []
-        print("recording 10 samples, interval 5 s (keep the board still or move slowly)\n")
+        print("recording 10 samples, interval 1 s (keep the board still or move slowly)\n")
         t0 = time.time()
         for i in range(1, 11):
-            deadline = t0 + 5.0 * i
+            deadline = t0 + 1.0 * i
             remain = deadline - time.time()
             if remain > 0:
                 time.sleep(remain)
-            raw = read_latest_game_quat(spi)
+            # Drop the accumulated batch and take a short fresh spot sample.
+            # CMSIS-DAP bit-banged SPI is much slower than 30 Hz, so draining
+            # a continuously growing FIFO would make timestamps drift.
+            spi.write_reg(REG_FIFO_CTRL4, 0x00)
+            spi.write_reg(REG_FIFO_CTRL4, 0x06)
+            time.sleep(0.1)
+            raw, gbias = read_latest_sflp(spi)
             ts = time.time() - t0
             if raw is None:
                 rows.append((i, ts, None))
@@ -241,7 +261,8 @@ def main() -> None:
             print(
                 f"[{i:02d}] t={ts:5.1f}s  "
                 f"R={roll:7.2f}  P={pitch:7.2f}  Y={yaw:7.2f}  "
-                f"q=({qx:+.4f}, {qy:+.4f}, {qz:+.4f}, {qw:+.4f})"
+                f"q=({qx:+.4f}, {qy:+.4f}, {qz:+.4f}, {qw:+.4f})  "
+                f"GB(dps)={gbias if gbias is not None else None}"
             )
     finally:
         spi.restore()
@@ -252,7 +273,7 @@ def main() -> None:
             pass
         session.close()
 
-    print("\n========== SFLP attitude (10 x 5s) ==========")
+    print("\n========== SFLP attitude (10 x 1s spot samples) ==========")
     print(f"{'#':>2}  {'t(s)':>6}  {'roll':>8}  {'pitch':>8}  {'yaw':>8}  {'qx':>8}  {'qy':>8}  {'qz':>8}  {'qw':>8}")
     print("-" * 82)
     for i, ts, att in rows:
@@ -270,3 +291,12 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+
+
+
+
+
+
+
+
+

@@ -26,8 +26,16 @@
 #define REG_CTRL7            0x16U
 #define REG_CTRL8            0x17U
 #define REG_STATUS           0x1EU
+#define REG_FIFO_CTRL4       0x0AU
+#define REG_FIFO_STATUS1     0x1BU
+#define REG_FIFO_STATUS2     0x1CU
+#define REG_FIFO_DATA_OUT_TAG 0x78U
+#define REG_OUT_TEMP_L       0x20U
 #define REG_OUTX_L_G         0x22U
 #define REG_HAODR_CFG        0x62U
+#define REG_EMB_FUNC_EN_A    0x04U
+#define REG_EMB_FUNC_FIFO_EN_A 0x44U
+#define REG_SFLP_ODR         0x5EU
 
 #define IF_CFG_I2C_I3C_DISABLE  0x01U
 #define CTRL3_SW_RESET          0x01U
@@ -38,12 +46,24 @@
 #define INT1_DRDY_G             0x02U
 #define FS_G_2000DPS            0x04U
 #define LPF1_G_EN               0x01U
+/* LSM6DSV: HM_MODE=0 selects high-performance mode. */
+#define CTRL6_XL_HM_MODE        0x10U
+#define CTRL7_G_HM_MODE         0x80U
 #define FS_XL_4G                0x01U
 #define HA01_2000HZ             0x1AU
 #define HAODR_SEL_HA01          0x01U
 #define STATUS_XLDA             0x01U
 #define STATUS_GDA              0x02U
 #define STATUS_XGDA             (STATUS_XLDA | STATUS_GDA)
+#define FUNC_CFG_ACCESS_EMB     0x80U
+#define SFLP_GAME_EN            0x02U
+#define SFLP_GAME_FIFO_EN       0x02U
+#define SFLP_GBIAS_FIFO_EN      0x20U
+#define SFLP_ODR_30HZ           0x4BU
+#define FIFO_MODE_BYPASS        0x00U
+#define FIFO_MODE_CONTINUOUS    0x06U
+#define FIFO_TAG_SFLP_GBIAS     0x16U
+#define SFLP_GBIAS_MDPS_PER_LSB 4.375f
 
 #define CS_HIGH() gpio_bits_set(GPIOA, GPIO_PINS_4)
 #define CS_LOW()  gpio_bits_reset(GPIOA, GPIO_PINS_4)
@@ -496,8 +516,10 @@ int lsm6dsv_init_2khz(void)
   if(write_reg_mask(REG_CTRL3, (uint8_t)(CTRL3_BDU | CTRL3_IF_INC),
                     (uint8_t)(CTRL3_BDU | CTRL3_IF_INC)) != 0) return -9;
   if(write_reg_mask(REG_CTRL4, CTRL4_DRDY_MASK, CTRL4_DRDY_MASK) != 0) return -9;
-  if(write_reg_mask(REG_CTRL6, 0x0FU, FS_G_2000DPS) != 0) return -9;
-  if(write_reg_mask(REG_CTRL7, LPF1_G_EN, 0x00U) != 0) return -9;
+  if(write_reg_mask(REG_CTRL6, (uint8_t)(0x0FU | CTRL6_XL_HM_MODE), FS_G_2000DPS) != 0) return -9;
+  /* Explicitly force accelerometer high-performance mode. */
+  if(write_reg_mask(REG_CTRL7, (uint8_t)(LPF1_G_EN | CTRL7_G_HM_MODE), 0x00U) != 0) return -9;
+  /* Explicitly force gyroscope high-performance mode and keep LPF1 off. */
   if(write_reg_mask(REG_CTRL8, 0x03U, FS_XL_4G) != 0) return -9;
   if(write_reg_mask(REG_HAODR_CFG, 0x03U, HAODR_SEL_HA01) != 0) return -9;
   /* Gyro DRDY is the sample beat; XLDA+GDA are checked before the burst. */
@@ -515,14 +537,112 @@ int lsm6dsv_init_2khz(void)
   if(expect_reg(REG_CTRL3, (uint8_t)(CTRL3_BDU | CTRL3_IF_INC),
                 (uint8_t)(CTRL3_BDU | CTRL3_IF_INC)) != 0) return -10;
   if(expect_reg(REG_CTRL4, CTRL4_DRDY_MASK, CTRL4_DRDY_MASK) != 0) return -10;
-  if(expect_reg(REG_CTRL6, 0x0FU, FS_G_2000DPS) != 0) return -10;
-  if(expect_reg(REG_CTRL7, LPF1_G_EN, 0x00U) != 0) return -8;
+  if(expect_reg(REG_CTRL6, (uint8_t)(0x0FU | CTRL6_XL_HM_MODE), FS_G_2000DPS) != 0) return -10;
+  if(expect_reg(REG_CTRL7, (uint8_t)(LPF1_G_EN | CTRL7_G_HM_MODE), 0x00U) != 0) return -8;
   if(expect_reg(REG_CTRL8, 0x03U, FS_XL_4G) != 0) return -10;
   if(expect_reg(REG_INT1_CTRL, 0xFFU, INT1_DRDY_G) != 0) return -10;
   if(lsm6dsv_wait_sample(5000U) != 0) return -7;
   return 0;
 }
 
+int lsm6dsv_read_sflp_gbias(float gbias_dps[3], uint32_t settle_ms)
+{
+  uint8_t buf[7];
+  uint8_t v = 0U;
+  uint8_t level_l;
+  uint8_t level_h;
+  uint16_t level;
+  uint32_t guard;
+  uint32_t scan;
+  float sum[3] = {0.0f, 0.0f, 0.0f};
+  uint32_t n = 0U;
+
+  if(gbias_dps == 0)
+  {
+    return -1;
+  }
+
+  /* This acquisition is startup-only. It leaves the sensor stopped; the
+   * normal HAODR initialization follows immediately and resets it again. */
+  delay_ms(20U);
+  if(lsm6dsv_write_reg(REG_FUNC_CFG_ACCESS, 0x00U) != 0) return -1;
+
+  for(guard = 0U; guard < 8U; guard++)
+  {
+    if((lsm6dsv_read_reg(REG_WHO_AM_I, &v) == 0) &&
+       (v == LSM6DSV_WHO_AM_I_VAL))
+      break;
+    delay_ms(2U);
+  }
+  if(v != LSM6DSV_WHO_AM_I_VAL) return -1;
+
+  (void)lsm6dsv_write_reg(REG_CTRL1, 0x00U);
+  (void)lsm6dsv_write_reg(REG_CTRL2, 0x00U);
+  if(lsm6dsv_write_reg(REG_CTRL3, CTRL3_SW_RESET) != 0) return -2;
+  guard = 0U;
+  do
+  {
+    if(lsm6dsv_read_reg(REG_CTRL3, &v) != 0) return -2;
+    if(++guard > 10000U) return -2;
+  } while((v & CTRL3_SW_RESET) != 0U);
+  delay_ms(10U);
+
+  if(lsm6dsv_write_reg(REG_IF_CFG, IF_CFG_I2C_I3C_DISABLE) != 0) return -3;
+  if(lsm6dsv_write_reg(REG_CTRL3, (uint8_t)(CTRL3_BDU | CTRL3_IF_INC)) != 0) return -3;
+  if(lsm6dsv_write_reg(REG_CTRL8, 0x00U) != 0) return -3;  /* +/-2 g */
+  if(lsm6dsv_write_reg(REG_CTRL6, FS_G_2000DPS) != 0) return -3;
+  if(lsm6dsv_write_reg(REG_FIFO_CTRL4, FIFO_MODE_BYPASS) != 0) return -3;
+
+  if(lsm6dsv_write_reg(REG_FUNC_CFG_ACCESS, FUNC_CFG_ACCESS_EMB) != 0) return -4;
+  if(lsm6dsv_write_reg(REG_EMB_FUNC_EN_A, SFLP_GAME_EN) != 0) return -4;
+  if(lsm6dsv_write_reg(REG_EMB_FUNC_FIFO_EN_A,
+                       (uint8_t)(SFLP_GAME_FIFO_EN | SFLP_GBIAS_FIFO_EN)) != 0) return -4;
+  if(lsm6dsv_write_reg(REG_SFLP_ODR, SFLP_ODR_30HZ) != 0) return -4;
+  if(lsm6dsv_write_reg(REG_FUNC_CFG_ACCESS, 0x00U) != 0) return -4;
+
+  if(lsm6dsv_write_reg(REG_CTRL1, 0x04U) != 0) return -5;  /* XL 30 Hz */
+  if(lsm6dsv_write_reg(REG_CTRL2, 0x04U) != 0) return -5;  /* GY 30 Hz */
+  if(lsm6dsv_write_reg(REG_FIFO_CTRL4, FIFO_MODE_CONTINUOUS) != 0) return -5;
+
+  delay_ms(settle_ms);
+
+  /* Drain one settled FIFO batch and average the GBIAS frames. */
+  for(scan = 0U; (scan < 512U) && (n < 32U); scan++)
+  {
+    if(lsm6dsv_read_reg(REG_FIFO_STATUS1, &level_l) != 0) break;
+    if(lsm6dsv_read_reg(REG_FIFO_STATUS2, &level_h) != 0) break;
+    level = (uint16_t)level_l | (uint16_t)((level_h & 0x01U) << 8);
+    if(level == 0U)
+    {
+      delay_ms(2U);
+      continue;
+    }
+    if(lsm6dsv_read_burst(REG_FIFO_DATA_OUT_TAG, buf, 7U) != 0) break;
+    if((buf[0] >> 3) == FIFO_TAG_SFLP_GBIAS)
+    {
+      int16_t x = (int16_t)((uint16_t)buf[1] | ((uint16_t)buf[2] << 8));
+      int16_t y = (int16_t)((uint16_t)buf[3] | ((uint16_t)buf[4] << 8));
+      int16_t z = (int16_t)((uint16_t)buf[5] | ((uint16_t)buf[6] << 8));
+      sum[0] += (float)x * (SFLP_GBIAS_MDPS_PER_LSB / 1000.0f);
+      sum[1] += (float)y * (SFLP_GBIAS_MDPS_PER_LSB / 1000.0f);
+      sum[2] += (float)z * (SFLP_GBIAS_MDPS_PER_LSB / 1000.0f);
+      n++;
+    }
+  }
+
+  (void)lsm6dsv_write_reg(REG_CTRL1, 0x00U);
+  (void)lsm6dsv_write_reg(REG_CTRL2, 0x00U);
+  (void)lsm6dsv_write_reg(REG_FIFO_CTRL4, FIFO_MODE_BYPASS);
+
+  if(n < 5U)
+  {
+    return -6;
+  }
+  gbias_dps[0] = sum[0] / (float)n;
+  gbias_dps[1] = sum[1] / (float)n;
+  gbias_dps[2] = sum[2] / (float)n;
+  return 0;
+}
 int lsm6dsv_data_ready(void)
 {
   uint8_t st;
@@ -563,24 +683,28 @@ int lsm6dsv_wait_sample(uint32_t timeout_us)
 
 int lsm6dsv_read_raw(lsm6dsv_raw_t *raw)
 {
-  uint8_t buf[12];
+  uint8_t buf[14];
 
   if(raw == 0)
   {
     return -1;
   }
-  if(lsm6dsv_read_burst(REG_OUTX_L_G, buf, 12U) != 0)
+  if(lsm6dsv_read_burst(REG_OUT_TEMP_L, buf, 14U) != 0)
   {
     return -2;
   }
-  raw->gyr[0] = le16(&buf[0]);
-  raw->gyr[1] = le16(&buf[2]);
-  raw->gyr[2] = le16(&buf[4]);
-  raw->acc[0] = le16(&buf[6]);
-  raw->acc[1] = le16(&buf[8]);
-  raw->acc[2] = le16(&buf[10]);
+  raw->temp_raw = le16(&buf[0]);
+  raw->gyr[0] = le16(&buf[2]);
+  raw->gyr[1] = le16(&buf[4]);
+  raw->gyr[2] = le16(&buf[6]);
+  raw->acc[0] = le16(&buf[8]);
+  raw->acc[1] = le16(&buf[10]);
+  raw->acc[2] = le16(&buf[12]);
   return 0;
 }
+
+
+
 
 
 
