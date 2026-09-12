@@ -19,6 +19,11 @@
 #define ACC_G_PER_LSB        0.000122f
 #define DEG2RAD              0.017453292519943295f
 #define G_TO_MS2             9.80665f
+#define SAMPLE_DT_CYCLES     ((uint32_t)(system_core_clock / (uint32_t)FUSION_HZ))
+#define DROP_DT_CYCLES       ((SAMPLE_DT_CYCLES * 3U) / 2U)
+#define CAL_GYR_REST_DPS     2.0f
+#define CAL_ACC_REST_MS2     1.5f
+#define ERR_STREAK_RECOVER   20U
 
 volatile vqf_live_t vqf_live;
 
@@ -78,12 +83,19 @@ static void live_init(void)
   vqf_live.vqf_us = 0;
 }
 
+static void live_whoami(void)
+{
+  uint8_t who = 0xFFU;
+  (void)lsm6dsv_read_reg(LSM6DSV_WHO_AM_I_REG, &who);
+  vqf_live.whoami = who;
+}
+
 static void fail_loop(int err)
 {
   vqf_live.init_err = err;
   while(1)
   {
-    vqf_live.whoami = lsm6dsv_read_reg(LSM6DSV_WHO_AM_I_REG);
+    live_whoami();
     vqf_live.millis = millis();
     vqf_live.seq++;
     led_toggle();
@@ -116,9 +128,9 @@ int main(void)
   lsm6dsv_spi_init();
   delay_ms(20);
 
-  vqf_live.whoami = lsm6dsv_read_reg(LSM6DSV_WHO_AM_I_REG);
+  live_whoami();
   err = lsm6dsv_init_2khz();
-  vqf_live.whoami = lsm6dsv_read_reg(LSM6DSV_WHO_AM_I_REG);
+  live_whoami();
   if(err != 0)
   {
     fail_loop(err);
@@ -132,64 +144,108 @@ int main(void)
     float acc_avg[3];
     uint32_t drop_n = (uint32_t)FUSION_HZ / 5U;
     uint32_t cal_n = (uint32_t)FUSION_HZ;
+    uint32_t tries;
     uint32_t got = 0U;
-    uint32_t acc_n = 0U;
+    uint32_t rest_n = 0U;
     float acc_n3;
+    float gyr_n;
 
-    while(got < drop_n)
+    tries = 0U;
+    while((got < drop_n) && (tries < (drop_n * 4U)))
     {
-      (void)lsm6dsv_wait_sample(2000U);
-      lsm6dsv_read_raw(&raw);
+      tries++;
+      if(lsm6dsv_wait_sample(2000U) != 0)
+      {
+        continue;
+      }
+      if(lsm6dsv_read_raw(&raw) != 0)
+      {
+        continue;
+      }
       got++;
     }
+
+    tries = 0U;
     got = 0U;
-    while(got < cal_n)
+    while((rest_n < cal_n) && (tries < (cal_n * 4U)))
     {
-      (void)lsm6dsv_wait_sample(2000U);
-      lsm6dsv_read_raw(&raw);
+      tries++;
+      if(lsm6dsv_wait_sample(2000U) != 0)
+      {
+        continue;
+      }
+      if(lsm6dsv_read_raw(&raw) != 0)
+      {
+        continue;
+      }
+      got++;
       for(i = 0; i < 3U; i++)
       {
         gyr[i] = (float)raw.gyr[i] * GYR_DPS_PER_LSB * DEG2RAD;
         acc[i] = (float)raw.acc[i] * ACC_G_PER_LSB * G_TO_MS2;
-        gyr_sum[i] += gyr[i];
       }
+      gyr_n = sqrtf(gyr[0] * gyr[0] + gyr[1] * gyr[1] + gyr[2] * gyr[2]);
       acc_n3 = sqrtf(acc[0] * acc[0] + acc[1] * acc[1] + acc[2] * acc[2]);
-      if(fabsf(acc_n3 - G_TO_MS2) < 1.5f)
+      if((gyr_n > (CAL_GYR_REST_DPS * DEG2RAD)) ||
+         (fabsf(acc_n3 - G_TO_MS2) > CAL_ACC_REST_MS2))
       {
-        acc_sum[0] += acc[0];
-        acc_sum[1] += acc[1];
-        acc_sum[2] += acc[2];
-        acc_n++;
+        continue;
       }
-      got++;
+      gyr_sum[0] += gyr[0];
+      gyr_sum[1] += gyr[1];
+      gyr_sum[2] += gyr[2];
+      acc_sum[0] += acc[0];
+      acc_sum[1] += acc[1];
+      acc_sum[2] += acc[2];
+      rest_n++;
     }
-    gyr_bias[0] = gyr_sum[0] / (float)cal_n;
-    gyr_bias[1] = gyr_sum[1] / (float)cal_n;
-    gyr_bias[2] = gyr_sum[2] / (float)cal_n;
-    if(acc_n > 100U)
+    if(rest_n < (cal_n / 4U))
     {
-      acc_avg[0] = acc_sum[0] / (float)acc_n;
-      acc_avg[1] = acc_sum[1] / (float)acc_n;
-      acc_avg[2] = acc_sum[2] / (float)acc_n;
+      fail_loop(-20);
     }
-    else
-    {
-      acc_avg[0] = acc[0];
-      acc_avg[1] = acc[1];
-      acc_avg[2] = acc[2];
-    }
+    gyr_bias[0] = gyr_sum[0] / (float)rest_n;
+    gyr_bias[1] = gyr_sum[1] / (float)rest_n;
+    gyr_bias[2] = gyr_sum[2] / (float)rest_n;
+    acc_avg[0] = acc_sum[0] / (float)rest_n;
+    acc_avg[1] = acc_sum[1] / (float)rest_n;
+    acc_avg[2] = acc_sum[2] / (float)rest_n;
     vqf_prime_rest(acc_avg, gyr_bias);
   }
   vqf_live.seq = 1;
   last_ms = millis();
 
+  {
+    uint32_t last_sample_cy = dwt_cycles();
+    uint32_t err_streak = 0U;
+
   while(1)
   {
+    uint32_t now_cy;
+    uint32_t dt_cy;
+
     if(lsm6dsv_wait_sample(2000U) != 0)
     {
       skip_n++;
+      err_streak++;
+      goto recover_or_continue;
     }
-    lsm6dsv_read_raw(&raw);
+    if(lsm6dsv_read_raw(&raw) != 0)
+    {
+      skip_n++;
+      err_streak++;
+      goto recover_or_continue;
+    }
+
+    now_cy = dwt_cycles();
+    dt_cy = now_cy - last_sample_cy;
+    last_sample_cy = now_cy;
+    if((fusion_n > 0U) && (dt_cy > DROP_DT_CYCLES))
+    {
+      skip_n++;
+      err_streak = 0U;
+      continue;
+    }
+    err_streak = 0U;
 
     for(i = 0; i < 3U; i++)
     {
@@ -243,5 +299,15 @@ int main(void)
       }
       out_n = 0;
     }
+    continue;
+recover_or_continue:
+    if(err_streak >= ERR_STREAK_RECOVER)
+    {
+      (void)lsm6dsv_spi_recover();
+      (void)lsm6dsv_init_2khz();
+      live_whoami();
+      err_streak = 0U;
+    }
+  }
   }
 }

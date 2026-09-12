@@ -82,7 +82,7 @@ RESULT: 10-second attitude capture OK
 ## 关键文件
 
 - `src/at32f423_clock.c`：HICK + PLL 150 MHz，LDO 1.3 V，Flash wait 4
-- `src/lsm6dsv.c`：SPI1 Mode 3 驱动及 HA01 配置
+- `src/lsm6dsv.c`：SPI1 Mode 0、16-bit、SCK ≈ 4.7 MHz，HA01 2000 Hz
 - `src/main.c`：六轴读取、BasicVQF、`vqf_live` 快照
 - `tools/dap_vqf_read.py`：DAP 烧录并严格采集指定次数的姿态
 - `tools/dap_whoami.py`：DAP GPIO 独立检查 `WHO_AM_I`

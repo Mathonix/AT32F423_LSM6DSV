@@ -1,8 +1,9 @@
 ﻿/**
- * LSM6DSV 4-wire SPI1, aligned with the STM32C5+LSM6DSVE polling article:
- * Mode 0, 8-bit frames, software CS, PA6 pull-up, ~5 MHz SCK.
+ * LSM6DSV 4-wire SPI1.
+ * Mode 0, 16-bit frames, software CS on PA4, PA6 pull-up.
+ * APB2=75 MHz, DIV_16 => SCK ≈ 4.6875 MHz.
  *
- * PA4 = GPIO CS, PA5 = SPI1_SCK AF5, PA6 = SPI1_MISO AF5, PA7 = SPI1_MOSI AF5.
+ * PA5 = SPI1_SCK AF5, PA6 = SPI1_MISO AF5, PA7 = SPI1_MOSI AF5.
  */
 
 #include "lsm6dsv.h"
@@ -37,7 +38,6 @@
 #define INT1_DRDY_G             0x02U
 #define FS_G_2000DPS            0x04U
 #define LPF1_G_EN               0x01U
-#define LPF1_G_BW_MEDIUM        0x03U
 #define FS_XL_4G                0x01U
 #define HA01_2000HZ             0x1AU
 #define HAODR_SEL_HA01          0x01U
@@ -51,8 +51,8 @@
 #if LSM6DSV_USE_HW_SPI
 
 #ifndef LSM6DSV_SPI_DIV
-/* APB2 = 75 MHz, DIV_8 => SCK ≈ 9.4 MHz (LSM6DSV max 10 MHz). */
-#define LSM6DSV_SPI_DIV SPI_MCLK_DIV_8
+/* APB2 = 75 MHz, DIV_16 => SCK ≈ 4.6875 MHz. */
+#define LSM6DSV_SPI_DIV SPI_MCLK_DIV_16
 #endif
 
 #define SPI_TIMEOUT 1000000U
@@ -89,12 +89,16 @@ static void spi_rx_flush(void)
   (void)dummy;
 }
 
-static uint16_t spi_xfer16(uint16_t tx)
+static int spi_xfer16(uint16_t tx, uint16_t *rx)
 {
   uint32_t guard = SPI_TIMEOUT;
 
   while(((SPI1->sts & SPI_I2S_TDBE_FLAG) == 0U) && (guard-- != 0U))
   {
+  }
+  if(guard == 0U)
+  {
+    return -1;
   }
   SPI1->dt = (uint32_t)tx;
 
@@ -102,10 +106,22 @@ static uint16_t spi_xfer16(uint16_t tx)
   while(((SPI1->sts & SPI_I2S_RDBF_FLAG) == 0U) && (guard-- != 0U))
   {
   }
-  return (uint16_t)SPI1->dt;
+  if(guard == 0U)
+  {
+    return -2;
+  }
+  if(rx != 0)
+  {
+    *rx = (uint16_t)SPI1->dt;
+  }
+  else
+  {
+    (void)SPI1->dt;
+  }
+  return 0;
 }
 
-static void spi_wait_idle(void)
+static int spi_wait_idle(void)
 {
   uint32_t guard = SPI_TIMEOUT;
 
@@ -113,6 +129,7 @@ static void spi_wait_idle(void)
          ((SPI1->sts & SPI_I2S_BF_FLAG) != 0U)) && (guard-- != 0U))
   {
   }
+  return (guard == 0U) ? -1 : 0;
 }
 
 static void i2s_mck_off(void)
@@ -171,7 +188,7 @@ void lsm6dsv_spi_init(void)
   spi.master_slave_mode = SPI_MODE_MASTER;
   spi.mclk_freq_division = LSM6DSV_SPI_DIV;
   spi.first_bit_transmission = SPI_FIRST_BIT_MSB;
-  /* One 16-bit frame = article's 8-bit addr + 8-bit dummy in a single CS. */
+  /* 16-bit Motorola Mode 0: one frame is command+first data byte. */
   spi.frame_bit_num = SPI_FRAME_16BIT;
   spi.clock_polarity = SPI_CLOCK_POLARITY_LOW;
   spi.clock_phase = SPI_CLOCK_PHASE_1EDGE;
@@ -184,6 +201,12 @@ void lsm6dsv_spi_init(void)
   spi_rx_flush();
   spi_enable(SPI1, TRUE);
   delay_us(20U);
+}
+
+int lsm6dsv_spi_recover(void)
+{
+  lsm6dsv_spi_init();
+  return 0;
 }
 
 #else
@@ -219,10 +242,6 @@ static uint8_t spi_xfer8_gpio(uint8_t byte)
   return miso;
 }
 
-static void spi_wait_idle(void)
-{
-}
-
 void lsm6dsv_spi_init(void)
 {
   gpio_init_type gpio;
@@ -244,76 +263,133 @@ void lsm6dsv_spi_init(void)
   CLRH(7);
 }
 
+int lsm6dsv_spi_recover(void)
+{
+  lsm6dsv_spi_init();
+  return 0;
+}
+
 #endif
 
-uint8_t lsm6dsv_read_reg(uint8_t reg)
+int lsm6dsv_read_reg(uint8_t reg, uint8_t *value)
 {
-  uint8_t value;
+  if(value == 0)
+  {
+    return -1;
+  }
 
 #if LSM6DSV_USE_HW_SPI
   uint16_t rx;
-  spi_rx_flush();
   cs_low();
-  rx = spi_xfer16((uint16_t)((uint16_t)(reg | 0x80U) << 8));
-  spi_wait_idle();
+  if(spi_xfer16((uint16_t)((uint16_t)(reg | 0x80U) << 8), &rx) != 0)
+  {
+    cs_high();
+    return -2;
+  }
+  if(spi_wait_idle() != 0)
+  {
+    cs_high();
+    return -3;
+  }
   cs_high();
-  value = (uint8_t)rx;
+  *value = (uint8_t)rx;
+  return 0;
 #else
   CS_LOW();
   pause_gpio();
   (void)spi_xfer8_gpio((uint8_t)(reg | 0x80U));
-  value = spi_xfer8_gpio(0x00U);
-  spi_wait_idle();
+  *value = spi_xfer8_gpio(0x00U);
   CS_HIGH();
   pause_gpio();
+  return 0;
 #endif
-  return value;
 }
 
-void lsm6dsv_write_reg(uint8_t reg, uint8_t value)
+int lsm6dsv_write_reg(uint8_t reg, uint8_t value)
 {
 #if LSM6DSV_USE_HW_SPI
-  spi_rx_flush();
   cs_low();
-  (void)spi_xfer16((uint16_t)(((uint16_t)(reg & 0x7FU) << 8) | value));
-  spi_wait_idle();
+  if(spi_xfer16((uint16_t)(((uint16_t)(reg & 0x7FU) << 8) | value), 0) != 0)
+  {
+    cs_high();
+    return -2;
+  }
+  if(spi_wait_idle() != 0)
+  {
+    cs_high();
+    return -3;
+  }
   cs_high();
+  return 0;
 #else
   CS_LOW();
   pause_gpio();
   (void)spi_xfer8_gpio((uint8_t)(reg & 0x7FU));
   (void)spi_xfer8_gpio(value);
-  spi_wait_idle();
   CS_HIGH();
   pause_gpio();
+  return 0;
 #endif
 }
 
-static void lsm6dsv_read_burst(uint8_t reg, uint8_t *buf, uint8_t len)
+static int write_reg_mask(uint8_t reg, uint8_t mask, uint8_t bits)
+{
+  uint8_t cur;
+
+  if(lsm6dsv_read_reg(reg, &cur) != 0)
+  {
+    return -1;
+  }
+  cur = (uint8_t)((cur & (uint8_t)~mask) | (bits & mask));
+  return lsm6dsv_write_reg(reg, cur);
+}
+
+static int lsm6dsv_read_burst(uint8_t reg, uint8_t *buf, uint8_t len)
 {
   uint8_t pos = 0U;
 
-  if(len == 0U) return;
+  if((buf == 0) || (len == 0U))
+  {
+    return -1;
+  }
 
 #if LSM6DSV_USE_HW_SPI
   uint16_t rx;
-  spi_rx_flush();
   cs_low();
-  rx = spi_xfer16((uint16_t)((uint16_t)(reg | 0x80U) << 8));
+  if(spi_xfer16((uint16_t)((uint16_t)(reg | 0x80U) << 8), &rx) != 0)
+  {
+    cs_high();
+    return -2;
+  }
   buf[pos++] = (uint8_t)rx;
   while((uint8_t)(len - pos) >= 2U)
   {
-    rx = spi_xfer16(0x0000U);
+    if(spi_xfer16(0x0000U, &rx) != 0)
+    {
+      cs_high();
+      return -2;
+    }
     buf[pos++] = (uint8_t)(rx >> 8);
     buf[pos++] = (uint8_t)rx;
   }
+  /* 16-bit frames cannot stop on an odd leftover byte: one extra dummy
+   * clocked byte is discarded so only `len` payload bytes are kept. */
   if(pos < len)
   {
-    rx = spi_xfer16(0x0000U);
+    if(spi_xfer16(0x0000U, &rx) != 0)
+    {
+      cs_high();
+      return -2;
+    }
     buf[pos] = (uint8_t)(rx >> 8);
   }
-  spi_wait_idle();
+  if(spi_wait_idle() != 0)
+  {
+    cs_high();
+    return -3;
+  }
   cs_high();
+  return 0;
 #else
   CS_LOW();
   pause_gpio();
@@ -322,33 +398,35 @@ static void lsm6dsv_read_burst(uint8_t reg, uint8_t *buf, uint8_t len)
   {
     buf[pos++] = spi_xfer8_gpio(0x00U);
   }
-  spi_wait_idle();
   CS_HIGH();
   pause_gpio();
+  return 0;
 #endif
 }
 
-int lsm6dsv_probe_spi_modes(uint8_t who_mode[4])
+int lsm6dsv_probe_whoami(uint8_t who_mode[4])
 {
   uint8_t i;
   int good = 0;
 
-  lsm6dsv_write_reg(REG_FUNC_CFG_ACCESS, 0x00U);
+  if(who_mode == 0)
+  {
+    return -1;
+  }
+  (void)lsm6dsv_write_reg(REG_FUNC_CFG_ACCESS, 0x00U);
   for(i = 0U; i < 4U; i++)
   {
-    who_mode[i] = lsm6dsv_read_reg(REG_WHO_AM_I);
-    if(who_mode[i] == LSM6DSV_WHO_AM_I_VAL) good++;
+    if(lsm6dsv_read_reg(REG_WHO_AM_I, &who_mode[i]) != 0)
+    {
+      who_mode[i] = 0xFFU;
+      continue;
+    }
+    if(who_mode[i] == LSM6DSV_WHO_AM_I_VAL)
+    {
+      good++;
+    }
   }
   return (good != 0) ? good : -1;
-}
-
-uint32_t lsm6dsv_probe_tail(void)
-{
-#if LSM6DSV_USE_HW_SPI
-  return SPI1->i2sctrl | (SPI1->i2sclk << 16);
-#else
-  return 0U;
-#endif
 }
 
 static int16_t le16(const uint8_t *p)
@@ -356,60 +434,104 @@ static int16_t le16(const uint8_t *p)
   return (int16_t)((uint16_t)p[0] | ((uint16_t)p[1] << 8));
 }
 
+static int expect_reg(uint8_t reg, uint8_t mask, uint8_t want)
+{
+  uint8_t v;
+
+  if(lsm6dsv_read_reg(reg, &v) != 0)
+  {
+    return -1;
+  }
+  return ((v & mask) == want) ? 0 : -1;
+}
+
 int lsm6dsv_init_2khz(void)
 {
   uint32_t guard;
   uint8_t who = 0U;
   uint8_t n;
+  uint8_t v;
 
   delay_ms(20U);
-  /* FUNC_CFG_ACCESS is available for returning to the main register bank. */
-  lsm6dsv_write_reg(REG_FUNC_CFG_ACCESS, 0x00U);
+  if(lsm6dsv_write_reg(REG_FUNC_CFG_ACCESS, 0x00U) != 0)
+  {
+    return -1;
+  }
   for(n = 0U; n < 8U; n++)
   {
-    who = lsm6dsv_read_reg(REG_WHO_AM_I);
-    if(who == LSM6DSV_WHO_AM_I_VAL) break;
+    if((lsm6dsv_read_reg(REG_WHO_AM_I, &who) == 0) &&
+       (who == LSM6DSV_WHO_AM_I_VAL))
+    {
+      break;
+    }
     delay_ms(2U);
   }
-  if(who != LSM6DSV_WHO_AM_I_VAL) return -1;
-
-  lsm6dsv_write_reg(REG_CTRL1, 0x00U);
-  lsm6dsv_write_reg(REG_CTRL2, 0x00U);
-  lsm6dsv_write_reg(REG_CTRL3, CTRL3_SW_RESET);
-  guard = 0U;
-  while((lsm6dsv_read_reg(REG_CTRL3) & CTRL3_SW_RESET) != 0U)
+  if(who != LSM6DSV_WHO_AM_I_VAL)
   {
-    if(++guard > 10000U) return -2;
+    return -1;
   }
+
+  (void)lsm6dsv_write_reg(REG_CTRL1, 0x00U);
+  (void)lsm6dsv_write_reg(REG_CTRL2, 0x00U);
+  if(lsm6dsv_write_reg(REG_CTRL3, CTRL3_SW_RESET) != 0)
+  {
+    return -2;
+  }
+  guard = 0U;
+  do
+  {
+    if(lsm6dsv_read_reg(REG_CTRL3, &v) != 0)
+    {
+      return -2;
+    }
+    if(++guard > 10000U)
+    {
+      return -2;
+    }
+  } while((v & CTRL3_SW_RESET) != 0U);
   delay_ms(10U);
 
-  lsm6dsv_write_reg(REG_FUNC_CFG_ACCESS, 0x00U);
-  lsm6dsv_write_reg(REG_IF_CFG, IF_CFG_I2C_I3C_DISABLE);
-  lsm6dsv_write_reg(REG_CTRL3, (uint8_t)(CTRL3_BDU | CTRL3_IF_INC));
-  lsm6dsv_write_reg(REG_CTRL4, CTRL4_DRDY_MASK);
-  lsm6dsv_write_reg(REG_CTRL6, FS_G_2000DPS);
-  lsm6dsv_write_reg(REG_CTRL7, 0x00U);
-  lsm6dsv_write_reg(REG_CTRL8, FS_XL_4G);
-  lsm6dsv_write_reg(REG_HAODR_CFG, HAODR_SEL_HA01);
-  lsm6dsv_write_reg(REG_INT1_CTRL, (uint8_t)(INT1_DRDY_XL | INT1_DRDY_G));
-  /* 0x1A = HA ODR mode + nibble 0xA; HAODR_SEL=1 => 2000 Hz. */
-  lsm6dsv_write_reg(REG_CTRL1, HA01_2000HZ);
-  lsm6dsv_write_reg(REG_CTRL2, HA01_2000HZ);
-  lsm6dsv_write_reg(REG_FUNC_CFG_ACCESS, 0x00U);
+  if(lsm6dsv_write_reg(REG_FUNC_CFG_ACCESS, 0x00U) != 0) return -9;
+  if(write_reg_mask(REG_IF_CFG, IF_CFG_I2C_I3C_DISABLE, IF_CFG_I2C_I3C_DISABLE) != 0) return -9;
+  if(write_reg_mask(REG_CTRL3, (uint8_t)(CTRL3_BDU | CTRL3_IF_INC),
+                    (uint8_t)(CTRL3_BDU | CTRL3_IF_INC)) != 0) return -9;
+  if(write_reg_mask(REG_CTRL4, CTRL4_DRDY_MASK, CTRL4_DRDY_MASK) != 0) return -9;
+  if(write_reg_mask(REG_CTRL6, 0x0FU, FS_G_2000DPS) != 0) return -9;
+  if(write_reg_mask(REG_CTRL7, LPF1_G_EN, 0x00U) != 0) return -9;
+  if(write_reg_mask(REG_CTRL8, 0x03U, FS_XL_4G) != 0) return -9;
+  if(write_reg_mask(REG_HAODR_CFG, 0x03U, HAODR_SEL_HA01) != 0) return -9;
+  /* Gyro DRDY is the sample beat; XLDA+GDA are checked before the burst. */
+  if(lsm6dsv_write_reg(REG_INT1_CTRL, INT1_DRDY_G) != 0) return -9;
+  if(lsm6dsv_write_reg(REG_CTRL1, HA01_2000HZ) != 0) return -9;
+  if(lsm6dsv_write_reg(REG_CTRL2, HA01_2000HZ) != 0) return -9;
+  if(lsm6dsv_write_reg(REG_FUNC_CFG_ACCESS, 0x00U) != 0) return -9;
 
   delay_ms(20U);
-  if(lsm6dsv_read_reg(REG_WHO_AM_I) != LSM6DSV_WHO_AM_I_VAL) return -3;
-  if(lsm6dsv_read_reg(REG_CTRL1) != HA01_2000HZ) return -4;
-  if(lsm6dsv_read_reg(REG_CTRL2) != HA01_2000HZ) return -5;
-  if((lsm6dsv_read_reg(REG_HAODR_CFG) & 0x03U) != HAODR_SEL_HA01) return -6;
-  if((lsm6dsv_read_reg(REG_CTRL7) & LPF1_G_EN) != 0U) return -8;
+  if(expect_reg(REG_WHO_AM_I, 0xFFU, LSM6DSV_WHO_AM_I_VAL) != 0) return -3;
+  if(expect_reg(REG_CTRL1, 0xFFU, HA01_2000HZ) != 0) return -4;
+  if(expect_reg(REG_CTRL2, 0xFFU, HA01_2000HZ) != 0) return -5;
+  if(expect_reg(REG_HAODR_CFG, 0x03U, HAODR_SEL_HA01) != 0) return -6;
+  if(expect_reg(REG_IF_CFG, IF_CFG_I2C_I3C_DISABLE, IF_CFG_I2C_I3C_DISABLE) != 0) return -10;
+  if(expect_reg(REG_CTRL3, (uint8_t)(CTRL3_BDU | CTRL3_IF_INC),
+                (uint8_t)(CTRL3_BDU | CTRL3_IF_INC)) != 0) return -10;
+  if(expect_reg(REG_CTRL4, CTRL4_DRDY_MASK, CTRL4_DRDY_MASK) != 0) return -10;
+  if(expect_reg(REG_CTRL6, 0x0FU, FS_G_2000DPS) != 0) return -10;
+  if(expect_reg(REG_CTRL7, LPF1_G_EN, 0x00U) != 0) return -8;
+  if(expect_reg(REG_CTRL8, 0x03U, FS_XL_4G) != 0) return -10;
+  if(expect_reg(REG_INT1_CTRL, 0xFFU, INT1_DRDY_G) != 0) return -10;
   if(lsm6dsv_wait_sample(5000U) != 0) return -7;
   return 0;
 }
 
 int lsm6dsv_data_ready(void)
 {
-  return ((lsm6dsv_read_reg(REG_STATUS) & STATUS_XGDA) == STATUS_XGDA) ? 1 : 0;
+  uint8_t st;
+
+  if(lsm6dsv_read_reg(REG_STATUS, &st) != 0)
+  {
+    return 0;
+  }
+  return ((st & STATUS_XGDA) == STATUS_XGDA) ? 1 : 0;
 }
 
 int lsm6dsv_wait_sample(uint32_t timeout_us)
@@ -426,9 +548,12 @@ int lsm6dsv_wait_sample(uint32_t timeout_us)
   {
     if(lsm_int1_read() != 0U)
     {
-      return 0;
+      if(lsm6dsv_data_ready() != 0)
+      {
+        return 0;
+      }
     }
-    if(lsm6dsv_data_ready() != 0)
+    else if(lsm6dsv_data_ready() != 0)
     {
       return 0;
     }
@@ -440,7 +565,14 @@ int lsm6dsv_read_raw(lsm6dsv_raw_t *raw)
 {
   uint8_t buf[12];
 
-  lsm6dsv_read_burst(REG_OUTX_L_G, buf, 12U);
+  if(raw == 0)
+  {
+    return -1;
+  }
+  if(lsm6dsv_read_burst(REG_OUTX_L_G, buf, 12U) != 0)
+  {
+    return -2;
+  }
   raw->gyr[0] = le16(&buf[0]);
   raw->gyr[1] = le16(&buf[2]);
   raw->gyr[2] = le16(&buf[4]);

@@ -19,10 +19,10 @@ typedef struct
 } lsm6dsv_raw_t;
 
 void lsm6dsv_spi_init(void);
-int lsm6dsv_probe_spi_modes(uint8_t who_mode[4]);
-uint32_t lsm6dsv_probe_tail(void);
-uint8_t lsm6dsv_read_reg(uint8_t reg);
-void lsm6dsv_write_reg(uint8_t reg, uint8_t value);
+int lsm6dsv_spi_recover(void);
+int lsm6dsv_probe_whoami(uint8_t who_mode[4]);
+int lsm6dsv_read_reg(uint8_t reg, uint8_t *value);
+int lsm6dsv_write_reg(uint8_t reg, uint8_t value);
 int lsm6dsv_init_2khz(void);
 int lsm6dsv_data_ready(void);
 int lsm6dsv_wait_sample(uint32_t timeout_us);
