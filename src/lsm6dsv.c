@@ -42,9 +42,8 @@
 #define CTRL3_IF_INC            0x04U
 #define CTRL3_BDU               0x40U
 #define CTRL4_DRDY_MASK         0x08U
-#define INT1_DRDY_XL            0x01U
 #define INT1_DRDY_G             0x02U
-#define FS_G_2000DPS            0x04U
+#define FS_G_1000DPS            0x03U
 #define LPF1_G_EN               0x01U
 /* LSM6DSV: HM_MODE=0 selects high-performance mode. */
 #define CTRL6_XL_HM_MODE        0x10U
@@ -516,7 +515,7 @@ int lsm6dsv_init_2khz(void)
   if(write_reg_mask(REG_CTRL3, (uint8_t)(CTRL3_BDU | CTRL3_IF_INC),
                     (uint8_t)(CTRL3_BDU | CTRL3_IF_INC)) != 0) return -9;
   if(write_reg_mask(REG_CTRL4, CTRL4_DRDY_MASK, CTRL4_DRDY_MASK) != 0) return -9;
-  if(write_reg_mask(REG_CTRL6, (uint8_t)(0x0FU | CTRL6_XL_HM_MODE), FS_G_2000DPS) != 0) return -9;
+  if(write_reg_mask(REG_CTRL6, (uint8_t)(0x0FU | CTRL6_XL_HM_MODE), FS_G_1000DPS) != 0) return -9;
   /* Explicitly force accelerometer high-performance mode. */
   if(write_reg_mask(REG_CTRL7, (uint8_t)(LPF1_G_EN | CTRL7_G_HM_MODE), 0x00U) != 0) return -9;
   /* Explicitly force gyroscope high-performance mode and keep LPF1 off. */
@@ -537,7 +536,7 @@ int lsm6dsv_init_2khz(void)
   if(expect_reg(REG_CTRL3, (uint8_t)(CTRL3_BDU | CTRL3_IF_INC),
                 (uint8_t)(CTRL3_BDU | CTRL3_IF_INC)) != 0) return -10;
   if(expect_reg(REG_CTRL4, CTRL4_DRDY_MASK, CTRL4_DRDY_MASK) != 0) return -10;
-  if(expect_reg(REG_CTRL6, (uint8_t)(0x0FU | CTRL6_XL_HM_MODE), FS_G_2000DPS) != 0) return -10;
+  if(expect_reg(REG_CTRL6, (uint8_t)(0x0FU | CTRL6_XL_HM_MODE), FS_G_1000DPS) != 0) return -10;
   if(expect_reg(REG_CTRL7, (uint8_t)(LPF1_G_EN | CTRL7_G_HM_MODE), 0x00U) != 0) return -8;
   if(expect_reg(REG_CTRL8, 0x03U, FS_XL_4G) != 0) return -10;
   if(expect_reg(REG_INT1_CTRL, 0xFFU, INT1_DRDY_G) != 0) return -10;
@@ -590,7 +589,7 @@ int lsm6dsv_read_sflp_gbias(float gbias_dps[3], uint32_t settle_ms)
   if(lsm6dsv_write_reg(REG_IF_CFG, IF_CFG_I2C_I3C_DISABLE) != 0) return -3;
   if(lsm6dsv_write_reg(REG_CTRL3, (uint8_t)(CTRL3_BDU | CTRL3_IF_INC)) != 0) return -3;
   if(lsm6dsv_write_reg(REG_CTRL8, 0x00U) != 0) return -3;  /* +/-2 g */
-  if(lsm6dsv_write_reg(REG_CTRL6, FS_G_2000DPS) != 0) return -3;
+  if(lsm6dsv_write_reg(REG_CTRL6, FS_G_1000DPS) != 0) return -3;
   if(lsm6dsv_write_reg(REG_FIFO_CTRL4, FIFO_MODE_BYPASS) != 0) return -3;
 
   if(lsm6dsv_write_reg(REG_FUNC_CFG_ACCESS, FUNC_CFG_ACCESS_EMB) != 0) return -4;

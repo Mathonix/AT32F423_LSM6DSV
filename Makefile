@@ -80,6 +80,10 @@ OBJS := $(patsubst %.c,$(BUILD)/%.o,$(notdir $(SRCS))) \
         $(patsubst %.cpp,$(BUILD)/%.o,$(notdir $(CPPSRCS))) \
         $(BUILD)/startup_at32f423.o
 
+DEPS := $(OBJS:.o=.d)
+DEPFLAGS = -MMD -MP -MF $(@:.o=.d)
+-include $(DEPS)
+
 vpath %.c $(SRC_DIR) \
   $(LIB)/libraries/cmsis/cm4/device_support \
   $(LIB)/libraries/drivers/src
@@ -87,7 +91,7 @@ vpath %.c $(SRC_DIR) \
 vpath %.cpp $(SRC_DIR)
 
 .DEFAULT_GOAL := all
-.PHONY: all clean spi-matrix spi-safe-probe spi-observe spi-freq-sweep safe-idle
+.PHONY: all clean spi-matrix spi-safe-probe spi-observe spi-freq-sweep safe-idle ist8310
 
 spi-matrix:
 	$(MAKE) TARGET=spi_matrix APP_MAIN=spi_matrix_main.c all
@@ -113,10 +117,10 @@ $(BUILD):
 	@mkdir -p $(BUILD)
 
 $(BUILD)/%.o: %.c | $(BUILD)
-	$(CC) $(CFLAGS) -c $< -o $@
+	$(CC) $(CFLAGS) $(DEPFLAGS) -c $< -o $@
 
 $(BUILD)/%.o: %.cpp | $(BUILD)
-	$(CXX) $(CXXFLAGS) -c $< -o $@
+	$(CXX) $(CXXFLAGS) $(DEPFLAGS) -c $< -o $@
 
 $(BUILD)/startup_at32f423.o: $(STARTUP) | $(BUILD)
 	$(CC) $(CFLAGS) -c $< -o $@

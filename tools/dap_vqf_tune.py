@@ -10,18 +10,19 @@ import argparse
 import csv
 import math
 from pathlib import Path
+import shutil
 import statistics
 import struct
+import subprocess
 import sys
 import time
 
 from pyocd.core.helpers import ConnectHelper
 
 ROOT = Path(__file__).resolve().parents[1]
+DEFAULT_ELF = ROOT / "build" / "lsm6dsv_spi_test.elf"
 MAGIC = 0x56514654  # VQF_TUNE_MAGIC
-SRAM = 0x20000000
-SRAM_SIZE = 0xC000
-FMT = "<IIIIII" + "f" * 19 + "iIIII"
+FMT = "<6I19fi4I3f"
 SIZE = struct.calcsize(FMT)
 NAMES = [
     "magic", "seq", "millis", "fusion_hz", "skip_n", "rest_detected",
@@ -30,24 +31,54 @@ NAMES = [
     "bias_x", "bias_y", "bias_z", "rest_time", "tau_acc",
     "mx", "my", "mz", "mag_norm", "tau_mag",
     "mag_err", "mag_addr", "mag_updates", "mag_ready", "mag_disturbed",
+    "temperature_c", "gyr_lpf_z", "corrected_z",
 ]
 
 
-def find_snapshot(target) -> int:
-    """Locate the dedicated DAP snapshot once while the core is halted."""
+def elf_symbol_address(elf: Path, symbol: str) -> int:
+    """Resolve a global from the exact ELF that describes the target image."""
+    candidates = [
+        shutil.which("arm-none-eabi-nm"),
+        Path.home() / ".platformio" / "packages" /
+        "toolchain-gccarmnoneeabi" / "bin" / "arm-none-eabi-nm.exe",
+    ]
+    nm = next((str(path) for path in candidates if path and Path(path).is_file()), None)
+    if nm is None:
+        raise RuntimeError("arm-none-eabi-nm was not found in PATH or PlatformIO")
+    if not elf.is_file():
+        raise RuntimeError(f"ELF not found: {elf}")
+
+    output = subprocess.check_output(
+        [nm, "--defined-only", str(elf)], text=True, errors="replace"
+    )
+    for line in output.splitlines():
+        fields = line.split()
+        if len(fields) >= 3 and fields[-1] == symbol:
+            return int(fields[0], 16)
+    raise RuntimeError(f"symbol {symbol!r} not found in {elf}")
+
+
+def validate_snapshot_address(target, addr: int) -> None:
+    """Reject an ELF/firmware mismatch before collecting invalid telemetry."""
     target.halt()
-    blob = bytes(target.read_memory_block8(SRAM, SRAM_SIZE))
-    needle = MAGIC.to_bytes(4, "little")
-    matches = [i for i in range(0, len(blob) - 3, 4) if blob[i:i + 4] == needle]
-    if not matches:
+    magic = target.read32(addr)
+    if magic != MAGIC:
         raise RuntimeError(
-            "VQF tuning snapshot not found; flash the newly built firmware first"
+            f"ELF/firmware mismatch: vqf_tune_live at 0x{addr:08X} "
+            f"contains 0x{magic:08X}, expected 0x{MAGIC:08X}; "
+            "flash the matching build"
         )
-    return SRAM + matches[0]
 
 
 def unpack_snapshot(raw: bytes) -> dict[str, int | float]:
     return dict(zip(NAMES, struct.unpack(FMT, raw[:SIZE])))
+
+
+def find_snapshot(target, elf: Path = DEFAULT_ELF) -> int:
+    """Compatibility entry point for the magnetic calibration tool."""
+    addr = elf_symbol_address(elf, "vqf_tune_live")
+    validate_snapshot_address(target, addr)
+    return addr
 
 
 def wait_snapshot_ready(target, addr: int, timeout: float = 5.0) -> None:
@@ -178,7 +209,9 @@ def main() -> int:
     parser.add_argument("--warmup", type=float, default=6.0,
                         help="seconds to let Full VQF settle before capture")
     parser.add_argument("--flash", action="store_true")
-    parser.add_argument("--frequency", type=int, default=1_000_000,
+    parser.add_argument("--elf", type=Path, default=DEFAULT_ELF,
+                        help="ELF used to resolve vqf_tune_live")
+    parser.add_argument("--frequency", type=int, default=2_000_000,
                         help="SWD frequency in Hz")
     parser.add_argument("--output", type=Path, default=None)
     args = parser.parse_args()
@@ -206,7 +239,8 @@ def main() -> int:
     rows: list[dict[str, int | float]] = []
     try:
         target = session.target
-        addr = find_snapshot(target)
+        addr = elf_symbol_address(args.elf.resolve(), "vqf_tune_live")
+        validate_snapshot_address(target, addr)
         wait_snapshot_ready(target, addr)
         print(f"vqf_tune_live @ 0x{addr:08X}, size={SIZE}, target rate={args.rate:.1f}Hz")
         print("Keep the board completely still during a stationary tuning capture.")

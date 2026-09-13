@@ -16,7 +16,7 @@ REG_HAODR = 0x62
 REG_INT1 = 0x0D
 
 WHO_VAL = 0x70
-G_DPS = 0.070
+G_DPS = 0.035
 A_G = 0.000122
 DEG2RAD = math.pi / 180.0
 G0 = 9.80665
@@ -191,7 +191,7 @@ def main() -> int:
                 break
             time.sleep(0.01)
         write_reg(REG_CTRL3, 0x44)
-        write_reg(REG_CTRL6, 0x04)
+        write_reg(REG_CTRL6, 0x03)
         write_reg(REG_CTRL8, 0x01)
         write_reg(REG_HAODR, 0x01)
         write_reg(REG_INT1, 0x02)

@@ -15,13 +15,14 @@ extern "C" {
 #endif
 
 #include "at32f423.h"
+#include "app_config.h"
 #include <stdio.h>
 
 #define LED_GPIO                 GPIOB
 #define LED_PIN                  GPIO_PINS_8
 
 #define PRINT_UART               USART4
-#define PRINT_UART_BAUDRATE      2000000U
+#define PRINT_UART_BAUDRATE      APP_UART_BAUD
 
 void bsp_init(void);
 void bsp_systick_tick(void);

@@ -1,5 +1,6 @@
 #ifndef VQF_H
 #define VQF_H
+/* C interface implemented by vqf_wrapper.cpp over the official Full VQF. */
 #ifdef __cplusplus
 extern "C" {
 #endif

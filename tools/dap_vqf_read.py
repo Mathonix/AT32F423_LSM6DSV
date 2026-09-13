@@ -11,13 +11,19 @@ from pyocd.core.helpers import ConnectHelper
 MAGIC = 0x56465131
 SRAM = 0x20000000
 SRAM_SIZE = 0xC000
-FMT = "<IIiIIIIIIIIfffffffffffff"
+DEFAULT_SWD_FREQUENCY = 2_000_000
+FMT = "<IIi" + "I" * 8 + "f" * 13 + "f" * 5 + "I" + "f" * 5 + "i" + "I" * 4 + "f" * 3
 SIZE = struct.calcsize(FMT)
 NAMES = [
     "magic", "seq", "init_err", "whoami", "clk_hz", "millis",
     "fusion_hz", "out_hz", "fusion_n", "skip_n", "vqf_us",
     "roll", "pitch", "yaw", "qw", "qx", "qy", "qz",
     "gx", "gy", "gz", "ax", "ay", "az",
+    "bias_x", "bias_y", "bias_z", "rest_time", "tau_acc",
+    "rest_detected",
+    "mx", "my", "mz", "mag_norm", "tau_mag",
+    "mag_err", "mag_addr", "mag_updates", "mag_ready", "mag_disturbed",
+    "temperature_c", "gyr_lpf_z", "corrected_z",
 ]
 
 
@@ -50,6 +56,8 @@ def main() -> int:
     p.add_argument("--seconds", type=float, default=None,
                    help="compatibility option; with no --period override, period=seconds/count")
     p.add_argument("--flash", action="store_true")
+    p.add_argument("--frequency", type=int, default=DEFAULT_SWD_FREQUENCY,
+                   help="SWD clock frequency in Hz")
     args = p.parse_args()
     if args.count <= 0 or args.period < 0:
         p.error("--count must be > 0 and --period must be >= 0")
@@ -64,7 +72,7 @@ def main() -> int:
         flash_target(parse_hex(HEX_PATH))
         time.sleep(0.4)
 
-    opts = {"connect_mode": "attach", "frequency": 400000}
+    opts = {"connect_mode": "attach", "frequency": args.frequency}
     session = ConnectHelper.session_with_chosen_probe(
         target_override="cortex_m", options=opts
     )
@@ -109,8 +117,8 @@ def main() -> int:
         rows = []
         start = time.perf_counter()
         print(f"vqf_live @ 0x{addr:08X}; count={args.count}; period={args.period:.3f}s")
-        print("No. Host(s) MCU(ms)   Roll(deg) Pitch(deg)  Yaw(deg)   Gx     Gy     Gz     Ax     Ay     Az")
-        print("--- ------- ------- ----------- ---------- --------- ------ ------ ------ ------ ------ ------")
+        print("No. Host(s) MCU(ms)   Roll(deg) Pitch(deg)  Yaw(deg)   Gz     BiasZ  LPFZ  CorrZ TempC")
+        print("--- ------- ------- ----------- ---------- --------- ------ ------ ------ ------ -----")
 
         for i in range(args.count):
             deadline = start + i * args.period
@@ -131,8 +139,8 @@ def main() -> int:
             print(
                 f"{i + 1:3d} {host_s:7.3f} {d['millis']:7d} "
                 f"{d['roll']:11.2f} {d['pitch']:10.2f} {d['yaw']:9.2f} "
-                f"{d['gx']:+6.2f} {d['gy']:+6.2f} {d['gz']:+6.2f} "
-                f"{d['ax']:+6.2f} {d['ay']:+6.2f} {d['az']:+6.2f}"
+                f"{d['gz']:+6.2f} {d['bias_z']:+7.3f} {d['gyr_lpf_z']:+6.2f} "
+                f"{d['corrected_z']:+6.2f} {d['temperature_c']:+6.2f}"
             )
 
         last = rows[-1]

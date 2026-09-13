@@ -52,7 +52,7 @@ def main() -> int:
     args = p.parse_args()
     period = 1.0 / max(args.hz, 1.0)
 
-    opts = {"connect_mode": "attach", "frequency": 400000}
+    opts = {"connect_mode": "attach", "frequency": 2_000_000}
     session = ConnectHelper.session_with_chosen_probe(
         target_override="cortex_m", options=opts
     )

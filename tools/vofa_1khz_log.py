@@ -1,4 +1,4 @@
-"""Read 1 kHz VOFA JustFloat frames from USART4 (default 2 Mbps)."""
+"""Read 200 Hz VOFA JustFloat frames from USART4 (default 2 Mbps)."""
 from __future__ import annotations
 
 import argparse
@@ -8,7 +8,7 @@ import time
 
 import serial
 
-N_CH = 16
+N_CH = 18
 FRAME = N_CH * 4 + 4
 TAIL = b"\x00\x00\x80\x7f"
 
@@ -48,8 +48,10 @@ def main() -> int:
         print("no JustFloat frames")
         return 1
     names = [
-        "roll", "pitch", "yaw", "qw", "qx", "qy", "qz",
-        "gx", "gy", "gz", "ax", "ay", "az", "vqf_us", "fusion_hz", "late",
+        "yaw_kf", "pitch", "roll", "temperature_c",
+        "qw", "qx", "qy", "qz",
+        "gx", "gy", "gz", "ax", "ay", "az", "vqf_us", "late",
+        "gyr_lpf_z", "corrected_z",
     ]
     for name, val in zip(names, last):
         print(f"{name:10s} {val:10.3f}")

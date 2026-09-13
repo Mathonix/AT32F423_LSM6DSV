@@ -5,6 +5,7 @@
 
 #define VQF_LIVE_MAGIC 0x56465131u /* "VQF1" */
 #define VQF_TUNE_MAGIC 0x56514654u /* "VQFT" */
+#define YAW_KF_SYNC_MAGIC 0x594B4631u /* "YKF1" */
 
 typedef struct
 {
@@ -48,6 +49,10 @@ typedef struct
   uint32_t mag_updates;
   uint32_t mag_ready;
   uint32_t mag_disturbed;
+  /* Appended fields: preserve the address of every legacy field above. */
+  float temperature_c;
+  float gyr_lpf_z;
+  float corrected_z;
 } vqf_live_t;
 
 typedef struct
@@ -82,9 +87,31 @@ typedef struct
   uint32_t mag_updates;
   uint32_t mag_ready;
   uint32_t mag_disturbed;
+  /* Appended fields: preserve the address of every legacy field above. */
+  float temperature_c;
+  float gyr_lpf_z;
+  float corrected_z;
 } vqf_tune_live_t;
+
+/* Compact synchronized output snapshot for high-rate DAPLink logging. */
+typedef struct
+{
+  uint32_t magic;
+  uint32_t seq;
+  uint32_t millis;
+  float vqf_yaw;
+  float kf_yaw;
+  float gz;
+  float bias_z;
+  uint32_t rest_detected;
+  uint32_t mag_updates;
+  float temperature_c;
+  float gyr_lpf_z;
+  float corrected_z;
+} yaw_kf_sync_live_t;
 
 extern volatile vqf_live_t vqf_live;
 extern volatile vqf_tune_live_t vqf_tune_live;
+extern volatile yaw_kf_sync_live_t yaw_kf_sync_live;
 
 #endif

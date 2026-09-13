@@ -293,7 +293,7 @@
             <v6Rtti>0</v6Rtti>
             <VariousControls>
               <MiscControls></MiscControls>
-              <Define>AT32F423KCU7_4,USE_STDPERIPH_DRIVER</Define>
+              <Define>AT32F423KCU7_4,USE_STDPERIPH_DRIVER,VQF_SINGLE_PRECISION</Define>
               <Undefine></Undefine>
               <IncludePath>..\inc;..\..\AT32F423_Firmware_Library\libraries\cmsis\cm4\core_support;..\..\AT32F423_Firmware_Library\libraries\cmsis\cm4\device_support;..\..\AT32F423_Firmware_Library\libraries\drivers\inc</IncludePath>
             </VariousControls>
@@ -355,9 +355,24 @@
               <FilePath>..\src\lsm6dsv.c</FilePath>
             </File>
             <File>
-              <FileName>vqf.c</FileName>
+              <FileName>vqf_wrapper.cpp</FileName>
+              <FileType>8</FileType>
+              <FilePath>..\src\vqf_wrapper.cpp</FilePath>
+            </File>
+            <File>
+              <FileName>vqf_full.cpp</FileName>
+              <FileType>8</FileType>
+              <FilePath>..\src\vqf_full.cpp</FilePath>
+            </File>
+            <File>
+              <FileName>ist8310.c</FileName>
               <FileType>1</FileType>
-              <FilePath>..\src\vqf.c</FilePath>
+              <FilePath>..\src\ist8310.c</FilePath>
+            </File>
+            <File>
+              <FileName>ws2812.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\src\ws2812.c</FilePath>
             </File>
             <File>
               <FileName>at32f423_clock.c</FileName>

@@ -13,6 +13,8 @@ from pyocd.core.helpers import ConnectHelper
 HEX_PATH = Path(r"E:\Desktop\CV_resume\Program\AT32F423_LSM6DSV_SPI_Test\build\lsm6dsv_spi_test.hex")
 COM_PORT = None
 BAUD = 2000000
+DEFAULT_SWD_FREQUENCY = 2_000_000
+AUTO_RESET_AFTER_FLASH = True
 
 FLASH_BASE = 0x40023C00
 FLASH_UNLOCK = FLASH_BASE + 0x04
@@ -114,13 +116,47 @@ def words_from_mem(mem: dict[int, int]) -> list[tuple[int, int]]:
     return out, start, end
 
 
+def reset_and_run_after_flash(target) -> None:
+    """Reset the MCU after programming and verify that it is running."""
+    if not AUTO_RESET_AFTER_FLASH:
+        print("auto reset disabled")
+        return
+
+    # Do not leave the core halted at the reset vector after programming.
+    target.reset_stop_on_reset = False
+    try:
+        target.reset()
+    except Exception as exc:
+        raise RuntimeError(f"automatic reset failed: {exc}") from exc
+
+    try:
+        target.resume()
+    except Exception as exc:
+        raise RuntimeError(f"could not release MCU after reset: {exc}") from exc
+
+    # A short settle time avoids reporting the state during the reset handshake.
+    time.sleep(0.05)
+    try:
+        state = target.get_state().name
+    except Exception as exc:
+        raise RuntimeError(f"could not verify MCU state after reset: {exc}") from exc
+    if state != "RUNNING":
+        raise RuntimeError(f"MCU is not running after automatic reset (state={state})")
+
+    try:
+        pc = target.read_core_register("pc")
+        print(f"automatic reset OK; target running pc=0x{pc:08X}")
+    except Exception:
+        print("automatic reset OK; target running")
+
+
 def flash_target(mem: dict[int, int]) -> None:
     words, start, end = words_from_mem(mem)
     print(f"image 0x{start:08X}-0x{end:08X}, {len(words)} words")
 
     opts = {
         "connect_mode": "under-reset",
-        "frequency": 400000,
+        "frequency": DEFAULT_SWD_FREQUENCY,
     }
     session = ConnectHelper.session_with_chosen_probe(target_override="cortex_m", options=opts)
     if session is None:
@@ -162,16 +198,7 @@ def flash_target(mem: dict[int, int]) -> None:
         rst = target.read32(0x08000004)
         print(f"vector SP=0x{sp:08X} Reset=0x{rst:08X}")
 
-        target.reset_stop_on_reset = False
-        try:
-            target.reset()
-        except Exception as exc:
-            print("reset exception:", exc)
-        try:
-            target.resume()
-        except Exception:
-            pass
-        print("target running")
+        reset_and_run_after_flash(target)
     finally:
         session.close()
 

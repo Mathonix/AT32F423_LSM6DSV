@@ -7,9 +7,10 @@ import time
 from pathlib import Path
 from datetime import datetime
 from pyocd.core.helpers import ConnectHelper
+from dap_vqf_tune import DEFAULT_ELF, elf_symbol_address
 
-NAMES = ('magic seq millis fusion_hz skip_n rest_detected roll pitch yaw gx gy gz ax ay az bias_x bias_y bias_z rest_time tau_acc mx my mz mag_norm tau_mag mag_err mag_addr mag_updates mag_ready mag_disturbed').split()
-FMT = '<6I19fi4I'
+NAMES = ('magic seq millis fusion_hz skip_n rest_detected roll pitch yaw gx gy gz ax ay az bias_x bias_y bias_z rest_time tau_acc mx my mz mag_norm tau_mag mag_err mag_addr mag_updates mag_ready mag_disturbed temperature_c gyr_lpf_z corrected_z').split()
+FMT = '<6I19fi4I3f'
 SIZE = struct.calcsize(FMT)
 MAGIC = 0x56514654
 
@@ -17,7 +18,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--duration", type=int, default=1800)
     parser.add_argument('--probe')
-    parser.add_argument('--frequency',type=int,default=50000)
+    parser.add_argument('--frequency',type=int,default=2000000)
     args = parser.parse_args()
     if args.duration < 1:
         parser.error("duration must be positive")
@@ -32,11 +33,9 @@ def main():
         target = session.target
         if target.get_state().name != 'RUNNING':
             raise RuntimeError('MCU is not running; capture will not reset/resume it')
-        blob = bytes(target.read_memory_block8(0x20000000, 0xC000))
-        off = blob.find(struct.pack('<I', MAGIC))
-        if off < 0 or off % 4:
-            raise RuntimeError('Telemetry magic missing')
-        addr = 0x20000000 + off
+        addr = elf_symbol_address(DEFAULT_ELF, 'vqf_tune_live')
+        if target.read32(addr) != MAGIC:
+            raise RuntimeError('ELF/firmware telemetry mismatch')
         print(f'Non-halting capture at 0x{addr:08X}; CSV: {stem}.csv', flush=True)
         start = time.monotonic()
         with stem.with_suffix('.csv').open('w', newline='', encoding='utf-8') as f:

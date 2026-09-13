@@ -6,7 +6,6 @@
 #include "app_config.h"
 
 #include <cmath>
-#include <cstdint>
 #include <new>
 
 #ifndef M_PI
@@ -16,7 +15,6 @@
 namespace {
 alignas(VQF) unsigned char g_storage[sizeof(VQF)];
 VQF* g_vqf = nullptr;
-float g_gyr_dt = 0.0005f;
 float g_acc_dt = 0.0005f;
 float g_tau_acc = APP_VQF_TAU_ACC;
 float g_tau_mag = APP_VQF_TAU_MAG;
@@ -40,7 +38,6 @@ extern "C" void vqf_init(float gyr_dt, float acc_dt)
         g_vqf->~VQF();
         g_vqf = nullptr;
     }
-    g_gyr_dt = gyr_dt;
     g_acc_dt = acc_dt;
 
     VQFParams params;
@@ -49,6 +46,8 @@ extern "C" void vqf_init(float gyr_dt, float acc_dt)
     params.motionBiasEstEnabled = (APP_VQF_MOTION_BIAS_ENABLE != 0U);
     params.restBiasEstEnabled = true;
     params.magDistRejectionEnabled = true;
+    params.biasSigmaRest = APP_VQF_BIAS_SIGMA_REST_DPS;
+    params.biasForgettingTime = APP_VQF_BIAS_FORGETTING_TIME_S;
     // A fixed installation can boot without being rotated. Allow the first
     // stable norm/dip candidate to become the reference after the official
     // 5 s magNewFirstTime; later disturbances are still rejected normally.
@@ -56,6 +55,7 @@ extern "C" void vqf_init(float gyr_dt, float acc_dt)
     // Preserve the previous deviation thresholds for this single-variable trial.
     params.restThGyr = APP_VQF_REST_GYR_DPS;
     params.restThAcc = APP_VQF_REST_ACC_MS2;
+    params.restMinT = APP_VQF_REST_MIN_SECONDS;
 
     // IST8310 is read at 50 Hz; main.c feeds the compute-heavy Full VQF
     // magnetic update at 10 Hz to preserve every 2 kHz gyro sample.
@@ -90,7 +90,7 @@ extern "C" void vqf_prime_rest(const float acc_ms2[3], const float gyr_bias[3])
     vqf_set_gyr_bias(gyr_bias);
 
     // Initialize Full VQF's second-order accelerometer filter and inclination
-    // from the one-second stationary average already collected by main.c.
+    // from the configured stationary average already collected by main.c.
     const unsigned requested = static_cast<unsigned>(std::ceil(g_tau_acc / g_acc_dt)) + 1U;
     const unsigned n = requested > APP_VQF_PRIME_MAX_SAMPLES ? APP_VQF_PRIME_MAX_SAMPLES : requested;
     const vqf_real_t a[3] = {acc_ms2[0], acc_ms2[1], acc_ms2[2]};

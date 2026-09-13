@@ -17,11 +17,24 @@
 #include <math.h>
 #include <string.h>
 
-#define FUSION_HZ            2000.0f
-#define OUTPUT_DIV           2U
-#define DAP_OUTPUT_DIV       100U /* coherent 20 Hz snapshot for DAPLink */
+#define FUSION_RATE_HZ       APP_FUSION_HZ
+#define FUSION_HZ            ((float)FUSION_RATE_HZ)
+#if (APP_VOFA_OUTPUT_HZ == 0U)
+#error "APP_VOFA_OUTPUT_HZ must be non-zero"
+#elif (APP_VOFA_OUTPUT_HZ > APP_FUSION_HZ)
+#error "APP_VOFA_OUTPUT_HZ cannot exceed APP_FUSION_HZ"
+#elif ((APP_FUSION_HZ % APP_VOFA_OUTPUT_HZ) != 0U)
+#error "APP_VOFA_OUTPUT_HZ must divide APP_FUSION_HZ exactly"
+#endif
+#define OUTPUT_DIV           (FUSION_RATE_HZ / APP_VOFA_OUTPUT_HZ)
+#define DAP_OUTPUT_HZ        ((APP_VOFA_OUTPUT_HZ < 20U) ? APP_VOFA_OUTPUT_HZ : 20U)
+#if ((APP_FUSION_HZ % DAP_OUTPUT_HZ) != 0U)
+#error "DAP_OUTPUT_HZ must divide APP_FUSION_HZ exactly"
+#endif
+#define DAP_OUTPUT_DIV       ((FUSION_RATE_HZ >= DAP_OUTPUT_HZ) ? (FUSION_RATE_HZ / DAP_OUTPUT_HZ) : 1U)
+#define YAW_KF_SYNC_DIV      1U   /* VOFA output is now the synchronized 200 Hz stream */
 
-#define GYR_DPS_PER_LSB      0.070f
+#define GYR_DPS_PER_LSB      0.035f /* LSM6DSV CTRL6 FS_G=0011, +/-1000 dps */
 #define ACC_G_PER_LSB        0.000122f
 #define DEG2RAD              0.017453292519943295f
 #define G_TO_MS2             9.80665f
@@ -30,6 +43,7 @@
 #define CAL_GYR_REST_DPS APP_CAL_GYR_REST_DPS
 #define CAL_ACC_REST_MS2 APP_CAL_ACC_REST_MS2
 #define CAL_REST_SECONDS APP_CAL_REST_SECONDS   /* startup stationary bias calibration */
+#define CAL_DROP_MS      APP_CAL_DROP_MS        /* startup settling/discard time */
 #define GYR_LPF_CUTOFF_HZ APP_GYR_LPF_CUTOFF_HZ /* reduce gyro noise before integration */
 #define ERR_STREAK_RECOVER   20U
 #define MAG_PERIOD_N         40U /* read IST8310 at 50 Hz */
@@ -37,6 +51,16 @@
 #define MAG_FUSION_ENABLE   0U  /* 6D mode; retain calibrated/aligned magnetometer telemetry only */
 #define MAG_TIMEOUT_N        30U
 #define MAG_UT_PER_LSB       0.3f
+
+/* Startup calibration is performed on equal-duration block means.  Sorting
+ * and trimming the outer blocks rejects knocks and short motion bursts while
+ * retaining the configured multi-second calibration duration. */
+#define CAL_BLOCK_SAMPLES     APP_CAL_BLOCK_SAMPLES
+#define CAL_BLOCK_MAX         APP_CAL_BLOCK_MAX
+#define CAL_TRIM_PERCENT      APP_CAL_TRIM_PERCENT
+
+static float cal_gyr_blocks[3][CAL_BLOCK_MAX];
+static float cal_acc_blocks[3][CAL_BLOCK_MAX];
 /* Separate raw capture ABI; leaves existing attitude telemetry unchanged. */
 volatile struct {
   uint32_t magic, seq, millis, sample_n, fusion_enabled;
@@ -64,6 +88,10 @@ volatile struct {
 
 volatile vqf_live_t vqf_live;
 volatile vqf_tune_live_t vqf_tune_live;
+volatile yaw_kf_sync_live_t yaw_kf_sync_live = {
+  YAW_KF_SYNC_MAGIC, 0U, 0U, 0.0f, 0.0f, 0.0f, 0.0f, 0U, 0U,
+  APP_GYR_TEMP_REF_C, 0.0f, 0.0f
+};
 /* Separate ABI: preserves all existing tune/VOFA layouts. */
 volatile struct {
   uint32_t magic, seq;
@@ -72,7 +100,7 @@ volatile struct {
                        * corrRateDegS, disagreementDeg, biasSigmaDegS */
 } vqf_nine_live = {0x39565146U, 0U, {0}, {0}};
 
-#define VOFA_N_CH   16U
+#define VOFA_N_CH   18U
 #define VOFA_BYTES  ((VOFA_N_CH * 4U) + 4U)
 
 static uint8_t vofa_dma[2][VOFA_BYTES];
@@ -86,84 +114,436 @@ static float wrap_deg(float angle)
   return angle;
 }
 
+static float temp_lpf_c;
+static float temp_lpf_alpha;
+static uint8_t temp_lpf_init;
+static uint8_t temp_lpf_alpha_init;
+
+/* LSM6DSV temperature is specified as 25 degC + raw/256.  The raw value is
+ * kept in imu_temp_live; a slow LPF is used only for the optional gyro
+ * temperature compensation so temperature ADC noise is not turned into gyro
+ * noise. */
+static float update_temperature(int16_t raw_temp)
+{
+  const float raw_c = APP_GYR_TEMP_REF_C + ((float)raw_temp / 256.0f);
+
+  if(!temp_lpf_alpha_init)
+  {
+    if(APP_GYR_TEMP_LPF_HZ > 0.0f)
+      temp_lpf_alpha = 1.0f - expf(-6.28318530718f *
+                                    APP_GYR_TEMP_LPF_HZ / FUSION_HZ);
+    else
+      temp_lpf_alpha = 1.0f;
+    if(temp_lpf_alpha < 0.0f) temp_lpf_alpha = 0.0f;
+    if(temp_lpf_alpha > 1.0f) temp_lpf_alpha = 1.0f;
+    temp_lpf_alpha_init = 1U;
+  }
+
+  if(!temp_lpf_init)
+  {
+    temp_lpf_c = raw_c;
+    temp_lpf_init = 1U;
+  }
+  else
+  {
+    temp_lpf_c += temp_lpf_alpha * (raw_c - temp_lpf_c);
+  }
+
+  imu_temp_live.seq++;
+  __DMB();
+  imu_temp_live.raw_temp = raw_temp;
+  imu_temp_live.temperature_c = raw_c;
+  imu_temp_live.millis = millis();
+  __DMB();
+  imu_temp_live.seq++;
+  return temp_lpf_c;
+}
+
+static float gyro_dps_from_raw(unsigned axis, int16_t raw, float temp_c)
+{
+  float dps = (float)raw * GYR_DPS_PER_LSB;
+
+#if APP_GYR_TEMP_COMP_ENABLE
+  float coeff = 0.0f;
+  if(axis == 0U) coeff = APP_GYR_TEMP_COEFF_X_DPS_PER_C;
+  else if(axis == 1U) coeff = APP_GYR_TEMP_COEFF_Y_DPS_PER_C;
+  else if(axis == 2U) coeff = APP_GYR_TEMP_COEFF_Z_DPS_PER_C;
+  dps -= coeff * (temp_c - APP_GYR_TEMP_REF_C);
+#else
+  (void)axis;
+  (void)temp_c;
+#endif
+  return dps;
+}
+
+static void sort_float(float *values, uint32_t n)
+{
+  uint32_t i;
+
+  for(i = 1U; i < n; ++i)
+  {
+    const float value = values[i];
+    uint32_t j = i;
+    while((j > 0U) && (values[j - 1U] > value))
+    {
+      values[j] = values[j - 1U];
+      --j;
+    }
+    values[j] = value;
+  }
+}
+
+static float trimmed_mean(float *values, uint32_t n)
+{
+  uint32_t trim;
+  uint32_t first;
+  uint32_t last;
+  uint32_t i;
+  float sum = 0.0f;
+
+  if(n == 0U) return 0.0f;
+  sort_float(values, n);
+  trim = (n * CAL_TRIM_PERCENT) / 100U;
+  if((trim * 2U) >= n) trim = 0U;
+  first = trim;
+  last = n - trim;
+  for(i = first; i < last; ++i) sum += values[i];
+  return sum / (float)(last - first);
+}
+
 static void vofa_send_justfloat(float late)
 {
   static const uint8_t tail[4] = {0x00U, 0x00U, 0x80U, 0x7FU};
   static uint8_t filter_init;
+#if APP_VOFA_REST_HOLD_ENABLE
+  static uint8_t rest_hold;
+  static float rest_yaw;
+  static float rest_pitch;
+  static float rest_roll;
+#endif
   static float yaw_kf;
   static float yaw_kf_var;
-  const float dt = ((float)OUTPUT_DIV / FUSION_HZ);
+  static float rate_norm_lpf;
+  static float innovation_var;
+  static float yaw_kf_r_scale = 1.0f;
+  static float motion_on_time;
+  static float motion_off_time;
+  static uint32_t yaw_sync_div;
+  static uint32_t kf_last_cy;
+  static uint8_t kf_clock_init;
+  static uint8_t rate_lpf_init;
+  static uint8_t motion_active;
+  const float nominal_dt = ((float)OUTPUT_DIV / FUSION_HZ);
+  float dt = nominal_dt;
   float ch[VOFA_N_CH];
+  float output_yaw;
+  float output_pitch;
+  float output_roll;
   uint8_t *pkt = vofa_dma[vofa_sel];
 
+    /* Use the real output interval when it is sane. This prevents a delayed
+     * UART/I2C iteration from making the output filter use an incorrect gyro
+     * integration interval. */
+    {
+      uint32_t now_cy = dwt_cycles();
+      if((kf_clock_init != 0U) && (system_core_clock != 0U))
+      {
+        float measured_dt = (float)(now_cy - kf_last_cy) /
+                            (float)system_core_clock;
+        if((measured_dt >= 0.00025f) && (measured_dt <= 0.005f))
+          dt = measured_dt;
+      }
+      kf_last_cy = now_cy;
+      kf_clock_init = 1U;
+    }
+
   /* Output-only adaptive 1D angle Kalman filter. VQF continues to calculate
-   * its normal yaw; this filter only affects the VOFA/DAP output pose ABI.
-   * At rest, use a small Q / larger R to suppress jitter. During motion,
-   * increase Q and trust the fresh VQF measurement so the output responds
-   * without a noticeable lag. */
+    * its normal yaw; this filter only affects the VOFA/DAP output pose ABI.
+    * The rate hysteresis, innovation gate and adaptive R below prevent a
+    * single noisy sample or a threshold crossing from moving the output. */
   {
-    float yaw_rate = vqf_live.gz - vqf_live.bias_z;
+    /* Use the temperature-compensated, low-pass filtered gyro residual for
+     * the output-only yaw KF. VQF itself continues to run independently. */
+    float yaw_rate = vqf_live.corrected_z;
     float gx = vqf_live.gx - vqf_live.bias_x;
     float gy = vqf_live.gy - vqf_live.bias_y;
     float gz = yaw_rate;
     float rate_norm = sqrtf(gx * gx + gy * gy + gz * gz);
+    float rate_alpha;
     float motion_den = APP_VOFA_YAW_KF_MOTION_FULL_DPS -
                        APP_VOFA_YAW_KF_MOTION_START_DPS;
-    float motion = (rate_norm - APP_VOFA_YAW_KF_MOTION_START_DPS) / motion_den;
+    float motion;
     float yaw_q;
+    float yaw_r_base;
     float yaw_r;
+    float acc_norm;
+    float acc_disturbance;
+    float p_pred;
+    float yaw_pred;
+    float innovation;
+    float p_floor = 1.0e-9f;
 
+    /* A bad sample must not poison the state or covariance. */
+    if(!(rate_norm >= 0.0f)) rate_norm = 0.0f;
+
+    /* Filter the rate used for motion classification. The gyro itself is
+     * still used for prediction once motion has been confirmed. */
+    if(APP_VOFA_YAW_KF_RATE_LPF_HZ > 0.0f)
+      rate_alpha = 1.0f - expf(-6.28318530718f *
+                               APP_VOFA_YAW_KF_RATE_LPF_HZ * dt);
+    else
+      rate_alpha = 1.0f;
+    if(rate_alpha < 0.0f) rate_alpha = 0.0f;
+    if(rate_alpha > 1.0f) rate_alpha = 1.0f;
+    if(!rate_lpf_init)
+    {
+      rate_norm_lpf = rate_norm;
+      rate_lpf_init = 1U;
+    }
+    else
+    {
+      rate_norm_lpf += rate_alpha * (rate_norm - rate_norm_lpf);
+    }
+
+    /* Motion hysteresis and time confirmation keep Q/R and prediction mode
+     * from chattering around the original 0.5 dps threshold. */
+    {
+      const float confirm_s = (float)APP_VOFA_YAW_KF_MOTION_CONFIRM_MS * 0.001f;
+      if(!motion_active)
+      {
+        motion_off_time = 0.0f;
+        if(rate_norm_lpf >= APP_VOFA_YAW_KF_MOTION_START_DPS)
+        {
+          motion_on_time += dt;
+          if(motion_on_time >= confirm_s)
+          {
+            motion_active = 1U;
+            motion_on_time = 0.0f;
+          }
+        }
+        else
+        {
+          motion_on_time = 0.0f;
+        }
+      }
+      else
+      {
+        motion_on_time = 0.0f;
+        if(rate_norm_lpf <= APP_VOFA_YAW_KF_MOTION_STOP_DPS)
+        {
+          motion_off_time += dt;
+          if(motion_off_time >= confirm_s)
+          {
+            motion_active = 0U;
+            motion_off_time = 0.0f;
+          }
+        }
+        else
+        {
+          motion_off_time = 0.0f;
+        }
+      }
+    }
+
+    if(motion_den <= 0.0f)
+      motion = motion_active ? 1.0f : 0.0f;
+    else
+      motion = (rate_norm_lpf - APP_VOFA_YAW_KF_MOTION_START_DPS) / motion_den;
     if(motion < 0.0f) motion = 0.0f;
     if(motion > 1.0f) motion = 1.0f;
     /* Smooth the transition so Q/R do not jump at the threshold. */
     motion = motion * motion * (3.0f - 2.0f * motion);
-    if(vqf_live.rest_detected != 0U && rate_norm < APP_VOFA_YAW_KF_MOTION_START_DPS)
+    if(vqf_live.rest_detected != 0U && !motion_active)
       motion = 0.0f;
 
     yaw_q = APP_VOFA_YAW_KF_Q_REST_DEG2_PER_S +
             (APP_VOFA_YAW_KF_Q_MOVE_DEG2_PER_S -
              APP_VOFA_YAW_KF_Q_REST_DEG2_PER_S) * motion;
-    yaw_r = APP_VOFA_YAW_KF_R_REST_DEG2 +
-            (APP_VOFA_YAW_KF_R_MOVE_DEG2 -
-             APP_VOFA_YAW_KF_R_REST_DEG2) * motion;
+    yaw_r_base = APP_VOFA_YAW_KF_R_REST_DEG2 +
+                 (APP_VOFA_YAW_KF_R_MOVE_DEG2 -
+                  APP_VOFA_YAW_KF_R_REST_DEG2) * motion;
+
+    /* Increase measurement uncertainty when the acceleration magnitude is
+     * inconsistent with 1 g. This keeps dynamic acceleration from being
+     * mistaken for a reliable VQF yaw correction. */
+    acc_norm = sqrtf(vqf_live.ax * vqf_live.ax +
+                     vqf_live.ay * vqf_live.ay +
+                     vqf_live.az * vqf_live.az);
+    acc_disturbance = 0.0f;
+    if(APP_VOFA_YAW_KF_ACC_NORM_TOL_G > 0.0f)
+    {
+      acc_disturbance = (fabsf(acc_norm - 1.0f) -
+                         APP_VOFA_YAW_KF_ACC_NORM_TOL_G) /
+                        APP_VOFA_YAW_KF_ACC_NORM_TOL_G;
+      if(acc_disturbance < 0.0f) acc_disturbance = 0.0f;
+      if(acc_disturbance > 1.0f) acc_disturbance = 1.0f;
+    }
+    if(APP_VOFA_YAW_KF_R_ACCEL_DEG2 > yaw_r_base)
+      yaw_r_base += (APP_VOFA_YAW_KF_R_ACCEL_DEG2 - yaw_r_base) *
+                    acc_disturbance;
+    if(yaw_r_base < p_floor) yaw_r_base = p_floor;
+    if(yaw_q < 0.0f) yaw_q = 0.0f;
 
     if(!filter_init)
     {
       yaw_kf = vqf_live.yaw;
-      yaw_kf_var = yaw_r;
+      yaw_kf_var = yaw_r_base;
+      innovation_var = yaw_kf_var + yaw_r_base;
+      yaw_kf_r_scale = 1.0f;
       filter_init = 1U;
+    }
+#if APP_VOFA_REST_HOLD_ENABLE
+    /* Lock the complete attitude output after VQF confirms a rest state.
+     * VQF and its telemetry continue running underneath this output hold. */
+    if(vqf_live.rest_detected != 0U)
+    {
+      if(!rest_hold)
+      {
+        rest_yaw = yaw_kf;
+        rest_pitch = vqf_live.pitch;
+        rest_roll = vqf_live.roll;
+        rest_hold = 1U;
+      }
     }
     else
     {
+      rest_hold = 0U;
+    }
+#endif
+#if APP_VOFA_REST_HOLD_ENABLE
+    if(!rest_hold)
+#endif
+    {
       /* Do not integrate residual gyro noise while stationary. At rest the
        * state is held and only slowly corrected by the yaw measurement. Once
-       * the measured angular rate crosses the motion threshold, use gyro
-       * propagation for prompt response. */
-      float yaw_pred = yaw_kf;
-      if(rate_norm >= APP_VOFA_YAW_KF_MOTION_START_DPS)
+       * confirmed motion is detected, use gyro propagation for prompt
+       * response. */
+      yaw_pred = yaw_kf;
+      if(motion_active)
         yaw_pred = wrap_deg(yaw_kf + yaw_rate * dt);
-      float p_pred = yaw_kf_var + yaw_q * dt;
-      float innovation = wrap_deg(vqf_live.yaw - yaw_pred);
-      float k = p_pred / (p_pred + yaw_r);
-      yaw_kf = wrap_deg(yaw_pred + k * innovation);
-      yaw_kf_var = (1.0f - k) * p_pred;
+      p_pred = yaw_kf_var + yaw_q * dt;
+      if(!(p_pred >= p_floor)) p_pred = p_floor;
+      innovation = wrap_deg(vqf_live.yaw - yaw_pred);
+
+      /* Adapt R only during confirmed rest. It is increased when the
+       * innovation variance is persistently larger than expected and then
+       * slowly returns to the configured baseline. */
+      {
+        float r_alpha = 1.0f;
+        float target_scale = 1.0f;
+        float estimated_r;
+        if(APP_VOFA_YAW_KF_R_ADAPT_TAU_S > 0.0f)
+        {
+          r_alpha = 1.0f - expf(-dt / APP_VOFA_YAW_KF_R_ADAPT_TAU_S);
+          if(r_alpha < 0.0f) r_alpha = 0.0f;
+          if(r_alpha > 1.0f) r_alpha = 1.0f;
+        }
+        if((!motion_active) && (vqf_live.rest_detected != 0U))
+        {
+          innovation_var += r_alpha * (innovation * innovation - innovation_var);
+          estimated_r = innovation_var - p_pred;
+          if(estimated_r > yaw_r_base)
+            target_scale = estimated_r / yaw_r_base;
+        }
+        else
+        {
+          innovation_var += r_alpha *
+                            ((p_pred + yaw_r_base) - innovation_var);
+        }
+        if(target_scale < 1.0f) target_scale = 1.0f;
+        if(target_scale > APP_VOFA_YAW_KF_R_ADAPT_MAX_SCALE)
+          target_scale = APP_VOFA_YAW_KF_R_ADAPT_MAX_SCALE;
+        yaw_kf_r_scale += r_alpha * (target_scale - yaw_kf_r_scale);
+        if(yaw_kf_r_scale < 1.0f) yaw_kf_r_scale = 1.0f;
+        if(yaw_kf_r_scale > APP_VOFA_YAW_KF_R_ADAPT_MAX_SCALE)
+          yaw_kf_r_scale = APP_VOFA_YAW_KF_R_ADAPT_MAX_SCALE;
+      }
+
+      yaw_r = yaw_r_base * yaw_kf_r_scale;
+
+      /* Soft innovation gate: inflate R rather than dropping the sample,
+       * so the filter can recover from a real turn without a hard step. */
+      {
+        float innovation_gate = APP_VOFA_YAW_KF_INNOVATION_GATE_SIGMA *
+                                 sqrtf(p_pred + yaw_r);
+        float motion_allowance = 2.0f * rate_norm_lpf * dt +
+                                 APP_VOFA_YAW_KF_INNOVATION_GATE_MIN_DEG;
+        float gate_factor;
+        float max_gate_factor = sqrtf(APP_VOFA_YAW_KF_R_ADAPT_MAX_SCALE);
+        if(innovation_gate < APP_VOFA_YAW_KF_INNOVATION_GATE_MIN_DEG)
+          innovation_gate = APP_VOFA_YAW_KF_INNOVATION_GATE_MIN_DEG;
+        if(motion_active && innovation_gate < motion_allowance)
+          innovation_gate = motion_allowance;
+        if(fabsf(innovation) > innovation_gate)
+        {
+          gate_factor = fabsf(innovation) / innovation_gate;
+          if(gate_factor > max_gate_factor) gate_factor = max_gate_factor;
+          yaw_r *= gate_factor * gate_factor;
+        }
+      }
+
+      {
+        float k = p_pred / (p_pred + yaw_r);
+        if(k < 0.0f) k = 0.0f;
+        if(k > 1.0f) k = 1.0f;
+        yaw_kf = wrap_deg(yaw_pred + k * innovation);
+        yaw_kf_var = (1.0f - k) * p_pred;
+        if(yaw_kf_var < p_floor) yaw_kf_var = p_floor;
+      }
     }
+  }
+
+#if APP_VOFA_REST_HOLD_ENABLE
+  if(rest_hold)
+  {
+    output_yaw = rest_yaw;
+    output_pitch = rest_pitch;
+    output_roll = rest_roll;
+  }
+  else
+#endif
+  {
+    output_yaw = yaw_kf;
+    output_pitch = vqf_live.pitch;
+    output_roll = vqf_live.roll;
   }
 
   vofa_pose_live.seq++;
   __DMB();
-  vofa_pose_live.yaw = yaw_kf;
-  vofa_pose_live.pitch = vqf_live.pitch;
-  vofa_pose_live.roll = vqf_live.roll;
+  vofa_pose_live.yaw = output_yaw;
+  vofa_pose_live.pitch = output_pitch;
+  vofa_pose_live.roll = output_roll;
   vofa_pose_live.temperature_c = imu_temp_live.temperature_c;
   vofa_pose_live.millis = millis();
   __DMB();
   vofa_pose_live.seq++;
 
-  /* VOFA channels 0..3: yaw(KF), pitch(raw VQF), roll(raw VQF), temperature(raw). */
-  ch[0]  = yaw_kf;
-  ch[1]  = vqf_live.pitch;
-  ch[2]  = vqf_live.roll;
+  /* Keep a compact, sequence-locked copy for high-rate DAPLink capture. */
+  yaw_sync_div++;
+  if(yaw_sync_div >= YAW_KF_SYNC_DIV)
+  {
+    yaw_sync_div = 0U;
+    yaw_kf_sync_live.seq++;
+    __DMB();
+    yaw_kf_sync_live.millis = vofa_pose_live.millis;
+    yaw_kf_sync_live.vqf_yaw = vqf_live.yaw;
+    yaw_kf_sync_live.kf_yaw = output_yaw;
+    yaw_kf_sync_live.gz = vqf_live.gz;
+    yaw_kf_sync_live.bias_z = vqf_live.bias_z;
+    yaw_kf_sync_live.rest_detected = vqf_live.rest_detected;
+    yaw_kf_sync_live.mag_updates = vqf_live.mag_updates;
+    yaw_kf_sync_live.temperature_c = vqf_live.temperature_c;
+    yaw_kf_sync_live.gyr_lpf_z = vqf_live.gyr_lpf_z;
+    yaw_kf_sync_live.corrected_z = vqf_live.corrected_z;
+    __DMB();
+    yaw_kf_sync_live.seq++;
+  }
+
+  /* VOFA channels 0..3: yaw(KF), pitch(raw VQF), roll(raw VQF), temperature.
+   * Channels 16/17 append the filtered and bias-corrected Z gyro in dps. */
+  ch[0]  = output_yaw;
+  ch[1]  = output_pitch;
+  ch[2]  = output_roll;
   ch[3]  = imu_temp_live.temperature_c;
   ch[4]  = vqf_live.qw;
   ch[5]  = vqf_live.qx;
@@ -177,6 +557,8 @@ static void vofa_send_justfloat(float late)
   ch[13] = vqf_live.az;
   ch[14] = (float)vqf_live.vqf_us;
   ch[15] = late;
+  ch[16] = vqf_live.gyr_lpf_z;
+  ch[17] = vqf_live.corrected_z;
   memcpy(pkt, ch, VOFA_N_CH * 4U);
   memcpy(pkt + (VOFA_N_CH * 4U), tail, 4U);
   if(uart_dma_send(pkt, (uint16_t)VOFA_BYTES) == 0)
@@ -212,6 +594,9 @@ static void live_init(void)
   vqf_live.mag_addr = 0U;
   vqf_live.mag_updates = 0U;
   vqf_live.mag_ready = 0U;
+  vqf_live.temperature_c = APP_GYR_TEMP_REF_C;
+  vqf_live.gyr_lpf_z = 0.0f;
+  vqf_live.corrected_z = 0.0f;
 
   memset((void *)&vqf_tune_live, 0, sizeof(vqf_tune_live));
   vqf_tune_live.magic = VQF_TUNE_MAGIC;
@@ -263,6 +648,7 @@ int main(void)
   uint32_t t0;
   uint32_t vqf_us;
   uint32_t i;
+  float temp_c;
 #if APP_SFLP_BIAS_ENABLE
   float sflp_bias_dps[3] = {0.0f, 0.0f, 0.0f};
   uint8_t sflp_bias_ok = 0U;
@@ -303,17 +689,33 @@ int main(void)
 
   vqf_init(1.0f / FUSION_HZ, 1.0f / FUSION_HZ);
   {
-    float gyr_sum[3] = {0.0f, 0.0f, 0.0f};
-    float acc_sum[3] = {0.0f, 0.0f, 0.0f};
+    float block_gyr_sum[3] = {0.0f, 0.0f, 0.0f};
+    float block_acc_sum[3] = {0.0f, 0.0f, 0.0f};
     float gyr_bias[3];
     float acc_avg[3];
-    uint32_t drop_n = (uint32_t)FUSION_HZ / 5U;
-    uint32_t cal_n = (uint32_t)FUSION_HZ * CAL_REST_SECONDS;
+    uint32_t block_samples = 0U;
+    uint32_t block_count = 0U;
+    /* Discard samples for the configured settling time.  This used to be
+     * hard-coded to FUSION_HZ/5 (200 ms), so APP_CAL_DROP_MS had no effect. */
+    uint32_t drop_n = ((FUSION_RATE_HZ * (uint32_t)CAL_DROP_MS) + 999U) /
+                      1000U;
+    uint32_t cal_n = (uint32_t)((float)FUSION_RATE_HZ * CAL_REST_SECONDS + 0.5f);
+    uint32_t target_blocks;
+    uint32_t target_samples;
     uint32_t tries;
     uint32_t got = 0U;
-    uint32_t rest_n = 0U;
     float acc_n3;
     float gyr_n;
+    float temp_c;
+
+    if(CAL_BLOCK_SAMPLES == 0U || CAL_BLOCK_MAX == 0U)
+    {
+      fail_loop(-21);
+    }
+    target_blocks = (cal_n + CAL_BLOCK_SAMPLES - 1U) / CAL_BLOCK_SAMPLES;
+    if(target_blocks == 0U) target_blocks = 1U;
+    if(target_blocks > CAL_BLOCK_MAX) target_blocks = CAL_BLOCK_MAX;
+    target_samples = target_blocks * CAL_BLOCK_SAMPLES;
 
     tries = 0U;
     while((got < drop_n) && (tries < (drop_n * 4U)))
@@ -328,11 +730,12 @@ int main(void)
         continue;
       }
       got++;
+      (void)update_temperature(raw.temp_raw);
     }
 
     tries = 0U;
-    got = 0U;
-    while((rest_n < cal_n) && (tries < (cal_n * 4U)))
+    while((block_count < target_blocks) &&
+          (tries < (target_samples * 4U)))
     {
       tries++;
       if(lsm6dsv_wait_sample(2000U) != 0)
@@ -343,10 +746,10 @@ int main(void)
       {
         continue;
       }
-      got++;
+      temp_c = update_temperature(raw.temp_raw);
       for(i = 0; i < 3U; i++)
       {
-        gyr[i] = (float)raw.gyr[i] * GYR_DPS_PER_LSB * DEG2RAD;
+        gyr[i] = gyro_dps_from_raw(i, raw.gyr[i], temp_c) * DEG2RAD;
         acc[i] = acc_calibrate_g(i, (float)raw.acc[i] * ACC_G_PER_LSB) * G_TO_MS2;
       }
       gyr_n = sqrtf(gyr[0] * gyr[0] + gyr[1] * gyr[1] + gyr[2] * gyr[2]);
@@ -356,21 +759,40 @@ int main(void)
       {
         continue;
       }
-      gyr_sum[0] += gyr[0];
-      gyr_sum[1] += gyr[1];
-      gyr_sum[2] += gyr[2];
-      acc_sum[0] += acc[0];
-      acc_sum[1] += acc[1];
-      acc_sum[2] += acc[2];
-      rest_n++;
+      for(i = 0U; i < 3U; ++i)
+      {
+        block_gyr_sum[i] += gyr[i];
+        block_acc_sum[i] += acc[i];
+      }
+      block_samples++;
+      if(block_samples >= CAL_BLOCK_SAMPLES)
+      {
+        for(i = 0U; i < 3U; ++i)
+        {
+          cal_gyr_blocks[i][block_count] =
+              block_gyr_sum[i] / (float)CAL_BLOCK_SAMPLES;
+          cal_acc_blocks[i][block_count] =
+              block_acc_sum[i] / (float)CAL_BLOCK_SAMPLES;
+          block_gyr_sum[i] = 0.0f;
+          block_acc_sum[i] = 0.0f;
+        }
+        block_samples = 0U;
+        block_count++;
+      }
     }
-    if(rest_n < (cal_n / 4U))
+    if(block_count < target_blocks)
     {
       fail_loop(-20);
     }
-    gyr_bias[0] = gyr_sum[0] / (float)rest_n;
-    gyr_bias[1] = gyr_sum[1] / (float)rest_n;
-    gyr_bias[2] = gyr_sum[2] / (float)rest_n;
+    /* Trim 10% of the block means at both ends for each axis.  This is more
+     * robust than trimming individual samples: one knock cannot dominate a
+     * 32-sample block, while a short motion interval is discarded entirely
+     * when it lands in the tails. */
+    for(i = 0U; i < 3U; ++i)
+    {
+      gyr_bias[i] = trimmed_mean(cal_gyr_blocks[i], block_count);
+      acc_avg[i] = trimmed_mean(cal_acc_blocks[i], block_count);
+    }
 #if APP_SFLP_BIAS_ENABLE
     if((sflp_bias_ok != 0U) &&
        (fabsf(sflp_bias_dps[0]) <= APP_SFLP_BIAS_MAX_DPS) &&
@@ -382,9 +804,6 @@ int main(void)
       gyr_bias[2] = sflp_bias_dps[2] * DEG2RAD;
     }
 #endif
-    acc_avg[0] = acc_sum[0] / (float)rest_n;
-    acc_avg[1] = acc_sum[1] / (float)rest_n;
-    acc_avg[2] = acc_sum[2] / (float)rest_n;
     vqf_prime_rest(acc_avg, gyr_bias);
   }
   vqf_live.seq = 2;
@@ -413,14 +832,10 @@ int main(void)
       goto recover_or_continue;
     }
 
-    /* Temperature is part of the same 14-byte SPI burst as gyro/accel. */
-    imu_temp_live.seq++;
-    __DMB();
-    imu_temp_live.raw_temp = raw.temp_raw;
-    imu_temp_live.temperature_c = 25.0f + ((float)raw.temp_raw / 256.0f);
-    imu_temp_live.millis = millis();
-    __DMB();
-    imu_temp_live.seq++;
+    /* Temperature is part of the same 14-byte SPI burst as gyro/accel.
+     * temp_c is the filtered value used by the optional gyro compensation;
+     * imu_temp_live.temperature_c remains the raw converted telemetry value. */
+    temp_c = update_temperature(raw.temp_raw);
 
     now_cy = dwt_cycles();
     dt_cy = now_cy - last_sample_cy;
@@ -435,7 +850,7 @@ int main(void)
 
     for(i = 0; i < 3U; i++)
     {
-      gyr[i] = (float)raw.gyr[i] * GYR_DPS_PER_LSB * DEG2RAD;
+      gyr[i] = gyro_dps_from_raw(i, raw.gyr[i], temp_c) * DEG2RAD;
       acc[i] = acc_calibrate_g(i, (float)raw.acc[i] * ACC_G_PER_LSB) * G_TO_MS2;
     }
 
@@ -552,6 +967,12 @@ int main(void)
         vqf_live.bias_y = live_bias[1] / DEG2RAD;
         vqf_live.bias_z = live_bias[2] / DEG2RAD;
       }
+      /* gyr_lpf_z is the (temperature-compensated) signal actually supplied
+       * to VQF. corrected_z is its residual after VQF's current bias estimate;
+       * both fields are exposed in dps for direct drift diagnosis. */
+      vqf_live.temperature_c = imu_temp_live.temperature_c;
+      vqf_live.gyr_lpf_z = gyr_lpf[2] / DEG2RAD;
+      vqf_live.corrected_z = vqf_live.gyr_lpf_z - vqf_live.bias_z;
       vqf_live.rest_time = vqf_get_rest_time();
       vqf_live.tau_acc = vqf_get_tau_acc();
       vqf_live.rest_detected = (uint32_t)vqf_get_rest_detected();
@@ -604,6 +1025,9 @@ int main(void)
         vqf_tune_live.bias_z = vqf_live.bias_z;
         vqf_tune_live.rest_time = vqf_live.rest_time;
         vqf_tune_live.tau_acc = vqf_live.tau_acc;
+        vqf_tune_live.temperature_c = vqf_live.temperature_c;
+        vqf_tune_live.gyr_lpf_z = vqf_live.gyr_lpf_z;
+        vqf_tune_live.corrected_z = vqf_live.corrected_z;
         vqf_tune_live.mx = vqf_live.mx;
         vqf_tune_live.my = vqf_live.my;
         vqf_tune_live.mz = vqf_live.mz;

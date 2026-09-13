@@ -185,7 +185,7 @@ def enable_sflp(spi: DapSpi) -> None:
     spi.write_reg(REG_IF_CFG, 0x01)  # disable I2C
     spi.write_reg(REG_CTRL3, 0x44)  # BDU + IF_INC
     spi.write_reg(REG_CTRL8, 0x00)  # +/-2 g
-    spi.write_reg(REG_CTRL6, 0x04)  # +/-2000 dps
+    spi.write_reg(REG_CTRL6, 0x03)  # +/-1000 dps
 
     # FIFO bypass then stream, only SFLP game rotation
     spi.write_reg(REG_FIFO_CTRL4, 0x00)
