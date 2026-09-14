@@ -37,6 +37,7 @@ uint8_t lsm_int1_read(void);
 uint8_t lsm_int2_read(void);
 int uart_dma_busy(void);
 int uart_dma_send(const uint8_t *data, uint16_t len);
+int uart_read_byte(uint8_t *ch);
 
 #ifdef __cplusplus
 }

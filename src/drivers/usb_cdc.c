@@ -2,6 +2,7 @@
 #include "at32f423_conf.h"
 #include "at32f423_crm.h"
 #include "at32f423_misc.h"
+#include "at32f423_acc.h"
 #include <string.h>
 
 #define USBX OTG1_GLOBAL
@@ -16,6 +17,23 @@
 #define USB_CDC_RING_SIZE 1024U
 /* USB device mode: PA12 = D+, PA11 = D-. */
 #define USB_DP_GPIO_TEST 0U
+
+/* AT32F423 OTGFS1 alternate-function mapping: PA12 = D+, PA11 = D-. */
+static void usb_gpio_init(void)
+{
+  gpio_init_type gpio_init_struct;
+
+  crm_periph_clock_enable(CRM_GPIOA_PERIPH_CLOCK, TRUE);
+  gpio_default_para_init(&gpio_init_struct);
+  gpio_init_struct.gpio_drive_strength = GPIO_DRIVE_STRENGTH_STRONGER;
+  gpio_init_struct.gpio_out_type = GPIO_OUTPUT_PUSH_PULL;
+  gpio_init_struct.gpio_mode = GPIO_MODE_MUX;
+  gpio_init_struct.gpio_pull = GPIO_PULL_NONE;
+  gpio_init_struct.gpio_pins = GPIO_PINS_11 | GPIO_PINS_12;
+  gpio_init(GPIOA, &gpio_init_struct);
+  gpio_pin_mux_config(GPIOA, GPIO_PINS_SOURCE11, GPIO_MUX_10);
+  gpio_pin_mux_config(GPIOA, GPIO_PINS_SOURCE12, GPIO_MUX_10);
+}
 
 #if USB_DP_GPIO_TEST
 static void usb_dp_gpio_test(void)
@@ -39,6 +57,9 @@ static void usb_dp_gpio_test(void)
 
 typedef struct { uint8_t bmRequestType,bRequest; uint16_t wValue,wIndex,wLength; } setup_t;
 static volatile uint8_t configured, in_busy;
+#define USB_CDC_RX_RING_SIZE 256U
+static uint8_t rx_ring[USB_CDC_RX_RING_SIZE];
+static volatile uint16_t rx_ring_r, rx_ring_w;
 static uint8_t ring[USB_CDC_RING_SIZE];
 static volatile uint16_t ring_r, ring_w;
 static setup_t setup;
@@ -155,6 +176,7 @@ static void usb_reset(void) {
   configured=0;
   in_busy=0;
   ring_r=ring_w=0;
+  rx_ring_r=rx_ring_w=0;
   pending_address=0;
   ep0_out_len=0;
   ep0_total=0;
@@ -196,25 +218,39 @@ static void handle_setup(void) {
   if(setup.bRequest==0x20 && setup.bmRequestType==0x21) { ep0_out_len=7;ep0_prime_out(7);return; }
   if(setup.bRequest==0x21 && setup.bmRequestType==0xA1) { ep0_in_start(line_coding,7);return; }
   if(setup.bRequest==0x22 && setup.bmRequestType==0x21) { ep0_status_in();return; }
-  if((setup.bRequest==10 || setup.bRequest==11) && (setup.bmRequestType&0x60)==0) { ep0_buf[0]=0;ep0_in_start(ep0_buf,1);return; }
+  /* Standard interface requests. SET_INTERFACE is host-to-device and must
+   * return a zero-length status packet. Answering it with one byte of IN
+   * data makes some Windows CDC enumerators abort configuration. */
+  if(setup.bRequest==11 && setup.bmRequestType==0x01) { ep0_status_in();return; }
+  if(setup.bRequest==10 && setup.bmRequestType==0x81) { ep0_buf[0]=0;ep0_in_start(ep0_buf,1);return; }
   ep0_stall();
 }
 static void rx_fifo(void) {
   uint32_t s=USBX->grxstsp; uint8_t ep=(uint8_t)(s&15U); uint16_t n=(uint16_t)((s>>4)&0x7FFU); uint8_t st=(uint8_t)((s>>17)&15U);
   if(st==USB_SETUP_STS_DATA) { uint8_t b[8]; usb_read_packet(USBX,b,0,8); setup.bmRequestType=b[0];setup.bRequest=b[1];setup.wValue=(uint16_t)b[2]|((uint16_t)b[3]<<8);setup.wIndex=(uint16_t)b[4]|((uint16_t)b[5]<<8);setup.wLength=(uint16_t)b[6]|((uint16_t)b[7]<<8); handle_setup(); }
-  else if(st==USB_OUT_STS_DATA) { if(ep==0 && n) { if(n>64)n=64; usb_read_packet(USBX,ep0_buf,0,n); if(ep0_out_len==7){memcpy(line_coding,ep0_buf,7);ep0_out_len=0;ep0_status_in();} } else if(ep==2) { uint8_t dump[64]; if(n>64)n=64; if(n) usb_read_packet(USBX,dump,2,n); bulk_out_arm(); } }
+  else if(st==USB_OUT_STS_DATA) { if(ep==0 && n) { if(n>64)n=64; usb_read_packet(USBX,ep0_buf,0,n); if(ep0_out_len==7){memcpy(line_coding,ep0_buf,7);ep0_out_len=0;ep0_status_in();} } else if(ep==2) { uint8_t dump[64]; if(n>64)n=64; if(n) { uint16_t j; usb_read_packet(USBX,dump,2,n); for(j=0;j<n;j++) { uint16_t next=(uint16_t)((rx_ring_w+1U)&(USB_CDC_RX_RING_SIZE-1U)); if(next!=rx_ring_r) { rx_ring[rx_ring_w]=dump[j]; rx_ring_w=next; } } } bulk_out_arm(); } }
 }
 static void start_bulk(void) { uint16_t n,i; if(!configured||in_busy)return; n=ring_used();if(!n)return;if(n>64)n=64;for(i=0;i<n;i++)tx_buf[i]=ring[(ring_r+i)&(USB_CDC_RING_SIZE-1U)]; ring_r=(uint16_t)(ring_r+n); in_busy=1; USB_INEPT(USBX,2)->dieptsiz=0;USB_INEPT(USBX,2)->dieptsiz_bit.xfersize=n;USB_INEPT(USBX,2)->dieptsiz_bit.pktcnt=1;USB_INEPT(USBX,2)->diepctl_bit.cnak=TRUE;USB_INEPT(USBX,2)->diepctl_bit.eptena=TRUE;usb_write_packet(USBX,tx_buf,2,n); }
 void usb_cdc_init(void)
 {
   uint32_t i;
+
+  /* The USB pins must be in OTGFS1 MUX10 before enabling the core. */
+  usb_gpio_init();
+
 #if USB_DP_GPIO_TEST
   usb_dp_gpio_test();
   configured = 0U;
   return;
 #endif
-  /* Select the dedicated accurate 48 MHz HICK clock before enabling OTGFS. */
+  /* Select HICK as the 48 MHz USB source and enable the crystal-less
+   * automatic trim loop recommended by the AT32F423 USB example. */
   crm_usb_clock_source_select(CRM_USB_CLOCK_SOURCE_HICK);
+  crm_periph_clock_enable(CRM_ACC_PERIPH_CLOCK, TRUE);
+  acc_write_c1(7980U);
+  acc_write_c2(8000U);
+  acc_write_c3(8020U);
+  acc_calibration_mode_enable(ACC_CAL_HICKTRIM, TRUE);
   crm_periph_clock_enable(CRM_OTGFS1_PERIPH_CLOCK, TRUE);
   usb_disconnect(USBX);
   usb_global_set_mode(USBX, OTG_DEVICE_MODE);
@@ -235,6 +271,8 @@ void usb_cdc_init(void)
 }
 void usb_cdc_task(void) { start_bulk(); }
 int usb_cdc_configured(void) { return configured!=0; }
+int usb_cdc_available(void) { return (int)((rx_ring_w - rx_ring_r) & (USB_CDC_RX_RING_SIZE - 1U)); }
+int usb_cdc_read_byte(uint8_t *ch) { if(rx_ring_r == rx_ring_w) return 0; if(ch) *ch = rx_ring[rx_ring_r]; rx_ring_r = (uint16_t)((rx_ring_r + 1U) & (USB_CDC_RX_RING_SIZE - 1U)); return 1; }
 int usb_cdc_write(const uint8_t *data,uint16_t len) { uint16_t free=(uint16_t)(USB_CDC_RING_SIZE-1U-ring_used()),i; if(!data||!len||len>free)return -1; for(i=0;i<len;i++)ring[(ring_w+i)&(USB_CDC_RING_SIZE-1U)]=data[i]; __DMB();ring_w=(uint16_t)(ring_w+len);return 0; }
 void usb_cdc_isr(void)
 {

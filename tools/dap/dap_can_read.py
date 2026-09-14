@@ -1,4 +1,4 @@
-﻿"""Read the continuous CAN2 transmitter status over CMSIS-DAP."""
+﻿"""Read continuous CAN2 status and parse Damiao format frames over CMSIS-DAP."""
 from __future__ import annotations
 
 import argparse
@@ -24,6 +24,53 @@ NAMES = [
 ]
 
 
+def uint_to_float(x_int: int, x_min: float, x_max: float, bits: int) -> float:
+    span = x_max - x_min
+    return float(x_int) * span / float((1 << bits) - 1) + x_min
+
+
+def decode_damiao_can_frame(data: bytes) -> str:
+    if len(data) < 8:
+        return f"Raw({data.hex()})"
+    ftype = data[0]
+    if ftype == 0x03:  # Euler
+        pitch_u = data[2] | (data[3] << 8)
+        yaw_u = data[4] | (data[5] << 8)
+        roll_u = data[6] | (data[7] << 8)
+        pitch = uint_to_float(pitch_u, -90.0, 90.0, 16)
+        yaw = uint_to_float(yaw_u, -180.0, 180.0, 16)
+        roll = uint_to_float(roll_u, -180.0, 180.0, 16)
+        return f"Damiao Euler: Pitch={pitch:7.2f}°, Yaw={yaw:7.2f}°, Roll={roll:7.2f}°"
+    elif ftype == 0x02:  # Gyro
+        gx_u = data[2] | (data[3] << 8)
+        gy_u = data[4] | (data[5] << 8)
+        gz_u = data[6] | (data[7] << 8)
+        gx = uint_to_float(gx_u, -34.88, 34.88, 16) * 57.29578
+        gy = uint_to_float(gy_u, -34.88, 34.88, 16) * 57.29578
+        gz = uint_to_float(gz_u, -34.88, 34.88, 16) * 57.29578
+        return f"Damiao Gyro: Gx={gx:7.1f} dps, Gy={gy:7.1f} dps, Gz={gz:7.1f} dps"
+    elif ftype == 0x01:  # Accel
+        temp = data[1]
+        ax_u = data[2] | (data[3] << 8)
+        ay_u = data[4] | (data[5] << 8)
+        az_u = data[6] | (data[7] << 8)
+        ax = uint_to_float(ax_u, -235.2, 235.2, 16) / 9.80665
+        ay = uint_to_float(ay_u, -235.2, 235.2, 16) / 9.80665
+        az = uint_to_float(az_u, -235.2, 235.2, 16) / 9.80665
+        return f"Damiao Accel: Ax={ax:6.2f}g, Ay={ay:6.2f}g, Az={az:6.2f}g, Temp={temp}°C"
+    elif ftype == 0x04:  # Quaternion
+        w = (data[1] << 6) | ((data[2] & 0xFC) >> 2)
+        x = ((data[2] & 0x03) << 12) | (data[3] << 4) | ((data[4] & 0xF0) >> 4)
+        y = ((data[4] & 0x0F) << 10) | (data[5] << 2) | ((data[6] & 0xC0) >> 6)
+        z = ((data[6] & 0x3F) << 8) | data[7]
+        qw = uint_to_float(w, -1.0, 1.0, 14)
+        qx = uint_to_float(x, -1.0, 1.0, 14)
+        qy = uint_to_float(y, -1.0, 1.0, 14)
+        qz = uint_to_float(z, -1.0, 1.0, 14)
+        return f"Damiao Quat: Qw={qw:.4f}, Qx={qx:.4f}, Qy={qy:.4f}, Qz={qz:.4f}"
+    return f"Damiao Type 0x{ftype:02X} Raw: {data.hex()}"
+
+
 def find_live(target: object) -> int:
     blob = bytes(target.read_memory_block8(SRAM, SRAM_SIZE))
     needle = MAGIC.to_bytes(4, "little")
@@ -42,7 +89,7 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--seconds", type=float, default=5.0)
     ap.add_argument("--period", type=float, default=1.0)
-    ap.add_argument("--frequency", type=int, default=2_000_000)
+    ap.add_argument("--frequency", type=int, default=1_000_000)
     args = ap.parse_args()
 
     session = ConnectHelper.session_with_chosen_probe(
@@ -87,11 +134,12 @@ def main() -> int:
             print("RESULT: CAN2 initialization failed")
             return 2
         if last["rx_count"]:
-            data = " ".join(f"{last[f'rx_data{i}']:02X}" for i in range(last["rx_last_dlc"]))
+            raw_bytes = bytes(last[f"rx_data{i}"] for i in range(last["rx_last_dlc"]))
+            decoded = decode_damiao_can_frame(raw_bytes)
             print(
                 "RESULT: received CAN2 frame(s); "
                 f"last_id=0x{last['rx_last_id']:X} "
-                f"dlc={last['rx_last_dlc']} data={data}"
+                f"dlc={last['rx_last_dlc']} -> {decoded}"
             )
             return 0
         if last["tx_success_count"]:

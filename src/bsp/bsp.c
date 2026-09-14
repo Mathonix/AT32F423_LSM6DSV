@@ -329,6 +329,21 @@ int uart_dma_send(const uint8_t *data, uint16_t len)
 #endif
 }
 
+int uart_read_byte(uint8_t *ch)
+{
+#if APP_UART_ENABLE
+  if(usart_flag_get(PRINT_UART, USART_RDBF_FLAG) != RESET)
+  {
+    uint8_t val = (uint8_t)usart_data_receive(PRINT_UART);
+    if(ch != NULL) *ch = val;
+    return 1;
+  }
+#else
+  (void)ch;
+#endif
+  return 0;
+}
+
 void bsp_init(void)
 {
   nvic_priority_group_config(NVIC_PRIORITY_GROUP_4);

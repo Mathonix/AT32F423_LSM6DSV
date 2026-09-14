@@ -44,6 +44,7 @@ SRCS := \
   $(SRC_DIR)/bsp/ws2812.c \
   $(SRC_DIR)/drivers/can_test.c \
   $(SRC_DIR)/drivers/usb_cdc.c \
+  $(SRC_DIR)/drivers/protocol.c \
   $(SRC_DIR)/bsp/at32f423_clock.c \
   $(SRC_DIR)/bsp/at32f423_int.c \
   $(LIB)/libraries/cmsis/cm4/device_support/system_at32f423.c \
@@ -56,7 +57,8 @@ SRCS := \
   $(LIB)/libraries/drivers/src/at32f423_pwc.c \
   $(LIB)/libraries/drivers/src/at32f423_dma.c \
   $(LIB)/libraries/drivers/src/at32f423_can.c \
-  $(LIB)/libraries/drivers/src/at32f423_usb.c
+  $(LIB)/libraries/drivers/src/at32f423_usb.c \
+  $(LIB)/libraries/drivers/src/at32f423_acc.c
 
 CPPSRCS := \
   $(SRC_DIR)/fusion/vqf_wrapper.cpp \

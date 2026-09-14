@@ -116,6 +116,12 @@ static float wrap_deg(float angle)
   return angle;
 }
 
+static float app_yaw_offset = 0.0f;
+static void app_zero_yaw(float current_yaw)
+{
+  app_yaw_offset = wrap_deg(app_yaw_offset + current_yaw);
+}
+
 static float temp_lpf_c;
 static float temp_lpf_alpha;
 static uint8_t temp_lpf_init;
@@ -510,6 +516,8 @@ static void vofa_send_justfloat(float late)
     output_roll = vqf_live.roll;
   }
 
+  output_yaw = wrap_deg(output_yaw - app_yaw_offset);
+
   vofa_pose_live.seq++;
   __DMB();
   vofa_pose_live.yaw = output_yaw;
@@ -556,6 +564,15 @@ static void vofa_send_justfloat(float late)
   {
     vofa_late++;
   }
+
+#if APP_CAN_ENABLE
+  can_test_update_data(output_roll, output_pitch, output_yaw,
+                       vqf_live.gx, vqf_live.gy, vqf_live.gz,
+                       vqf_live.ax, vqf_live.ay, vqf_live.az,
+                       vqf_live.qw, vqf_live.qx, vqf_live.qy, vqf_live.qz,
+                       imu_temp_live.temperature_c,
+                       (uint8_t)vqf_live.rest_detected);
+#endif
 }
 
 static void live_init(void)
@@ -1047,9 +1064,87 @@ int main(void)
     }
 
     usb_cdc_task();
+    {
+      uint8_t ch;
+      static uint8_t u_buf[4];
+      static uint8_t u_idx = 0U;
+      static uint8_t cdc_buf[4];
+      static uint8_t cdc_idx = 0U;
+
+      while(uart_read_byte(&ch))
+      {
+        if(u_idx == 0U)
+        {
+          if(ch == 0xAAU) u_buf[u_idx++] = ch;
+        }
+        else
+        {
+          u_buf[u_idx++] = ch;
+          if(u_idx == 4U)
+          {
+            if(u_buf[3] == 0x0DU)
+            {
+              if((u_buf[1] == 0x0CU) && (u_buf[2] == 0x01U))
+              {
+                app_zero_yaw(vofa_pose_live.yaw);
+              }
+              else if((u_buf[1] == 0x00U) && (u_buf[2] == 0x00U))
+              {
+                nvic_system_reset();
+              }
+            }
+            u_idx = 0U;
+          }
+        }
+      }
+
+      while(usb_cdc_read_byte(&ch))
+      {
+        if(cdc_idx == 0U)
+        {
+          if(ch == 0xAAU) cdc_buf[cdc_idx++] = ch;
+        }
+        else
+        {
+          cdc_buf[cdc_idx++] = ch;
+          if(cdc_idx == 4U)
+          {
+            if(cdc_buf[3] == 0x0DU)
+            {
+              if((cdc_buf[1] == 0x0CU) && (cdc_buf[2] == 0x01U))
+              {
+                app_zero_yaw(vofa_pose_live.yaw);
+              }
+              else if((cdc_buf[1] == 0x00U) && (cdc_buf[2] == 0x00U))
+              {
+                nvic_system_reset();
+              }
+            }
+            cdc_idx = 0U;
+          }
+        }
+      }
+    }
+
     if(mag_ok) ws2812_normal_task(millis());
 #if APP_CAN_ENABLE
     can_test_task(millis());
+    {
+      uint8_t cmd = can_test_get_cmd_flag();
+      if(cmd & CAN_CMD_FLAG_REBOOT)
+      {
+        nvic_system_reset();
+      }
+      if(cmd & CAN_CMD_FLAG_ZERO_YAW)
+      {
+        can_test_clear_cmd_flag(CAN_CMD_FLAG_ZERO_YAW);
+        app_zero_yaw(vofa_pose_live.yaw);
+      }
+      if(cmd & CAN_CMD_FLAG_RECAL)
+      {
+        can_test_clear_cmd_flag(CAN_CMD_FLAG_RECAL);
+      }
+    }
 #endif
 
     if((millis() - last_ms) >= 1000U)

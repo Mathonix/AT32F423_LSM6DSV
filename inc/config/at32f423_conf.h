@@ -31,6 +31,7 @@ extern "C" {
 #define DMA_MODULE_ENABLED
 #define CAN_MODULE_ENABLED
 #define USB_MODULE_ENABLED
+#define ACC_MODULE_ENABLED
 
 #ifdef CRM_MODULE_ENABLED
 #include "at32f423_crm.h"
@@ -66,6 +67,10 @@ extern "C" {
 
 #ifdef USB_MODULE_ENABLED
 #include "at32f423_usb.h"
+#endif
+
+#ifdef ACC_MODULE_ENABLED
+#include "at32f423_acc.h"
 #endif
 
 #ifdef __cplusplus

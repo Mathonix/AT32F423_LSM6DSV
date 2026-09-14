@@ -1,6 +1,7 @@
 ﻿#include "can_test.h"
 #include "at32f423_conf.h"
 #include "app_config.h"
+#include <string.h>
 
 volatile can_test_live_t can_test_live = {
   .magic = CAN_TEST_LIVE_MAGIC
@@ -10,6 +11,139 @@ static uint32_t can_last_tx_ms;
 static uint32_t can_data_counter;
 static uint8_t can_pending_mask;
 static uint32_t can_last_status_ms;
+
+static float can_att_roll;
+static float can_att_pitch;
+static float can_att_yaw;
+static float can_att_gx_rad;
+static float can_att_gy_rad;
+static float can_att_gz_rad;
+static float can_att_ax_ms2;
+static float can_att_ay_ms2;
+static float can_att_az_ms2;
+static float can_att_qw = 1.0f;
+static float can_att_qx = 0.0f;
+static float can_att_qy = 0.0f;
+static float can_att_qz = 0.0f;
+static float can_att_temp = 25.0f;
+static uint8_t can_att_flags;
+static volatile uint8_t can_cmd_flags;
+
+static uint16_t damiao_can_id = APP_CAN_DEFAULT_CAN_ID;
+static uint16_t damiao_mst_id = APP_CAN_DEFAULT_MST_ID;
+
+static inline uint16_t damiao_float_to_uint(float x_float, float x_min, float x_max, int bits)
+{
+  float span = x_max - x_min;
+  float offset = x_min;
+  if(x_float < x_min) x_float = x_min;
+  if(x_float > x_max) x_float = x_max;
+  return (uint16_t)((x_float - offset) * ((float)((1U << bits) - 1U)) / span);
+}
+
+void can_test_update_data(float roll, float pitch, float yaw,
+                          float gx_dps, float gy_dps, float gz_dps,
+                          float ax_g, float ay_g, float az_g,
+                          float qw, float qx, float qy, float qz,
+                          float temp_c, uint8_t flags)
+{
+  const float dps_to_rad = 3.14159265f / 180.0f;
+  const float g_to_ms2   = 9.80665f;
+
+  can_att_roll   = roll;
+  can_att_pitch  = pitch;
+  can_att_yaw    = yaw;
+  can_att_gx_rad = gx_dps * dps_to_rad;
+  can_att_gy_rad = gy_dps * dps_to_rad;
+  can_att_gz_rad = gz_dps * dps_to_rad;
+  can_att_ax_ms2 = ax_g * g_to_ms2;
+  can_att_ay_ms2 = ay_g * g_to_ms2;
+  can_att_az_ms2 = az_g * g_to_ms2;
+  can_att_qw     = qw;
+  can_att_qx     = qx;
+  can_att_qy     = qy;
+  can_att_qz     = qz;
+  can_att_temp   = temp_c;
+  can_att_flags  = flags;
+}
+
+uint8_t can_test_get_cmd_flag(void)
+{
+  return can_cmd_flags;
+}
+
+void can_test_clear_cmd_flag(uint8_t flag)
+{
+  can_cmd_flags = (uint8_t)(can_cmd_flags & (uint8_t)~flag);
+}
+
+static void damiao_pack_euler(uint8_t data[8])
+{
+  uint16_t pitch_u = damiao_float_to_uint(can_att_pitch, DAMIAO_PITCH_MIN, DAMIAO_PITCH_MAX, 16);
+  uint16_t yaw_u   = damiao_float_to_uint(can_att_yaw,   DAMIAO_YAW_MIN,   DAMIAO_YAW_MAX,   16);
+  uint16_t roll_u  = damiao_float_to_uint(can_att_roll,  DAMIAO_ROLL_MIN,  DAMIAO_ROLL_MAX,  16);
+
+  data[0] = DAMIAO_CAN_TYPE_EULER; /* 0x03 */
+  data[1] = 0x00U;
+  data[2] = (uint8_t)(pitch_u & 0xFFU);
+  data[3] = (uint8_t)((pitch_u >> 8) & 0xFFU);
+  data[4] = (uint8_t)(yaw_u & 0xFFU);
+  data[5] = (uint8_t)((yaw_u >> 8) & 0xFFU);
+  data[6] = (uint8_t)(roll_u & 0xFFU);
+  data[7] = (uint8_t)((roll_u >> 8) & 0xFFU);
+}
+
+static void damiao_pack_gyro(uint8_t data[8])
+{
+  uint16_t gx_u = damiao_float_to_uint(can_att_gx_rad, DAMIAO_GYRO_MIN, DAMIAO_GYRO_MAX, 16);
+  uint16_t gy_u = damiao_float_to_uint(can_att_gy_rad, DAMIAO_GYRO_MIN, DAMIAO_GYRO_MAX, 16);
+  uint16_t gz_u = damiao_float_to_uint(can_att_gz_rad, DAMIAO_GYRO_MIN, DAMIAO_GYRO_MAX, 16);
+
+  data[0] = DAMIAO_CAN_TYPE_GYRO; /* 0x02 */
+  data[1] = 0x00U;
+  data[2] = (uint8_t)(gx_u & 0xFFU);
+  data[3] = (uint8_t)((gx_u >> 8) & 0xFFU);
+  data[4] = (uint8_t)(gy_u & 0xFFU);
+  data[5] = (uint8_t)((gy_u >> 8) & 0xFFU);
+  data[6] = (uint8_t)(gz_u & 0xFFU);
+  data[7] = (uint8_t)((gz_u >> 8) & 0xFFU);
+}
+
+static void damiao_pack_accel(uint8_t data[8])
+{
+  uint16_t ax_u = damiao_float_to_uint(can_att_ax_ms2, DAMIAO_ACCEL_MIN, DAMIAO_ACCEL_MAX, 16);
+  uint16_t ay_u = damiao_float_to_uint(can_att_ay_ms2, DAMIAO_ACCEL_MIN, DAMIAO_ACCEL_MAX, 16);
+  uint16_t az_u = damiao_float_to_uint(can_att_az_ms2, DAMIAO_ACCEL_MIN, DAMIAO_ACCEL_MAX, 16);
+  int16_t t_i   = (int16_t)(can_att_temp + 0.5f);
+  if(t_i < 0) t_i = 0;
+  if(t_i > 255) t_i = 255;
+
+  data[0] = DAMIAO_CAN_TYPE_ACCEL; /* 0x01 */
+  data[1] = (uint8_t)t_i;
+  data[2] = (uint8_t)(ax_u & 0xFFU);
+  data[3] = (uint8_t)((ax_u >> 8) & 0xFFU);
+  data[4] = (uint8_t)(ay_u & 0xFFU);
+  data[5] = (uint8_t)((ay_u >> 8) & 0xFFU);
+  data[6] = (uint8_t)(az_u & 0xFFU);
+  data[7] = (uint8_t)((az_u >> 8) & 0xFFU);
+}
+
+static void damiao_pack_quat(uint8_t data[8])
+{
+  uint16_t w_u = damiao_float_to_uint(can_att_qw, DAMIAO_QUAT_MIN, DAMIAO_QUAT_MAX, 14);
+  uint16_t x_u = damiao_float_to_uint(can_att_qx, DAMIAO_QUAT_MIN, DAMIAO_QUAT_MAX, 14);
+  uint16_t y_u = damiao_float_to_uint(can_att_qy, DAMIAO_QUAT_MIN, DAMIAO_QUAT_MAX, 14);
+  uint16_t z_u = damiao_float_to_uint(can_att_qz, DAMIAO_QUAT_MIN, DAMIAO_QUAT_MAX, 14);
+
+  data[0] = DAMIAO_CAN_TYPE_QUAT; /* 0x04 */
+  data[1] = (uint8_t)((w_u >> 6) & 0xFFU);
+  data[2] = (uint8_t)(((w_u & 0x3FU) << 2) | ((x_u >> 12) & 0x03U));
+  data[3] = (uint8_t)((x_u >> 4) & 0xFFU);
+  data[4] = (uint8_t)(((x_u & 0x0FU) << 4) | ((y_u >> 10) & 0x0FU));
+  data[5] = (uint8_t)((y_u >> 2) & 0xFFU);
+  data[6] = (uint8_t)(((y_u & 0x03U) << 6) | ((z_u >> 8) & 0x3FU));
+  data[7] = (uint8_t)(z_u & 0xFFU);
+}
 
 static void can_test_snapshot(uint32_t now_ms)
 {
@@ -54,6 +188,114 @@ static void can_test_poll_receive(uint32_t now_ms)
     {
       can_test_live.rx_last_data[i] = (i < rx_message.dlc) ? rx_message.data[i] : 0U;
     }
+
+    /* 1. Damiao Fast Request: [can_id_L, can_id_H, reg, 0xCC] */
+    if((rx_message.id_type == CAN_ID_STANDARD) &&
+       (rx_message.dlc == 4U) &&
+       (rx_message.data[3] == DAMIAO_REQ_HEADER))
+    {
+      uint16_t req_id = (uint16_t)rx_message.data[0] | ((uint16_t)rx_message.data[1] << 8);
+      uint8_t reg = rx_message.data[2];
+
+      if((req_id == damiao_can_id) || (req_id == 0U) || (req_id == 0x6FFU))
+      {
+        can_tx_message_type reply;
+        reply.standard_id = damiao_mst_id;
+        reply.extended_id = 0U;
+        reply.id_type = CAN_ID_STANDARD;
+        reply.frame_type = CAN_TFT_DATA;
+        reply.dlc = 8U;
+
+        if(reg == DAMIAO_REG_ACCEL)
+        {
+          damiao_pack_accel(reply.data);
+          (void)can_message_transmit(CAN2, &reply);
+        }
+        else if(reg == DAMIAO_REG_GYRO)
+        {
+          damiao_pack_gyro(reply.data);
+          (void)can_message_transmit(CAN2, &reply);
+        }
+        else if(reg == DAMIAO_REG_EULER)
+        {
+          damiao_pack_euler(reply.data);
+          (void)can_message_transmit(CAN2, &reply);
+        }
+        else if(reg == DAMIAO_REG_QUAT)
+        {
+          damiao_pack_quat(reply.data);
+          (void)can_message_transmit(CAN2, &reply);
+        }
+      }
+    }
+    /* 2. Damiao Register Request: [0xCC, RID, R/W, 0xDD, DATA[4..7]] */
+    else if((rx_message.id_type == CAN_ID_STANDARD) &&
+            (rx_message.dlc == 8U) &&
+            (rx_message.data[0] == DAMIAO_REQ_HEADER) &&
+            (rx_message.data[3] == DAMIAO_REQ_TAIL))
+    {
+      uint8_t rid = rx_message.data[1];
+      uint8_t rw  = rx_message.data[2];
+      can_tx_message_type reply;
+
+      reply.standard_id = damiao_mst_id;
+      reply.extended_id = 0U;
+      reply.id_type = CAN_ID_STANDARD;
+      reply.frame_type = CAN_TFT_DATA;
+      reply.dlc = 8U;
+      reply.data[0] = DAMIAO_REQ_HEADER;
+      reply.data[1] = rid;
+      reply.data[2] = DAMIAO_REQ_TAIL;
+      reply.data[3] = DAMIAO_ACK_SUCCESS;
+      memset(&reply.data[4], 0, 4U);
+
+      if(rid == DAMIAO_REG_REBOOT)
+      {
+        can_cmd_flags |= CAN_CMD_FLAG_REBOOT;
+      }
+      else if(rid == DAMIAO_REG_ZERO_YAW)
+      {
+        can_cmd_flags |= CAN_CMD_FLAG_ZERO_YAW;
+      }
+      else if(rid == DAMIAO_REG_CALIB_GYRO)
+      {
+        can_cmd_flags |= CAN_CMD_FLAG_RECAL;
+      }
+      else if(rid == DAMIAO_REG_CAN_ID)
+      {
+        if(rw == 1U) damiao_can_id = rx_message.data[4];
+        reply.data[4] = (uint8_t)damiao_can_id;
+      }
+      else if(rid == DAMIAO_REG_MST_ID)
+      {
+        if(rw == 1U) damiao_mst_id = (uint16_t)rx_message.data[4] | ((uint16_t)rx_message.data[5] << 8);
+        reply.data[4] = (uint8_t)damiao_mst_id;
+        reply.data[5] = (uint8_t)(damiao_mst_id >> 8);
+      }
+      else if(rid == DAMIAO_REG_EULER)
+      {
+        damiao_pack_euler(reply.data);
+      }
+      else if(rid == DAMIAO_REG_GYRO)
+      {
+        damiao_pack_gyro(reply.data);
+      }
+      else if(rid == DAMIAO_REG_ACCEL)
+      {
+        damiao_pack_accel(reply.data);
+      }
+      else if(rid == DAMIAO_REG_QUAT)
+      {
+        damiao_pack_quat(reply.data);
+      }
+      else
+      {
+        reply.data[3] = DAMIAO_ACK_NO_REG;
+      }
+
+      (void)can_message_transmit(CAN2, &reply);
+    }
+
     processed++;
   }
 
@@ -108,39 +350,35 @@ void can_test_init(void)
   crm_periph_clock_enable(CRM_CAN2_PERIPH_CLOCK, TRUE);
 
   gpio_default_para_init(&gpio_init_struct);
-  gpio_init_struct.gpio_pins = GPIO_PINS_2 | GPIO_PINS_3;
-  gpio_init_struct.gpio_mode = GPIO_MODE_MUX;
-  gpio_init_struct.gpio_out_type = GPIO_OUTPUT_PUSH_PULL;
-  gpio_init_struct.gpio_pull = GPIO_PULL_NONE;
   gpio_init_struct.gpio_drive_strength = GPIO_DRIVE_STRENGTH_STRONGER;
+  gpio_init_struct.gpio_out_type = GPIO_OUTPUT_PUSH_PULL;
+  gpio_init_struct.gpio_mode = GPIO_MODE_MUX;
+  gpio_init_struct.gpio_pins = GPIO_PINS_3;
+  gpio_init_struct.gpio_pull = GPIO_PULL_NONE;
   gpio_init(GPIOA, &gpio_init_struct);
-  gpio_pin_mux_config(GPIOA, GPIO_PINS_SOURCE2, GPIO_MUX_9);
   gpio_pin_mux_config(GPIOA, GPIO_PINS_SOURCE3, GPIO_MUX_9);
 
-  can_reset(CAN2);
+  gpio_init_struct.gpio_mode = GPIO_MODE_INPUT;
+  gpio_init_struct.gpio_pins = GPIO_PINS_2;
+  gpio_init_struct.gpio_pull = GPIO_PULL_UP;
+  gpio_init(GPIOA, &gpio_init_struct);
+  gpio_pin_mux_config(GPIOA, GPIO_PINS_SOURCE2, GPIO_MUX_9);
+
   can_default_para_init(&can_base_struct);
   can_base_struct.mode_selection = CAN_MODE_COMMUNICATE;
+  can_base_struct.ttc_enable = FALSE;
   can_base_struct.aebo_enable = TRUE;
-  can_base_struct.aed_enable = FALSE;
+  can_base_struct.aed_enable = TRUE;
   can_base_struct.prsf_enable = FALSE;
   can_base_struct.mdrsel_selection = CAN_DISCARDING_FIRST_RECEIVED;
   can_base_struct.mmssr_selection = CAN_SENDING_BY_ID;
-  if(can_base_init(CAN2, &can_base_struct) != SUCCESS)
-  {
-    can_test_live.init_ok = 0U;
-    return;
-  }
+  can_base_init(CAN2, &can_base_struct);
 
-  can_baudrate_default_para_init(&can_baudrate_struct);
   can_baudrate_struct.baudrate_div = APP_CAN_BAUDRATE_DIV;
   can_baudrate_struct.rsaw_size = APP_CAN_RSAW;
   can_baudrate_struct.bts1_size = APP_CAN_BTS1;
   can_baudrate_struct.bts2_size = APP_CAN_BTS2;
-  if(can_baudrate_set(CAN2, &can_baudrate_struct) != SUCCESS)
-  {
-    can_test_live.init_ok = 0U;
-    return;
-  }
+  can_baudrate_set(CAN2, &can_baudrate_struct);
 
 #if APP_CAN_RX_ENABLE
   {
@@ -149,9 +387,8 @@ void can_test_init(void)
     filter_init.filter_activate_enable = TRUE;
     filter_init.filter_mode = CAN_FILTER_MODE_ID_MASK;
     filter_init.filter_fifo = CAN_FILTER_FIFO0;
-    filter_init.filter_number = 0U;
-    filter_init.filter_bit = CAN_FILTER_32BIT;
-    /* Zero ID and zero mask accepts every standard and extended frame. */
+    filter_init.filter_number = 0;
+    filter_init.filter_bit = CAN_FILTER_16BIT;
     filter_init.filter_id_high = 0U;
     filter_init.filter_id_low = 0U;
     filter_init.filter_mask_high = 0U;
@@ -164,6 +401,7 @@ void can_test_init(void)
   can_data_counter = 0U;
   can_last_tx_ms = 0U;
   can_last_status_ms = 0U;
+  can_cmd_flags = 0U;
   can_test_live.init_ok = 1U;
   can_test_snapshot(0U);
 }
@@ -180,8 +418,6 @@ void can_test_task(uint32_t now_ms)
     return;
   }
 
-  /* Poll completion/error state at 100 Hz rather than adding register traffic
-   * to every 2 kHz IMU iteration. The transmit scheduler remains independent. */
   if((uint32_t)(now_ms - can_last_status_ms) >= 10U)
   {
     can_test_poll_mailboxes();
@@ -191,6 +427,7 @@ void can_test_task(uint32_t now_ms)
     can_last_status_ms = now_ms;
     can_test_snapshot(now_ms);
   }
+
 #if APP_CAN_TX_ENABLE
   if((uint32_t)(now_ms - can_last_tx_ms) < APP_CAN_TX_PERIOD_MS)
   {
@@ -203,14 +440,47 @@ void can_test_task(uint32_t now_ms)
   tx_message.id_type = CAN_ID_STANDARD;
   tx_message.frame_type = CAN_TFT_DATA;
   tx_message.dlc = 8U;
-  tx_message.data[0] = (uint8_t)(can_data_counter >> 24);
-  tx_message.data[1] = (uint8_t)(can_data_counter >> 16);
-  tx_message.data[2] = (uint8_t)(can_data_counter >> 8);
-  tx_message.data[3] = (uint8_t)can_data_counter;
-  tx_message.data[4] = 0xA5U;
-  tx_message.data[5] = 0x5AU;
-  tx_message.data[6] = 0xC3U;
-  tx_message.data[7] = 0x3CU;
+
+#if (APP_CAN_DAMIAO_MODE == 0U)
+  /* Mode 0: Euler angle frame (0x03: Pitch, Yaw, Roll) */
+  damiao_pack_euler(tx_message.data);
+#elif (APP_CAN_DAMIAO_MODE == 1U)
+  /* Mode 1: Interleave Euler (0x03) and Gyro (0x02) */
+  {
+    static uint8_t can_toggle = 0U;
+    can_toggle ^= 1U;
+    if(can_toggle != 0U)
+    {
+      damiao_pack_euler(tx_message.data);
+    }
+    else
+    {
+      damiao_pack_gyro(tx_message.data);
+    }
+  }
+#else
+  /* Mode 2: Cycle all 4 frames: Euler -> Gyro -> Accel -> Quat */
+  {
+    static uint8_t can_cycle = 0U;
+    if(can_cycle == 0U)
+    {
+      damiao_pack_euler(tx_message.data);
+    }
+    else if(can_cycle == 1U)
+    {
+      damiao_pack_gyro(tx_message.data);
+    }
+    else if(can_cycle == 2U)
+    {
+      damiao_pack_accel(tx_message.data);
+    }
+    else
+    {
+      damiao_pack_quat(tx_message.data);
+    }
+    can_cycle = (uint8_t)((can_cycle + 1U) & 3U);
+  }
+#endif
 
   mailbox = can_message_transmit(CAN2, &tx_message);
   can_test_live.tx_count++;
