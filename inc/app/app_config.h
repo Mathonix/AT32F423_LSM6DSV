@@ -41,7 +41,7 @@
 #define APP_VQF_REST_ACC_MS2      0.4f
 #define APP_VQF_REST_MIN_SECONDS   1.5f
 #define APP_VQF_PRIME_MAX_SAMPLES 1000U
-#define APP_VOFA_OUTPUT_HZ        200U
+#define APP_VOFA_OUTPUT_HZ        1000U
 
 /* Hold the output attitude at the last value after VQF confirms rest. */
 #define APP_VOFA_REST_HOLD_ENABLE 0U
@@ -72,7 +72,7 @@
 #define APP_CAN_BTS1              CAN_BTS1_10TQ
 #define APP_CAN_BTS2              CAN_BTS2_4TQ
 #define APP_CAN_TX_ENABLE          1U
-#define APP_CAN_TX_PERIOD_MS      10U /* 10 ms = 100 Hz output */
+#define APP_CAN_TX_PERIOD_US    1000U /* 1 ms = 1 kHz output; requires a high-resolution scheduler */
 #define APP_CAN_RX_ENABLE          1U
 
 /* Damiao DM-IMU-L1 CAN Node Settings */

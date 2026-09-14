@@ -114,7 +114,7 @@ vpath %.c $(SRC_DIR)/app \
   $(LIB)/libraries/cmsis/cm4/device_support \
   $(LIB)/libraries/drivers/src \
   middleware/usb_drivers/src \
-  middleware/usbd_class/cdc \
+  middleware/usbd_class/cdc
 vpath %.cpp $(SRC_DIR)/fusion
 
 .DEFAULT_GOAL := all

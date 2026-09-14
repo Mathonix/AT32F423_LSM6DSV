@@ -7,10 +7,10 @@ volatile can_test_live_t can_test_live = {
   .magic = CAN_TEST_LIVE_MAGIC
 };
 
-static uint32_t can_last_tx_ms;
+static uint32_t can_last_tx_us;
 static uint32_t can_data_counter;
 static uint8_t can_pending_mask;
-static uint32_t can_last_status_ms;
+static uint32_t can_last_status_us;
 
 static float can_att_roll;
 static float can_att_pitch;
@@ -399,14 +399,14 @@ void can_test_init(void)
 
   can_pending_mask = 0U;
   can_data_counter = 0U;
-  can_last_tx_ms = 0U;
-  can_last_status_ms = 0U;
+  can_last_tx_us = 0U;
+  can_last_status_us = 0U;
   can_cmd_flags = 0U;
   can_test_live.init_ok = 1U;
   can_test_snapshot(0U);
 }
 
-void can_test_task(uint32_t now_ms)
+void can_test_task(uint32_t now_us)
 {
 #if APP_CAN_TX_ENABLE
   can_tx_message_type tx_message;
@@ -418,22 +418,22 @@ void can_test_task(uint32_t now_ms)
     return;
   }
 
-  if((uint32_t)(now_ms - can_last_status_ms) >= 10U)
+  if((uint32_t)(now_us - can_last_status_us) >= 1000U)
   {
     can_test_poll_mailboxes();
 #if APP_CAN_RX_ENABLE
-    can_test_poll_receive(now_ms);
+    can_test_poll_receive(now_us / 1000U);
 #endif
-    can_last_status_ms = now_ms;
-    can_test_snapshot(now_ms);
+    can_last_status_us = now_us;
+    can_test_snapshot(now_us / 1000U);
   }
 
 #if APP_CAN_TX_ENABLE
-  if((uint32_t)(now_ms - can_last_tx_ms) < APP_CAN_TX_PERIOD_MS)
+  if((uint32_t)(now_us - can_last_tx_us) < APP_CAN_TX_PERIOD_US)
   {
     return;
   }
-  can_last_tx_ms = now_ms;
+  can_last_tx_us = now_us;
 
   tx_message.standard_id = APP_CAN_TX_STANDARD_ID;
   tx_message.extended_id = 0U;
@@ -497,6 +497,7 @@ void can_test_task(uint32_t now_ms)
     can_test_live.last_mailbox = 0xFFFFFFFFU;
     can_test_live.last_status = (uint32_t)CAN_TX_STATUS_NO_EMPTY;
   }
-  can_test_snapshot(now_ms);
+  can_test_snapshot(now_us / 1000U);
 #endif
 }
+

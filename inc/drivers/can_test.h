@@ -98,7 +98,8 @@ typedef struct
 extern volatile can_test_live_t can_test_live;
 
 void can_test_init(void);
-void can_test_task(uint32_t now_ms);
+/* Run from the main loop with a monotonic microsecond timestamp. */
+void can_test_task(uint32_t now_us);
 void can_test_update_data(float roll, float pitch, float yaw,
                           float gx_dps, float gy_dps, float gz_dps,
                           float ax_g, float ay_g, float az_g,

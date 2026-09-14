@@ -549,7 +549,8 @@ static void vofa_send_justfloat(float late)
     yaw_kf_sync_live.seq++;
   }
 
-  /* Send only yaw, pitch and roll as a continuous 3-channel JustFloat frame. */
+  /* Send yaw, pitch and roll as a continuous 3-channel JustFloat frame.
+   At APP_VOFA_OUTPUT_HZ=1000 this is 16 bytes every 1 ms. */
   ch[0]  = output_yaw;
   ch[1]  = output_pitch;
   ch[2]  = output_roll;
@@ -1128,7 +1129,8 @@ int main(void)
 
     if(mag_ok) ws2812_normal_task(millis());
 #if APP_CAN_ENABLE
-    can_test_task(millis());
+    /* CAN needs microsecond timing: the millisecond tick cannot schedule 1 kHz. */
+    can_test_task(dwt_cycles() / (system_core_clock / 1000000U));
     {
       uint8_t cmd = can_test_get_cmd_flag();
       if(cmd & CAN_CMD_FLAG_REBOOT)
