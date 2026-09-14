@@ -1,4 +1,4 @@
-<?xml version="1.0" encoding="UTF-8" standalone="no" ?>
+﻿<?xml version="1.0" encoding="UTF-8" standalone="no" ?>
 <Project xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="project_projx.xsd">
 
   <SchemaVersion>2.1</SchemaVersion>
@@ -295,7 +295,7 @@
               <MiscControls></MiscControls>
               <Define>AT32F423KCU7_4,USE_STDPERIPH_DRIVER,VQF_SINGLE_PRECISION</Define>
               <Undefine></Undefine>
-              <IncludePath>..\inc;..\..\AT32F423_Firmware_Library\libraries\cmsis\cm4\core_support;..\..\AT32F423_Firmware_Library\libraries\cmsis\cm4\device_support;..\..\AT32F423_Firmware_Library\libraries\drivers\inc</IncludePath>
+              <IncludePath>..\inc;..\inc\app;..\inc\bsp;..\inc\calibration;..\inc\config;..\inc\diagnostics;..\inc\drivers;..\inc\fusion;..\inc\telemetry;..\AT32F423_Firmware_Library\libraries\cmsis\cm4\core_support;..\AT32F423_Firmware_Library\libraries\cmsis\cm4\device_support;..\AT32F423_Firmware_Library\libraries\drivers\inc</IncludePath>
             </VariousControls>
           </Cads>
           <Aads>
@@ -342,47 +342,57 @@
             <File>
               <FileName>main.c</FileName>
               <FileType>1</FileType>
-              <FilePath>..\src\main.c</FilePath>
+              <FilePath>..\src\app\main.c</FilePath>
             </File>
             <File>
               <FileName>bsp.c</FileName>
               <FileType>1</FileType>
-              <FilePath>..\src\bsp.c</FilePath>
+              <FilePath>..\src\bsp\bsp.c</FilePath>
             </File>
             <File>
               <FileName>lsm6dsv.c</FileName>
               <FileType>1</FileType>
-              <FilePath>..\src\lsm6dsv.c</FilePath>
+              <FilePath>..\src\drivers\lsm6dsv.c</FilePath>
             </File>
             <File>
               <FileName>vqf_wrapper.cpp</FileName>
               <FileType>8</FileType>
-              <FilePath>..\src\vqf_wrapper.cpp</FilePath>
+              <FilePath>..\src\fusion\vqf_wrapper.cpp</FilePath>
             </File>
             <File>
               <FileName>vqf_full.cpp</FileName>
               <FileType>8</FileType>
-              <FilePath>..\src\vqf_full.cpp</FilePath>
+              <FilePath>..\src\fusion\vqf_full.cpp</FilePath>
             </File>
             <File>
               <FileName>ist8310.c</FileName>
               <FileType>1</FileType>
-              <FilePath>..\src\ist8310.c</FilePath>
+              <FilePath>..\src\drivers\ist8310.c</FilePath>
             </File>
             <File>
               <FileName>ws2812.c</FileName>
               <FileType>1</FileType>
-              <FilePath>..\src\ws2812.c</FilePath>
+              <FilePath>..\src\bsp\ws2812.c</FilePath>
             </File>
             <File>
               <FileName>at32f423_clock.c</FileName>
               <FileType>1</FileType>
-              <FilePath>..\src\at32f423_clock.c</FilePath>
+              <FilePath>..\src\bsp\at32f423_clock.c</FilePath>
             </File>
             <File>
               <FileName>at32f423_int.c</FileName>
               <FileType>1</FileType>
-              <FilePath>..\src\at32f423_int.c</FilePath>
+              <FilePath>..\src\bsp\at32f423_int.c</FilePath>
+            </File>
+            <File>
+              <FileName>can_test.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\src\drivers\can_test.c</FilePath>
+            </File>
+            <File>
+              <FileName>usb_cdc.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\src\drivers\usb_cdc.c</FilePath>
             </File>
           </Files>
         </Group>
@@ -392,42 +402,52 @@
             <File>
               <FileName>at32f423_crm.c</FileName>
               <FileType>1</FileType>
-              <FilePath>..\..\AT32F423_Firmware_Library\libraries\drivers\src\at32f423_crm.c</FilePath>
+              <FilePath>..\AT32F423_Firmware_Library\libraries\drivers\src\at32f423_crm.c</FilePath>
             </File>
             <File>
               <FileName>at32f423_gpio.c</FileName>
               <FileType>1</FileType>
-              <FilePath>..\..\AT32F423_Firmware_Library\libraries\drivers\src\at32f423_gpio.c</FilePath>
+              <FilePath>..\AT32F423_Firmware_Library\libraries\drivers\src\at32f423_gpio.c</FilePath>
             </File>
             <File>
               <FileName>at32f423_misc.c</FileName>
               <FileType>1</FileType>
-              <FilePath>..\..\AT32F423_Firmware_Library\libraries\drivers\src\at32f423_misc.c</FilePath>
+              <FilePath>..\AT32F423_Firmware_Library\libraries\drivers\src\at32f423_misc.c</FilePath>
             </File>
             <File>
               <FileName>at32f423_spi.c</FileName>
               <FileType>1</FileType>
-              <FilePath>..\..\AT32F423_Firmware_Library\libraries\drivers\src\at32f423_spi.c</FilePath>
+              <FilePath>..\AT32F423_Firmware_Library\libraries\drivers\src\at32f423_spi.c</FilePath>
             </File>
             <File>
               <FileName>at32f423_usart.c</FileName>
               <FileType>1</FileType>
-              <FilePath>..\..\AT32F423_Firmware_Library\libraries\drivers\src\at32f423_usart.c</FilePath>
+              <FilePath>..\AT32F423_Firmware_Library\libraries\drivers\src\at32f423_usart.c</FilePath>
             </File>
             <File>
               <FileName>at32f423_flash.c</FileName>
               <FileType>1</FileType>
-              <FilePath>..\..\AT32F423_Firmware_Library\libraries\drivers\src\at32f423_flash.c</FilePath>
+              <FilePath>..\AT32F423_Firmware_Library\libraries\drivers\src\at32f423_flash.c</FilePath>
             </File>
             <File>
               <FileName>at32f423_pwc.c</FileName>
               <FileType>1</FileType>
-              <FilePath>..\..\AT32F423_Firmware_Library\libraries\drivers\src\at32f423_pwc.c</FilePath>
+              <FilePath>..\AT32F423_Firmware_Library\libraries\drivers\src\at32f423_pwc.c</FilePath>
             </File>
             <File>
               <FileName>at32f423_dma.c</FileName>
               <FileType>1</FileType>
-              <FilePath>..\..\AT32F423_Firmware_Library\libraries\drivers\src\at32f423_dma.c</FilePath>
+              <FilePath>..\AT32F423_Firmware_Library\libraries\drivers\src\at32f423_dma.c</FilePath>
+            </File>
+            <File>
+              <FileName>at32f423_can.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\AT32F423_Firmware_Library\libraries\drivers\src\at32f423_can.c</FilePath>
+            </File>
+            <File>
+              <FileName>at32f423_usb.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\AT32F423_Firmware_Library\libraries\drivers\src\at32f423_usb.c</FilePath>
             </File>
           </Files>
         </Group>
@@ -437,12 +457,12 @@
             <File>
               <FileName>system_at32f423.c</FileName>
               <FileType>1</FileType>
-              <FilePath>..\..\AT32F423_Firmware_Library\libraries\cmsis\cm4\device_support\system_at32f423.c</FilePath>
+              <FilePath>..\AT32F423_Firmware_Library\libraries\cmsis\cm4\device_support\system_at32f423.c</FilePath>
             </File>
             <File>
               <FileName>startup_at32f423.s</FileName>
               <FileType>2</FileType>
-              <FilePath>..\..\AT32F423_Firmware_Library\libraries\cmsis\cm4\device_support\startup\mdk\startup_at32f423.s</FilePath>
+              <FilePath>..\AT32F423_Firmware_Library\libraries\cmsis\cm4\device_support\startup\mdk\startup_at32f423.s</FilePath>
             </File>
           </Files>
         </Group>

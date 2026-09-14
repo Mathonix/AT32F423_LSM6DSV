@@ -1,7 +1,25 @@
+# Build artifacts
 build/
-tools/__pycache__/
-*.pyc
-*.log
+objects/
+listings/
+*.o
+*.d
+*.elf
+*.hex
+*.bin
 *.map
+*.axf
+
+# Python caches and local environments
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+
+# Logs and temporary outputs
+*.log
 *.synctex.gz
+*.tmp
+
+# Nested vendor repositories
 AT32F423_Firmware_Library/.git/

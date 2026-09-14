@@ -6,7 +6,7 @@ CHIP     := AT32F423KCU7_4
 
 LIB      := AT32F423_Firmware_Library
 SRC_DIR  := src
-APP_MAIN ?= main.c
+APP_MAIN ?= app/main.c
 INC_DIR  := inc
 BUILD    := build
 
@@ -38,12 +38,14 @@ STARTUP  := $(LIB)/libraries/cmsis/cm4/device_support/startup/gcc/startup_at32f4
 
 SRCS := \
   $(SRC_DIR)/$(APP_MAIN) \
-  $(SRC_DIR)/bsp.c \
-  $(SRC_DIR)/lsm6dsv.c \
-  $(SRC_DIR)/ist8310.c \
-  $(SRC_DIR)/ws2812.c \
-  $(SRC_DIR)/at32f423_clock.c \
-  $(SRC_DIR)/at32f423_int.c \
+  $(SRC_DIR)/bsp/bsp.c \
+  $(SRC_DIR)/drivers/lsm6dsv.c \
+  $(SRC_DIR)/drivers/ist8310.c \
+  $(SRC_DIR)/bsp/ws2812.c \
+  $(SRC_DIR)/drivers/can_test.c \
+  $(SRC_DIR)/drivers/usb_cdc.c \
+  $(SRC_DIR)/bsp/at32f423_clock.c \
+  $(SRC_DIR)/bsp/at32f423_int.c \
   $(LIB)/libraries/cmsis/cm4/device_support/system_at32f423.c \
   $(LIB)/libraries/drivers/src/at32f423_crm.c \
   $(LIB)/libraries/drivers/src/at32f423_gpio.c \
@@ -52,14 +54,24 @@ SRCS := \
   $(LIB)/libraries/drivers/src/at32f423_usart.c \
   $(LIB)/libraries/drivers/src/at32f423_flash.c \
   $(LIB)/libraries/drivers/src/at32f423_pwc.c \
-  $(LIB)/libraries/drivers/src/at32f423_dma.c
+  $(LIB)/libraries/drivers/src/at32f423_dma.c \
+  $(LIB)/libraries/drivers/src/at32f423_can.c \
+  $(LIB)/libraries/drivers/src/at32f423_usb.c
 
 CPPSRCS := \
-  $(SRC_DIR)/vqf_wrapper.cpp \
-  $(SRC_DIR)/vqf_full.cpp
+  $(SRC_DIR)/fusion/vqf_wrapper.cpp \
+  $(SRC_DIR)/fusion/vqf_full.cpp
 
 INCLUDES := \
   -I$(INC_DIR) \
+  -I$(INC_DIR)/app \
+  -I$(INC_DIR)/bsp \
+  -I$(INC_DIR)/calibration \
+  -I$(INC_DIR)/config \
+  -I$(INC_DIR)/diagnostics \
+  -I$(INC_DIR)/drivers \
+  -I$(INC_DIR)/fusion \
+  -I$(INC_DIR)/telemetry \
   -I$(LIB)/libraries/cmsis/cm4/core_support \
   -I$(LIB)/libraries/cmsis/cm4/device_support \
   -I$(LIB)/libraries/drivers/inc
@@ -84,32 +96,36 @@ DEPS := $(OBJS:.o=.d)
 DEPFLAGS = -MMD -MP -MF $(@:.o=.d)
 -include $(DEPS)
 
-vpath %.c $(SRC_DIR) \
+vpath %.c $(SRC_DIR)/app \
+  $(SRC_DIR)/bsp \
+  $(SRC_DIR)/drivers \
+  $(SRC_DIR)/fusion \
+  $(SRC_DIR)/diagnostics \
   $(LIB)/libraries/cmsis/cm4/device_support \
   $(LIB)/libraries/drivers/src
 
-vpath %.cpp $(SRC_DIR)
+vpath %.cpp $(SRC_DIR)/fusion
 
 .DEFAULT_GOAL := all
 .PHONY: all clean spi-matrix spi-safe-probe spi-observe spi-freq-sweep safe-idle ist8310
 
 spi-matrix:
-	$(MAKE) TARGET=spi_matrix APP_MAIN=spi_matrix_main.c all
+	$(MAKE) TARGET=spi_matrix APP_MAIN=diagnostics/spi_matrix_main.c all
 
 spi-safe-probe:
-	$(MAKE) TARGET=spi_safe_probe APP_MAIN=spi_safe_probe_main.c all
+	$(MAKE) TARGET=spi_safe_probe APP_MAIN=diagnostics/spi_safe_probe_main.c all
 
 spi-observe:
-	$(MAKE) TARGET=spi_observe APP_MAIN=spi_observe_main.c all
+	$(MAKE) TARGET=spi_observe APP_MAIN=diagnostics/spi_observe_main.c all
 
 spi-freq-sweep:
-	$(MAKE) TARGET=spi_freq_sweep APP_MAIN=spi_freq_sweep_main.c all
+	$(MAKE) TARGET=spi_freq_sweep APP_MAIN=diagnostics/spi_freq_sweep_main.c all
 
 safe-idle:
-	$(MAKE) TARGET=safe_idle APP_MAIN=safe_idle_main.c all
+	$(MAKE) TARGET=safe_idle APP_MAIN=diagnostics/safe_idle_main.c all
 
 ist8310:
-	$(MAKE) TARGET=ist8310_test APP_MAIN=ist8310_test_main.c all
+	$(MAKE) TARGET=ist8310_test APP_MAIN=diagnostics/ist8310_test_main.c all
 
 all: $(BUILD)/$(TARGET).elf $(BUILD)/$(TARGET).hex $(BUILD)/$(TARGET).bin
 
@@ -137,9 +153,3 @@ $(BUILD)/$(TARGET).bin: $(BUILD)/$(TARGET).elf
 
 clean:
 	rm -rf $(BUILD)
-
-
-
-
-
-
