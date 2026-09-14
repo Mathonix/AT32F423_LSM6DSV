@@ -54,7 +54,7 @@ extern "C" {
   * @brief usb vendor id and product id define
   */
 #define USBD_CDC_VENDOR_ID               0x2E3C
-#define USBD_CDC_PRODUCT_ID              0x5740
+#define USBD_CDC_PRODUCT_ID              0xF401
 
 /**
   * @brief usb descriptor size define
@@ -66,8 +66,8 @@ extern "C" {
 /**
   * @brief usb string define(vendor, product configuration, interface)
   */
-#define USBD_CDC_DESC_MANUFACTURER_STRING    "Artery"
-#define USBD_CDC_DESC_PRODUCT_STRING         "AT32 Virtual Com Port  "
+#define USBD_CDC_DESC_MANUFACTURER_STRING    "AT32"
+#define USBD_CDC_DESC_PRODUCT_STRING         "LSM6DSV USB CDC"
 #define USBD_CDC_DESC_CONFIGURATION_STRING   "Virtual ComPort Config"
 #define USBD_CDC_DESC_INTERFACE_STRING       "Virtual ComPort Interface"
 
@@ -101,3 +101,4 @@ extern usbd_desc_handler cdc_desc_handler;
 #endif
 
 #endif
+

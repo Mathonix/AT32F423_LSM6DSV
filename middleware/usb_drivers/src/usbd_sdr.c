@@ -23,6 +23,7 @@
   **************************************************************************
   */
 #include "usbd_sdr.h"
+#include <stddef.h>
 
 /** @addtogroup AT32F423_middlewares_usbd_drivers
   * @{
@@ -563,4 +564,5 @@ usb_sts_type usbd_endpoint_request(usbd_core_type *udev)
 /**
   * @}
   */
+
 

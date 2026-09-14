@@ -44,6 +44,12 @@ SRCS := \
   $(SRC_DIR)/bsp/ws2812.c \
   $(SRC_DIR)/drivers/can_test.c \
   $(SRC_DIR)/drivers/usb_cdc.c \
+  middleware/usb_drivers/src/usb_core.c \
+  middleware/usb_drivers/src/usbd_core.c \
+  middleware/usb_drivers/src/usbd_int.c \
+  middleware/usb_drivers/src/usbd_sdr.c \
+  middleware/usbd_class/cdc/cdc_class.c \
+  middleware/usbd_class/cdc/cdc_desc.c \
   $(SRC_DIR)/drivers/protocol.c \
   $(SRC_DIR)/bsp/at32f423_clock.c \
   $(SRC_DIR)/bsp/at32f423_int.c \
@@ -76,7 +82,9 @@ INCLUDES := \
   -I$(INC_DIR)/telemetry \
   -I$(LIB)/libraries/cmsis/cm4/core_support \
   -I$(LIB)/libraries/cmsis/cm4/device_support \
-  -I$(LIB)/libraries/drivers/inc
+  -I$(LIB)/libraries/drivers/inc \
+  -Imiddleware/usb_drivers/inc \
+  -Imiddleware/usbd_class/cdc
 
 CFLAGS := -mcpu=$(MCU) -mthumb -mfpu=fpv4-sp-d16 -mfloat-abi=hard \
   -D$(CHIP) -DUSE_STDPERIPH_DRIVER \
@@ -104,8 +112,9 @@ vpath %.c $(SRC_DIR)/app \
   $(SRC_DIR)/fusion \
   $(SRC_DIR)/diagnostics \
   $(LIB)/libraries/cmsis/cm4/device_support \
-  $(LIB)/libraries/drivers/src
-
+  $(LIB)/libraries/drivers/src \
+  middleware/usb_drivers/src \
+  middleware/usbd_class/cdc \
 vpath %.cpp $(SRC_DIR)/fusion
 
 .DEFAULT_GOAL := all
@@ -155,3 +164,7 @@ $(BUILD)/$(TARGET).bin: $(BUILD)/$(TARGET).elf
 
 clean:
 	rm -rf $(BUILD)
+
+
+
+
