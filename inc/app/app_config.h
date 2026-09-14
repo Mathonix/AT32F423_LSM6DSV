@@ -1,4 +1,4 @@
-﻿#ifndef APP_CONFIG_H
+#ifndef APP_CONFIG_H
 #define APP_CONFIG_H
 
 /* Central application configuration. Keep all board-level tuning here. */
@@ -72,7 +72,7 @@
 #define APP_CAN_BTS1              CAN_BTS1_10TQ
 #define APP_CAN_BTS2              CAN_BTS2_4TQ
 #define APP_CAN_TX_ENABLE          1U
-#define APP_CAN_TX_PERIOD_US    1000U /* 1 ms = 1 kHz output; requires a high-resolution scheduler */
+#define APP_CAN_TX_PERIOD_US     1000U /* 1 ms = 1 kHz output; requires a high-resolution scheduler */
 #define APP_CAN_RX_ENABLE          1U
 
 /* Damiao DM-IMU-L1 CAN Node Settings */

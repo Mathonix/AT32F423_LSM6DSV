@@ -349,21 +349,21 @@ void can_test_init(void)
   crm_periph_clock_enable(CRM_GPIOA_PERIPH_CLOCK, TRUE);
   crm_periph_clock_enable(CRM_CAN2_PERIPH_CLOCK, TRUE);
 
+  /* AT32 CAN RX must also be configured in alternate-function mode.
+   * Leaving PA2 as GPIO input disconnects CAN2_RX from the bus, so the
+   * controller cannot monitor its own dominant bits and immediately enters
+   * error-passive/bus-off. Match the official AT32 CAN example exactly. */
   gpio_default_para_init(&gpio_init_struct);
   gpio_init_struct.gpio_drive_strength = GPIO_DRIVE_STRENGTH_STRONGER;
   gpio_init_struct.gpio_out_type = GPIO_OUTPUT_PUSH_PULL;
   gpio_init_struct.gpio_mode = GPIO_MODE_MUX;
-  gpio_init_struct.gpio_pins = GPIO_PINS_3;
+  gpio_init_struct.gpio_pins = GPIO_PINS_2 | GPIO_PINS_3;
   gpio_init_struct.gpio_pull = GPIO_PULL_NONE;
   gpio_init(GPIOA, &gpio_init_struct);
+  gpio_pin_mux_config(GPIOA, GPIO_PINS_SOURCE2, GPIO_MUX_9);
   gpio_pin_mux_config(GPIOA, GPIO_PINS_SOURCE3, GPIO_MUX_9);
 
-  gpio_init_struct.gpio_mode = GPIO_MODE_INPUT;
-  gpio_init_struct.gpio_pins = GPIO_PINS_2;
-  gpio_init_struct.gpio_pull = GPIO_PULL_UP;
-  gpio_init(GPIOA, &gpio_init_struct);
-  gpio_pin_mux_config(GPIOA, GPIO_PINS_SOURCE2, GPIO_MUX_9);
-
+  can_reset(CAN2);
   can_default_para_init(&can_base_struct);
   can_base_struct.mode_selection = CAN_MODE_COMMUNICATE;
   can_base_struct.ttc_enable = FALSE;
@@ -372,13 +372,22 @@ void can_test_init(void)
   can_base_struct.prsf_enable = FALSE;
   can_base_struct.mdrsel_selection = CAN_DISCARDING_FIRST_RECEIVED;
   can_base_struct.mmssr_selection = CAN_SENDING_BY_ID;
-  can_base_init(CAN2, &can_base_struct);
+  if(can_base_init(CAN2, &can_base_struct) != SUCCESS)
+  {
+    can_test_live.init_ok = 0U;
+    return;
+  }
 
+  can_baudrate_default_para_init(&can_baudrate_struct);
   can_baudrate_struct.baudrate_div = APP_CAN_BAUDRATE_DIV;
   can_baudrate_struct.rsaw_size = APP_CAN_RSAW;
   can_baudrate_struct.bts1_size = APP_CAN_BTS1;
   can_baudrate_struct.bts2_size = APP_CAN_BTS2;
-  can_baudrate_set(CAN2, &can_baudrate_struct);
+  if(can_baudrate_set(CAN2, &can_baudrate_struct) != SUCCESS)
+  {
+    can_test_live.init_ok = 0U;
+    return;
+  }
 
 #if APP_CAN_RX_ENABLE
   {
@@ -388,7 +397,7 @@ void can_test_init(void)
     filter_init.filter_mode = CAN_FILTER_MODE_ID_MASK;
     filter_init.filter_fifo = CAN_FILTER_FIFO0;
     filter_init.filter_number = 0;
-    filter_init.filter_bit = CAN_FILTER_16BIT;
+    filter_init.filter_bit = CAN_FILTER_32BIT;
     filter_init.filter_id_high = 0U;
     filter_init.filter_id_low = 0U;
     filter_init.filter_mask_high = 0U;
@@ -433,7 +442,20 @@ void can_test_task(uint32_t now_us)
   {
     return;
   }
-  can_last_tx_us = now_us;
+  /* Preserve the 1 kHz phase instead of accumulating main-loop jitter.
+   * If execution was delayed by more than one period, skip the backlog rather
+   * than emitting a burst of stale attitude frames. */
+  can_last_tx_us += APP_CAN_TX_PERIOD_US;
+  if((uint32_t)(now_us - can_last_tx_us) >= APP_CAN_TX_PERIOD_US)
+  {
+    can_last_tx_us = now_us;
+  }
+
+  if(can_test_live.bus_off != 0U)
+  {
+    can_test_live.tx_no_mailbox_count++;
+    return;
+  }
 
   tx_message.standard_id = APP_CAN_TX_STANDARD_ID;
   tx_message.extended_id = 0U;
