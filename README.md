@@ -229,11 +229,37 @@ git diff --cached --stat
 
 以下视频用于记录当前固件的六轴、九轴和六轴快速启动测试结果：
 
-- [九轴模式测试视频](docs/videos/nie_axis.mp4)
-- [六轴模式测试视频](docs/videos/six_axis.mp4)
-- [六轴快速启动测试视频](docs/videos/six_axis_fastboot.mp4)
+#### 九轴模式测试
 
-视频文件位于 docs/videos/，可直接下载查看。
+<video controls preload="metadata" width="720" src="docs/videos/nie_axis.mp4">
+  您的浏览器不支持 HTML5 视频播放，请[点击下载视频](docs/videos/nie_axis.mp4)。
+</video>
+
+#### 六轴模式测试
+
+<video controls preload="metadata" width="720" src="docs/videos/six_axis.mp4">
+  您的浏览器不支持 HTML5 视频播放，请[点击下载视频](docs/videos/six_axis.mp4)。
+</video>
+
+#### 六轴快速启动测试
+
+<video controls preload="metadata" width="720" src="docs/videos/six_axis_fastboot.mp4">
+  您的浏览器不支持 HTML5 视频播放，请[点击下载视频](docs/videos/six_axis_fastboot.mp4)。
+</video>
+
+视频文件位于 `docs/videos/`，也可直接下载查看。
+
+### 测试数据概括
+
+以下数据来自三段视频中约每 15 秒取一个样本、共约 21 个点的 I0（Yaw）记录，数值单位按界面显示的度数统计：
+
+| 视频 | 起始 I0 | 5 分钟末 I0 | 首尾变化 | 极差 | 现象概括 |
+|---|---:|---:|---:|---:|---|
+| `nie_axis.mp4` | 170.8872 | 170.8856 | **-0.0016°** | **0.4797°** | 长期不漂，但有明显来回摆动，体现磁力计修正带来的波动 |
+| `six_axis.mp4` | -0.4836 | -0.5981 | **-0.1145°** | 0.1283° | 曲线非常平滑，但存在持续单向漂移，符合纯陀螺积分特征 |
+| `six_axis_fastboot.mp4` | -0.0788 | +0.0188 | **+0.0976°** | 0.1558° | 启动后先向负方向漂移，再反向变化，表现出快速启动零偏后台收敛过程 |
+
+> 注：上述数据用于当前三段视频的工程测试对比，不代表所有温度、姿态和安装条件下的最终指标。
 
 ## 注意事项
 
