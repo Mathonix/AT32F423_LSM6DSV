@@ -33,24 +33,34 @@ static int app_ok(void)
 {
   uint32_t sp = *(const uint32_t *)BL_APP_BASE;
   uint32_t pc = *(const uint32_t *)(BL_APP_BASE + 4U);
-  return ((sp & 0x2FFE0000U) == 0x20000000U &&
-          pc >= BL_APP_BASE && pc < BL_APP_END && (pc & 1U));
+  return ((sp >= 0x20000000U) && (sp <= 0x2000C000U) &&
+          ((pc & ~1U) >= BL_APP_BASE) && ((pc & ~1U) < BL_APP_END) && (pc & 1U));
 }
 
 static void jump_app(void)
 {
-  uint32_t sp = *(const uint32_t *)BL_APP_BASE;
-  uint32_t pc = *(const uint32_t *)(BL_APP_BASE + 4U);
+  const uint32_t sp = *(const uint32_t *)BL_APP_BASE;
+  const uint32_t pc = *(const uint32_t *)(BL_APP_BASE + 4U);
+
   __disable_irq();
+  SysTick->CTRL = 0U;
+  SysTick->LOAD = 0U;
+  SysTick->VAL = 0U;
   for(uint32_t i = 0U; i < 8U; ++i)
   {
     NVIC->ICER[i] = 0xFFFFFFFFU;
     NVIC->ICPR[i] = 0xFFFFFFFFU;
   }
+
+  /* Application vector table is located at 0x08008000. */
   SCB->VTOR = BL_APP_BASE;
   __DSB();
   __ISB();
+  __set_CONTROL(0U);
+  __ISB();
   __set_MSP(sp);
+  __DSB();
+  __ISB();
   ((void (*)(void))pc)();
   for(;;) {}
 }

@@ -149,3 +149,27 @@ git push origin HEAD:master
 - DAPLink SWD 速度最低使用 1 MHz；
 - USB FS 使用 PA11/PA12，时钟和 VBUS 忽略配置应与官方 USB CDC 例程一致；
 - CAN 通信必须经过正确的 CAN 收发器，回环模式不能证明外部总线、电阻和收发器连接全部正常。
+
+## Bootloader 应用跳转验证
+
+Bootloader 位于 `0x08000000`，应用位于 `0x08008000`。Bootloader 跳转前会关闭 SysTick、清除 NVIC 中断使能和挂起位，设置 `SCB->VTOR = 0x08008000`，恢复特权 Thread 模式并加载应用 MSP/PC。Bootloader 工程显式使用 `VECT_TAB_OFFSET=0x0000`，应用工程使用 `VECT_TAB_OFFSET=0x8000`。
+
+验证应用启动时应看到：
+
+```text
+VTOR    = 0x08008000
+PC      在 0x08008000 ~ 0x0803C000
+vqf_live.magic = 0x56465131
+whoami  = 0x70
+seq     持续递增
+fusion_hz 约等于 2000
+```
+
+验证前需要先烧录 Bootloader，再烧录应用：
+
+```powershell
+py -3 tools/dap/dap_flash_and_log.py --hex bootloader/build/at32f423_bootloader.hex --swd-frequency 1000000
+py -3 tools/dap/dap_flash_and_log.py --hex build/lsm6dsv_spi_test.hex --swd-frequency 1000000
+```
+
+Bootloader 的应用有效性检查同时验证 SRAM 栈顶、Thumb 复位地址和应用地址范围，避免空 Flash 或损坏镜像被跳转。
