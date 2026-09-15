@@ -89,9 +89,19 @@ INCLUDES := \
   -Imiddleware/usb_drivers/inc \
   -Imiddleware/usbd_class/cdc
 
+# Debug/bench builds keep fast startup enabled for validation. Set DEBUG_BUILD=0
+# for the normal production image (fast startup disabled by default).
+DEBUG_BUILD ?= 1
+SIX_AXIS ?= 0
+FAST_START_CFLAG := -DAPP_GYR_FAST_START_ENABLE=$(DEBUG_BUILD)
+# SIX_AXIS=1 disables magnetometer fusion and forces the runtime mode to 6-axis.
+MAG_FUSION_CFLAG := -DAPP_MAG_FUSION_ENABLE=$(if $(filter 1,$(SIX_AXIS)),0,1)
+
 CFLAGS := -mcpu=$(MCU) -mthumb -mfpu=fpv4-sp-d16 -mfloat-abi=hard \
   -D$(CHIP) -DUSE_STDPERIPH_DRIVER -DVECT_TAB_OFFSET=0x8000 \
   $(INCLUDES) \
+  $(FAST_START_CFLAG) \
+  $(MAG_FUSION_CFLAG) \
   -O1 -g -Wall -ffunction-sections -fdata-sections \
   -fno-common -fno-builtin $(EXTRA_CFLAGS)
 
@@ -122,7 +132,10 @@ vpath %.c $(SRC_DIR)/app \
 vpath %.cpp $(SRC_DIR)/fusion
 
 .DEFAULT_GOAL := all
-.PHONY: all clean spi-matrix spi-safe-probe spi-observe spi-freq-sweep safe-idle ist8310
+.PHONY: all bootloader clean spi-matrix spi-safe-probe spi-observe spi-freq-sweep safe-idle ist8310
+
+bootloader:
+	$(MAKE) -C bootloader -B
 
 spi-matrix:
 	$(MAKE) TARGET=spi_matrix APP_MAIN=diagnostics/spi_matrix_main.c all

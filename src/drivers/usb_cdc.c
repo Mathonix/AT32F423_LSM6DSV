@@ -57,13 +57,25 @@ static void usb_clock48m_select_local(void)
 
 void usb_cdc_init(void)
 {
-  usb_gpio_config_local();
+  /* Clear application queues before the USB core starts touching the CDC
+   * buffers.  This also makes a second init/re-enumeration deterministic. */
+  tx_r = tx_w = rx_r = rx_w = 0U;
+  /* The bootloader also initializes OTGFS1 before jumping to the app.  A
+   * peripheral reset here is required for a clean USB disconnect/reconnect;
+   * otherwise the app may inherit stale device/endpoint state and Windows
+   * will never complete enumeration after the bootloader fast-jump. */
   crm_periph_clock_enable(OTG_CLOCK, TRUE);
+  crm_periph_reset(CRM_OTGFS1_PERIPH_RESET, TRUE);
+  crm_periph_reset(CRM_OTGFS1_PERIPH_RESET, FALSE);
+  usb_gpio_config_local();
   usb_clock48m_select_local();
+  /* The official example uses group 4.  Set it here rather than relying on
+   * the reset value: the application has other interrupt sources and the USB
+   * IRQ must remain preemptible while the main loop services CDC buffers. */
+  nvic_priority_group_config(NVIC_PRIORITY_GROUP_4);
   nvic_irq_enable(OTG_IRQ, 3, 0);
   (void)usbd_init(&otg_core, USB_FULL_SPEED_CORE_ID, USB_ID,
                   &cdc_class_handler, &cdc_desc_handler);
-  tx_r = tx_w = rx_r = rx_w = 0U;
 }
 
 void usb_cdc_isr(void)
@@ -73,12 +85,25 @@ void usb_cdc_isr(void)
 
 int usb_cdc_configured(void)
 {
-  return (otg_core.dev.dev_config != 0U) ? 1 : 0;
+  return (otg_core.dev.conn_state == USB_CONN_STATE_CONFIGURED) ? 1 : 0;
 }
 
 void usb_cdc_task(void)
 {
   uint16_t n, i;
+
+  /* Do not call the class data helpers before SET_CONFIGURATION.  The
+   * middleware initializes g_tx_completed/g_rx_completed from the class init
+   * callback, so using them earlier can otherwise consume stale endpoint
+   * state after unplug/replug.  Drop queued application data while detached
+   * instead of replaying an old telemetry burst on the next connection. */
+  if(otg_core.dev.conn_state != USB_CONN_STATE_CONFIGURED)
+  {
+    tx_r = tx_w;
+    rx_r = rx_w;
+    return;
+  }
+
   uint16_t used = ring_used(tx_r, tx_w, USB_TX_RING_SIZE);
   if(used != 0U)
   {
@@ -121,6 +146,7 @@ int usb_cdc_write(const uint8_t *data, uint16_t len)
 {
   uint16_t free_n, i;
   if(data == NULL || len == 0U) return 0;
+  if(otg_core.dev.conn_state != USB_CONN_STATE_CONFIGURED) return -1;
   free_n = (uint16_t)((USB_TX_RING_SIZE - 1U) - ring_used(tx_r, tx_w, USB_TX_RING_SIZE));
   if(len > free_n) return -1;
   for(i = 0U; i < len; ++i)

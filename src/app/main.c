@@ -106,10 +106,10 @@ volatile struct {
                        * corrRateDegS, disagreementDeg, biasSigmaDegS */
 } vqf_nine_live = {0x39565146U, 0U, {0}, {0}};
 
-#define VOFA_N_CH   3U
-#define VOFA_BYTES  ((VOFA_N_CH * 4U) + 4U)
+#define VOFA_MAX_CH   6U
+#define VOFA_MAX_BYTES ((VOFA_MAX_CH * 4U) + 4U)
 
-static uint8_t vofa_dma[2][VOFA_BYTES];
+static uint8_t vofa_dma[2][VOFA_MAX_BYTES];
 static uint8_t vofa_sel;
 static uint32_t vofa_late;
 
@@ -158,6 +158,11 @@ static protocol_parser_t usb_protocol_parser;
 static stream_mode_t app_stream_mode = STREAM_MODE_VOFA_3CH;
 static fusion_mode_t app_fusion_mode = FUSION_MODE_9AXIS;
 static uint8_t app_relative_yaw_enabled;
+/* Runtime stream rate. It is intentionally volatile only in RAM for now;
+ * persistent output-rate settings need a versioned flash-record extension. */
+static uint16_t app_output_hz = APP_VOFA_OUTPUT_HZ;
+static uint16_t app_output_div = OUTPUT_DIV;
+static uint8_t app_stream_seq;
 static volatile uint8_t protocol_reset_pending;
 static volatile uint8_t app_settings_mode;
 static volatile uint8_t app_settings_dirty;
@@ -236,6 +241,28 @@ static void protocol_frame_received(uint8_t msg_id, uint8_t seq,
       }
       protocol_reply_ack(source, seq, msg_id, status, (uint16_t)app_stream_mode);
       break;
+    case AHRS_CMD_SET_OUTPUT_HZ:
+      /* 2 kHz fusion permits only exact integer divisors. This command is
+       * runtime-only; flash persistence is deliberately not implied. */
+      if((payload == NULL) || (len != 2U))
+      {
+        status = AHRS_ACK_INVALID_PARAM;
+      }
+      else
+      {
+        uint16_t hz = (uint16_t)payload[0] | ((uint16_t)payload[1] << 8);
+        if((hz == 0U) || (hz > APP_FUSION_HZ) || ((APP_FUSION_HZ % hz) != 0U))
+        {
+          status = AHRS_ACK_INVALID_PARAM;
+        }
+        else
+        {
+          app_output_hz = hz;
+          app_output_div = (uint16_t)(APP_FUSION_HZ / hz);
+        }
+      }
+      protocol_reply_ack(source, seq, msg_id, status, app_output_hz);
+      break;
     case AHRS_CMD_QUERY_STATUS:
       if(len != 0U)
       {
@@ -243,10 +270,10 @@ static void protocol_frame_received(uint8_t msg_id, uint8_t seq,
         break;
       }
       frame_len = protocol_pack_system_info(frame, seq, APP_FUSION_HZ,
-                                             APP_VOFA_OUTPUT_HZ, OUTPUT_DIV,
+                                             app_output_hz, app_output_div,
                                              imu_temp_live.temperature_c,
                                              (uint8_t)app_stream_mode,
-                                             (uint8_t)(APP_CAN_ENABLE != 0U));
+                                             (uint8_t)((APP_CAN_ENABLE != 0U) && (can_test_live.init_ok != 0U)));
       if(frame_len != 0U) protocol_send_frame(source, frame, frame_len);
       break;
     case AHRS_CMD_ENTER_SETTINGS:
@@ -337,6 +364,7 @@ static void protocol_frame_received(uint8_t msg_id, uint8_t seq,
 #endif
       break;
     case AHRS_CMD_SYSTEM_RESET:
+    case AHRS_CMD_ENTER_BOOTLOADER:
       if(len != 0U)
       {
         protocol_reply_ack(source, seq, msg_id, AHRS_ACK_INVALID_PARAM, 0U);
@@ -511,7 +539,6 @@ static float trimmed_mean(float *values, uint32_t n)
 
 static void vofa_send_justfloat(float late)
 {
-  static const uint8_t tail[4] = {0x00U, 0x00U, 0x80U, 0x7FU};
   static uint8_t filter_init;
 #if APP_VOFA_REST_HOLD_ENABLE
   static uint8_t rest_hold;
@@ -531,14 +558,11 @@ static void vofa_send_justfloat(float late)
   static uint8_t kf_clock_init;
   static uint8_t rate_lpf_init;
   static uint8_t motion_active;
-  const float nominal_dt = ((float)OUTPUT_DIV / FUSION_HZ);
+  const float nominal_dt = ((float)app_output_div / FUSION_HZ);
   float dt = nominal_dt;
-  float ch[VOFA_N_CH];
   float output_yaw;
   float output_pitch;
   float output_roll;
-  uint8_t *pkt = vofa_dma[vofa_sel];
-
     /* Use the real output interval when it is sane. This prevents a delayed
      * UART/I2C iteration from making the output filter use an incorrect gyro
      * integration interval. */
@@ -851,21 +875,62 @@ static void vofa_send_justfloat(float late)
     yaw_kf_sync_live.seq++;
   }
 
-  /* Send yaw, pitch and roll as a continuous 3-channel JustFloat frame.
-   At APP_VOFA_OUTPUT_HZ=1000 this is 16 bytes every 1 ms. */
-  ch[0]  = output_yaw;
-  ch[1]  = output_pitch;
-  ch[2]  = output_roll;
-  memcpy(pkt, ch, VOFA_N_CH * 4U);
-  memcpy(pkt + (VOFA_N_CH * 4U), tail, 4U);
-  (void)usb_cdc_write(pkt, (uint16_t)VOFA_BYTES);
-  if(uart_dma_send(pkt, (uint16_t)VOFA_BYTES) == 0)
+  /* Stream mode is now applied to the actual output path. The default is
+   * unchanged: JustFloat yaw/pitch/roll on both USB CDC and USART4. */
   {
-    vofa_sel ^= 1U;
-  }
-  else
-  {
-    vofa_late++;
+    uint16_t tx_len = 0U;
+    uint8_t *tx = vofa_dma[vofa_sel];
+    static const uint8_t tail[4] = {0x00U, 0x00U, 0x80U, 0x7FU};
+    float ch[VOFA_MAX_CH];
+
+    if(app_stream_mode == STREAM_MODE_VOFA_3CH ||
+       app_stream_mode == STREAM_MODE_VOFA_6CH)
+    {
+      uint8_t n = (app_stream_mode == STREAM_MODE_VOFA_6CH) ? 6U : 3U;
+      ch[0] = output_yaw;
+      ch[1] = output_pitch;
+      ch[2] = output_roll;
+      if(n == 6U)
+      {
+        ch[3] = vqf_live.gz;
+        ch[4] = vqf_live.az;
+        ch[5] = imu_temp_live.temperature_c;
+      }
+      memcpy(tx, ch, (uint16_t)n * 4U);
+      memcpy(tx + (uint16_t)n * 4U, tail, 4U);
+      tx_len = (uint16_t)n * 4U + 4U;
+    }
+    else if(app_stream_mode == STREAM_MODE_BIN_ATT)
+    {
+      uint8_t flags = (uint8_t)(vqf_live.rest_detected ? AHRS_FLAG_REST_DETECTED : 0U);
+      tx_len = protocol_pack_attitude(tx, app_stream_seq++, output_roll,
+                                      output_pitch, output_yaw, flags,
+                                      (uint16_t)millis());
+    }
+    else if(app_stream_mode == STREAM_MODE_BIN_COMPACT)
+    {
+      uint8_t flags = (uint8_t)(vqf_live.rest_detected ? AHRS_FLAG_REST_DETECTED : 0U);
+      tx_len = protocol_pack_compact(tx, app_stream_seq++, output_roll,
+                                     output_pitch, output_yaw, vqf_live.gz,
+                                     flags, (uint16_t)millis());
+    }
+    else if(app_stream_mode == STREAM_MODE_BIN_IMU)
+    {
+      tx_len = protocol_pack_imu(tx, app_stream_seq++, vqf_live.gx,
+                                 vqf_live.gy, vqf_live.gz, vqf_live.ax,
+                                 vqf_live.ay, vqf_live.az,
+                                 imu_temp_live.temperature_c,
+                                 (uint16_t)millis());
+    }
+
+    if(tx_len != 0U)
+    {
+      (void)usb_cdc_write(tx, tx_len);
+      if(uart_dma_send(tx, tx_len) == 0)
+        vofa_sel ^= 1U;
+      else
+        vofa_late++;
+    }
   }
 
 #if APP_CAN_ENABLE
@@ -998,7 +1063,17 @@ int main(void)
   uint32_t i;
   float temp_c = APP_GYR_TEMP_REF_C;
   uint8_t bias_fallback = 0U;
+  uint8_t bias_no_history = 0U;
   uint8_t bias_history_write_error = 0U;
+  uint8_t quick_bias_active = 0U;
+  uint8_t quick_bias_saved = 0U;
+  uint32_t quick_rest_ms = 0U;
+  uint32_t quick_save_elapsed_ms = 0U;
+  uint32_t quick_samples = 0U;
+  float quick_bias[3] = {0.0f, 0.0f, 0.0f};
+  float quick_bias_initial[3] = {0.0f, 0.0f, 0.0f};
+  float quick_bias_sum[3] = {0.0f, 0.0f, 0.0f};
+  float quick_bias_temp_c = APP_GYR_TEMP_REF_C;
 #if APP_SFLP_BIAS_ENABLE
   float sflp_bias_dps[3] = {0.0f, 0.0f, 0.0f};
   uint8_t sflp_bias_ok = 0U;
@@ -1026,6 +1101,10 @@ int main(void)
   {
     uint16_t stored_can_id = APP_CAN_DEFAULT_CAN_ID;
     (void)fusion_settings_load_ex(&app_fusion_mode, &stored_can_id);
+#if !APP_MAG_FUSION_ENABLE
+    /* A six-axis image must not inherit a previously stored nine-axis mode. */
+    app_fusion_mode = FUSION_MODE_6AXIS;
+#endif
     (void)can_test_set_node_id(stored_can_id);
   }
   app_relative_yaw_enabled = (app_fusion_mode == FUSION_MODE_9AXIS_RELATIVE) ? 1U : 0U;
@@ -1056,208 +1135,84 @@ int main(void)
 
   vqf_init(1.0f / FUSION_HZ, 1.0f / FUSION_HZ);
   {
-    float block_gyr_sum[3] = {0.0f, 0.0f, 0.0f};
-    float block_acc_sum[3] = {0.0f, 0.0f, 0.0f};
-    float gyr_bias[3];
-    float acc_avg[3];
-    uint32_t block_samples = 0U;
-    uint32_t block_count = 0U;
-    /* Discard samples for the configured settling time.  This used to be
-     * hard-coded to FUSION_HZ/5 (200 ms), so APP_CAL_DROP_MS had no effect. */
-    uint32_t drop_n = ((FUSION_RATE_HZ * (uint32_t)CAL_DROP_MS) + 999U) /
-                      1000U;
-    uint32_t cal_n = (uint32_t)((float)FUSION_RATE_HZ * CAL_REST_SECONDS + 0.5f);
-    uint32_t target_blocks;
-    uint32_t target_samples;
-    uint32_t tries;
-    uint32_t got = 0U;
-    uint32_t cal_start_ms;
-    uint8_t cal_timeout = 0U;
-    float acc_n3;
-    float gyr_n;
-    float cal_temp_sum = 0.0f;
-    uint32_t cal_temp_samples = 0U;
-    float calibration_temp_c = APP_GYR_TEMP_REF_C;
+    float startup_acc[3] = {0.0f, 0.0f, G_TO_MS2};
+    float history_latest[3] = {0.0f, 0.0f, 0.0f};
+    float history_average[3] = {0.0f, 0.0f, 0.0f};
+    float history_nearest[3] = {0.0f, 0.0f, 0.0f};
+    float nearest_temp_c = 0.0f;
+    uint32_t history_count = 0U;
+    uint8_t nearest_valid = 0U;
+    uint8_t history_corrupt = 0U;
+    float gyr_bias[3] = {0.0f, 0.0f, 0.0f};
+    float acc_avg[3] = {0.0f, 0.0f, G_TO_MS2};
+    lsm6dsv_raw_t startup_raw;
+    int history_valid;
 
-    if(CAL_BLOCK_SAMPLES == 0U || CAL_BLOCK_MAX == 0U)
+    /* Read one sample only to obtain an immediate gravity vector and current
+     * temperature. There is deliberately no startup calibration loop here. */
+    (void)lsm6dsv_wait_sample(2000U);
+    if(lsm6dsv_read_raw(&startup_raw) == 0)
     {
-      (void)sensor_init_retry_loop(-21);
-    }
-    target_blocks = (cal_n + CAL_BLOCK_SAMPLES - 1U) / CAL_BLOCK_SAMPLES;
-    if(target_blocks == 0U) target_blocks = 1U;
-    if(target_blocks > CAL_BLOCK_MAX) target_blocks = CAL_BLOCK_MAX;
-    target_samples = target_blocks * CAL_BLOCK_SAMPLES;
-
-    tries = 0U;
-    while((got < drop_n) && (tries < (drop_n * 4U)))
-    {
-      ws2812_calibration_task(millis());
-      tries++;
-      if(lsm6dsv_wait_sample(2000U) != 0)
-      {
-        continue;
-      }
-      if(lsm6dsv_read_raw(&raw) != 0)
-      {
-        continue;
-      }
-      got++;
-      (void)update_temperature(raw.temp_raw);
-    }
-
-    /* Allow one extra second beyond the requested rest-capture duration.
-     * With APP_CAL_REST_SECONDS=3 s, the capture window is 4 s. */
-    cal_start_ms = millis();
-    tries = 0U;
-    while((cal_timeout == 0U) &&
-          (block_count < target_blocks) &&
-          (tries < (target_samples * 4U)))
-    {
-      ws2812_calibration_task(millis());
-      if((uint32_t)(millis() - cal_start_ms) >=
-         (uint32_t)((CAL_REST_SECONDS + 1.0f) * 1000.0f))
-      {
-        cal_timeout = 1U;
-        break;
-      }
-      tries++;
-      if(lsm6dsv_wait_sample(2000U) != 0)
-      {
-        continue;
-      }
-      if(lsm6dsv_read_raw(&raw) != 0)
-      {
-        continue;
-      }
-      temp_c = update_temperature(raw.temp_raw);
-      for(i = 0; i < 3U; i++)
-      {
-        gyr[i] = gyro_dps_from_raw(i, raw.gyr[i], temp_c) * DEG2RAD;
-  #if APP_ACC_CAL_ENABLE
-      acc[i] = acc_calibrate_g(i, (float)raw.acc[i] * ACC_G_PER_LSB) * G_TO_MS2;
-#else
-      acc[i] = (float)raw.acc[i] * ACC_G_PER_LSB * G_TO_MS2;
-#endif
-      }
-      gyr_n = sqrtf(gyr[0] * gyr[0] + gyr[1] * gyr[1] + gyr[2] * gyr[2]);
-      acc_n3 = sqrtf(acc[0] * acc[0] + acc[1] * acc[1] + acc[2] * acc[2]);
-      if((gyr_n > (CAL_GYR_REST_DPS * DEG2RAD)) ||
-         (fabsf(acc_n3 - G_TO_MS2) > CAL_ACC_REST_MS2))
-      {
-        continue;
-      }
-      cal_temp_sum += temp_c;
-      cal_temp_samples++;
+      temp_c = update_temperature(startup_raw.temp_raw);
       for(i = 0U; i < 3U; ++i)
       {
-        block_gyr_sum[i] += gyr[i];
-        block_acc_sum[i] += acc[i];
-      }
-      block_samples++;
-      if(block_samples >= CAL_BLOCK_SAMPLES)
-      {
-        for(i = 0U; i < 3U; ++i)
-        {
-          cal_gyr_blocks[i][block_count] =
-              block_gyr_sum[i] / (float)CAL_BLOCK_SAMPLES;
-          cal_acc_blocks[i][block_count] =
-              block_acc_sum[i] / (float)CAL_BLOCK_SAMPLES;
-          block_gyr_sum[i] = 0.0f;
-          block_acc_sum[i] = 0.0f;
-        }
-        block_samples = 0U;
-        block_count++;
-      }
-    }
-    /* A complete stationary window is required before accepting this boot's
-     * gyro bias.  If it fails, use the persistent history instead of halting
-     * the application.  A timeout also discards partial blocks so the VQF
-     * prime uses the same fallback path as a failed static calibration. */
-    if(cal_timeout != 0U)
-    {
-      block_count = 0U;
-      block_samples = 0U;
-    }
-    {
-      const uint8_t current_cal_ok = (uint8_t)((cal_timeout == 0U) &&
-                                               (block_count >= target_blocks));
-      float history_latest[3] = {0.0f, 0.0f, 0.0f};
-      float history_average[3] = {0.0f, 0.0f, 0.0f};
-      float history_nearest[3] = {0.0f, 0.0f, 0.0f};
-      float history_nearest_temp = 0.0f;
-      uint32_t history_count = 0U;
-      uint8_t history_nearest_valid = 0U;
-      uint8_t history_corrupt = 0U;
-      int history_valid;
-
-      if(block_count > 0U)
-      {
-        /* Trim 10% of the block means at both ends. */
-        for(i = 0U; i < 3U; ++i)
-        {
-          gyr_bias[i] = trimmed_mean(cal_gyr_blocks[i], block_count);
-          acc_avg[i] = trimmed_mean(cal_acc_blocks[i], block_count);
-        }
-      }
-      else
-      {
-        acc_avg[0] = 0.0f;
-        acc_avg[1] = 0.0f;
-        acc_avg[2] = G_TO_MS2;
-      }
-
-      history_valid = gyro_bias_history_load_for_temp(
-          history_latest, history_average, history_nearest, temp_c,
-          CAL_BIAS_TEMP_WINDOW_C, &history_nearest_temp,
-          &history_nearest_valid, &history_count, &history_corrupt);
-      if(current_cal_ok != 0U)
-      {
-#if APP_SFLP_BIAS_ENABLE
-        if((sflp_bias_ok != 0U) &&
-           (fabsf(sflp_bias_dps[0]) <= APP_SFLP_BIAS_MAX_DPS) &&
-           (fabsf(sflp_bias_dps[1]) <= APP_SFLP_BIAS_MAX_DPS) &&
-           (fabsf(sflp_bias_dps[2]) <= APP_SFLP_BIAS_MAX_DPS))
-        {
-          gyr_bias[0] = sflp_bias_dps[0] * DEG2RAD;
-          gyr_bias[1] = sflp_bias_dps[1] * DEG2RAD;
-          gyr_bias[2] = sflp_bias_dps[2] * DEG2RAD;
-        }
+#if APP_ACC_CAL_ENABLE
+        startup_acc[i] = acc_calibrate_g(i, (float)startup_raw.acc[i] * ACC_G_PER_LSB) * G_TO_MS2;
+#else
+        startup_acc[i] = (float)startup_raw.acc[i] * ACC_G_PER_LSB * G_TO_MS2;
 #endif
-        /* Save the mean temperature of the same accepted stationary samples
-         * used to calculate this bias. */
-        if(cal_temp_samples != 0U)
-          calibration_temp_c = cal_temp_sum / (float)cal_temp_samples;
-        if(gyro_bias_history_save_at_temp(gyr_bias, calibration_temp_c) != 0)
-        {
-          bias_history_write_error = 1U;
-        }
-      }
-      else
-      {
-        bias_fallback = 1U;
-        if((history_valid != 0) && (history_nearest_valid != 0U))
-        {
-          for(i = 0U; i < 3U; ++i) gyr_bias[i] = history_nearest[i];
-        }
-        else if((history_valid != 0) && (history_count >= GYRO_BIAS_HISTORY_MAX))
-        {
-          for(i = 0U; i < 3U; ++i) gyr_bias[i] = history_average[i];
-        }
-        else if(history_valid != 0)
-        {
-          /* Fewer than 15 records: use the most recent intact calibration. */
-          for(i = 0U; i < 3U; ++i) gyr_bias[i] = history_latest[i];
-        }
-        else
-        {
-          gyr_bias[0] = APP_GYR_DEFAULT_BIAS_X_DPS * DEG2RAD;
-          gyr_bias[1] = APP_GYR_DEFAULT_BIAS_Y_DPS * DEG2RAD;
-          gyr_bias[2] = APP_GYR_DEFAULT_BIAS_Z_DPS * DEG2RAD;
-        }
-        (void)history_nearest_temp;
-        (void)history_corrupt; /* CRC-invalid/power-loss records are ignored. */
       }
     }
+#if APP_GYR_FAST_START_ENABLE
+    history_valid = gyro_bias_history_load_for_temp(
+        history_latest, history_average, history_nearest, temp_c,
+        CAL_BIAS_TEMP_WINDOW_C, &nearest_temp_c, &nearest_valid,
+        &history_count, &history_corrupt);
+
+    if((history_valid != 0) && (nearest_valid != 0U))
+    {
+      for(i = 0U; i < 3U; ++i) quick_bias[i] = history_nearest[i];
+      quick_bias_temp_c = nearest_temp_c;
+    }
+    else
+    {
+      /* No temperature-matched history: use the configured fixed defaults.
+       * This is also the explicit missing-history indication for the LED. */
+      quick_bias[0] = APP_GYR_DEFAULT_BIAS_X_DPS * DEG2RAD;
+      quick_bias[1] = APP_GYR_DEFAULT_BIAS_Y_DPS * DEG2RAD;
+      quick_bias[2] = APP_GYR_DEFAULT_BIAS_Z_DPS * DEG2RAD;
+      quick_bias_temp_c = temp_c;
+      bias_no_history = 1U;
+      bias_fallback = 1U;
+    }
+    for(i = 0U; i < 3U; ++i)
+    {
+      quick_bias_initial[i] = quick_bias[i];
+      gyr_bias[i] = quick_bias[i];
+      acc_avg[i] = startup_acc[i];
+    }
+    quick_bias_active = 1U;
+    (void)history_average;
+    (void)history_count;
+    (void)history_corrupt;
+#else
+    /* Fast startup is deliberately disabled in normal builds. Keep the
+     * immediate sensor seed deterministic; a debug build can enable the
+     * history/background correction path with FAST_START=1. */
+    quick_bias[0] = APP_GYR_DEFAULT_BIAS_X_DPS * DEG2RAD;
+    quick_bias[1] = APP_GYR_DEFAULT_BIAS_Y_DPS * DEG2RAD;
+    quick_bias[2] = APP_GYR_DEFAULT_BIAS_Z_DPS * DEG2RAD;
+    for(i = 0U; i < 3U; ++i)
+    {
+      gyr_bias[i] = quick_bias[i];
+      acc_avg[i] = startup_acc[i];
+    }
+    quick_bias_active = 0U;
+    (void)history_valid;
+    (void)history_average;
+    (void)history_count;
+    (void)history_corrupt;
+#endif
     vqf_prime_rest(acc_avg, gyr_bias);
   }
   vqf_live.seq = 2;
@@ -1338,6 +1293,70 @@ int main(void)
 
     t0 = dwt_cycles();
     vqf_update(gyr_lpf, acc);
+
+    /* Fast-start background bias refinement. VQF is already running using the
+     * persisted bias; while the unit remains still, average the live residual
+     * and move the estimate gradually instead of causing an attitude step. */
+    if(quick_bias_active != 0U)
+    {
+      const float residual[3] = {
+        gyr[0] - quick_bias[0], gyr[1] - quick_bias[1], gyr[2] - quick_bias[2]
+      };
+      const float residual_norm = sqrtf(residual[0] * residual[0] +
+                                        residual[1] * residual[1] +
+                                        residual[2] * residual[2]);
+      const float acc_norm = sqrtf(acc[0] * acc[0] + acc[1] * acc[1] + acc[2] * acc[2]);
+      const uint32_t now_ms = millis();
+      const uint32_t elapsed_ms = (quick_save_elapsed_ms == 0U) ? 0U :
+                                   (uint32_t)(now_ms - quick_save_elapsed_ms);
+      if((residual_norm <= (CAL_GYR_REST_DPS * DEG2RAD)) &&
+         (fabsf(acc_norm - G_TO_MS2) <= CAL_ACC_REST_MS2))
+      {
+        quick_rest_ms += elapsed_ms;
+        quick_bias_sum[0] += gyr[0];
+        quick_bias_sum[1] += gyr[1];
+        quick_bias_sum[2] += gyr[2];
+        quick_samples++;
+        if(quick_rest_ms >= APP_GYR_FAST_START_REST_MS && quick_samples != 0U)
+        {
+          const float measured[3] = {
+            quick_bias_sum[0] / (float)quick_samples,
+            quick_bias_sum[1] / (float)quick_samples,
+            quick_bias_sum[2] / (float)quick_samples
+          };
+          const float alpha = APP_GYR_FAST_START_BLEND;
+          quick_bias[0] += alpha * (measured[0] - quick_bias[0]);
+          quick_bias[1] += alpha * (measured[1] - quick_bias[1]);
+          quick_bias[2] += alpha * (measured[2] - quick_bias[2]);
+          vqf_set_gyr_bias(quick_bias);
+          if((quick_rest_ms >= APP_GYR_FAST_START_SAVE_MS) && (quick_bias_saved == 0U))
+          {
+            const float delta = fabsf(quick_bias[0] - quick_bias_initial[0]) +
+                                fabsf(quick_bias[1] - quick_bias_initial[1]) +
+                                fabsf(quick_bias[2] - quick_bias_initial[2]);
+            if((delta > (APP_GYR_FAST_START_SAVE_DELTA_DPS * DEG2RAD)) ||
+               (fabsf(temp_c - quick_bias_temp_c) > APP_GYR_FAST_START_SAVE_TEMP_C))
+            {
+              if(gyro_bias_history_save_at_temp(quick_bias, temp_c) != 0)
+                bias_history_write_error = 1U;
+              else
+                quick_bias_saved = 1U;
+            }
+            else
+            {
+              quick_bias_saved = 1U;
+            }
+          }
+        }
+      }
+      else
+      {
+        quick_rest_ms = 0U;
+        quick_samples = 0U;
+        quick_bias_sum[0] = quick_bias_sum[1] = quick_bias_sum[2] = 0.0f;
+      }
+      quick_save_elapsed_ms = now_ms;
+    }
     /* Non-blocking 50 Hz magnetometer scheduler: never wait 5 ms inside
      * the 2 kHz IMU/VQF path. Only the short I2C trigger/read transactions
      * occupy the loop. */
@@ -1405,7 +1424,7 @@ int main(void)
     vqf_us = (dwt_cycles() - t0) / (system_core_clock / 1000000U);
     fusion_n++;
 
-    if((fusion_n % OUTPUT_DIV) == 0U)
+    if((fusion_n % app_output_div) == 0U)
     {
       /* Odd/even sequence lock lets DAPLink read a coherent live snapshot
        * without halting the 2 kHz fusion loop. */
@@ -1574,7 +1593,7 @@ int main(void)
               (app_settings_dirty != 0U))
       {
         ws2812_normal_task(millis(), led_mode,
-                           bias_fallback,
+                           bias_no_history,
                            (uint8_t)vqf_get_mag_dist_detected(),
                            app_settings_dirty,
                            bias_history_write_error);

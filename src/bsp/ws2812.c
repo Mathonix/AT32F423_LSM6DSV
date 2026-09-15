@@ -159,9 +159,13 @@ void ws2812_normal_task(uint32_t now_ms, ws2812_mode_t mode, uint8_t calibration
 
   /* A fallback warning briefly overlays the normal color once per second.
    * It is intentionally short so the breathing state remains visible. */
-  if((calibration_failed != 0U) && ((now_ms % 1000U) < 140U))
+  if((calibration_failed != 0U) &&
+     (((now_ms % 2000U) < 120U) ||
+      (((now_ms % 2000U) >= 260U) && ((now_ms % 2000U) < 380U))))
   {
-    ws2812_set_rgb(48U, 0U, 0U); /* failed startup calibration: red flash */
+    /* Two short red flashes every two seconds; outside these windows the
+     * normal breathing color remains visible. This task is non-blocking. */
+    ws2812_set_rgb(48U, 0U, 0U);
   }
   else if(((settings_pending_reboot != 0U) || (history_error != 0U)) &&
           ((now_ms % 1000U) < 120U))

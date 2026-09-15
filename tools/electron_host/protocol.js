@@ -1,7 +1,7 @@
 ﻿const SYNC = [0xaa, 0x55];
 const TAIL = [0, 0, 0x80, 0x7f];
 const MAX_PAYLOAD = 64;
-const CMD = { PING: 0x10, ZERO: 0x11, CAL: 0x12, STREAM: 0x13, QUERY: 0x14, RESET: 0x15, ENTER: 0x17, EXIT: 0x18, MODE: 0x19, CAN_ID: 0x1a, GYRO_60: 0x1b, ACC_6FACE: 0x1c };
+const CMD = { PING: 0x10, ZERO: 0x11, CAL: 0x12, STREAM: 0x13, QUERY: 0x14, RESET: 0x15, BOOTLOADER: 0x16, ENTER: 0x17, EXIT: 0x18, MODE: 0x19, CAN_ID: 0x1a, GYRO_60: 0x1b, ACC_6FACE: 0x1c };
 const MODE = { SIX: 0, NINE: 1, RELATIVE: 2 };
 const ACK = { SUCCESS: 0, UNKNOWN: 1, INVALID: 2, FAILED: 3 };
 function crc16(bytes) { let crc = 0xffff; for (const b of bytes) { crc ^= b << 8; for (let i = 0; i < 8; i++) crc = (crc & 0x8000) ? ((crc << 1) ^ 0x1021) & 0xffff : (crc << 1) & 0xffff; } return crc; }

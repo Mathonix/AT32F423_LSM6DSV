@@ -11,6 +11,19 @@
 /* Maximum temperature difference for selecting a temperature-matched
  * historical gyro bias during startup fallback. */
 #define APP_GYR_BIAS_TEMP_WINDOW_C     5.0f
+
+/* Fast startup: use a valid temperature-matched history record, then refine
+ * it only after confirmed rest. A save is attempted at most once per boot. */
+#ifndef APP_GYR_FAST_START_ENABLE
+/* Normal/production builds keep the legacy startup calibration path.
+ * The debug Makefile enables fast start explicitly for bench testing. */
+#define APP_GYR_FAST_START_ENABLE      0U
+#endif
+#define APP_GYR_FAST_START_REST_MS     1000U
+#define APP_GYR_FAST_START_SAVE_MS     5000U
+#define APP_GYR_FAST_START_BLEND       0.005f
+#define APP_GYR_FAST_START_SAVE_DELTA_DPS 0.02f
+#define APP_GYR_FAST_START_SAVE_TEMP_C 2.0f
 #define APP_GYR_TEMP_LPF_HZ            1.0f
 #define APP_GYR_TEMP_COEFF_X_DPS_PER_C 0.0f
 #define APP_GYR_TEMP_COEFF_Y_DPS_PER_C 0.0f
@@ -42,7 +55,9 @@
 #define APP_VQF_TAU_MAG           2.0f
 
 /* Enable calibrated IST8310 updates in Full VQF for 9-axis yaw stabilization. */
+#ifndef APP_MAG_FUSION_ENABLE
 #define APP_MAG_FUSION_ENABLE     1U
+#endif
 #define APP_MAG_VQF_UPDATE_DIV    5U
 /* Relative-yaw output reference: 0 = VQF/KF yaw, 1 = yaw relative to boot.
  * This changes only the published yaw reference; VQF remains 9-axis. */

@@ -14,9 +14,7 @@ BL_APP_END is the exclusive address 0x0803C000. The application must be linked w
 
 ## Startup behavior
 
-After reset the bootloader initializes USART4 and USB CDC, then waits 3 seconds. The timeout uses DWT->CYCCNT and system_core_clock, not SysTick. During the window, valid update traffic keeps the bootloader active. After the window it jumps to an application with a valid vector table; with no valid application it stays in update mode.
-
-The application-side automatic boot request has not been board-verified. Manual reset followed immediately by the updater is the recommended entry method. The legacy AA 00 00 0D request is only a compatibility attempt and is not guaranteed to enter the bootloader.
+After reset the bootloader initializes USART4 and USB CDC. If the application is valid and no boot request cookie is present, it jumps to the application immediately; normal startup therefore does not spend time in the bootloader. The application can request maintenance with command 0x16 (or the legacy AA 00 00 0D request), which stores a RAM cookie and resets. In that case the bootloader remains in update mode until the host finishes the update or the device is reset. If no valid application exists, it also remains in update mode for recovery.
 
 ## Protocol
 
@@ -37,7 +35,7 @@ Outputs are bootloader/build/at32f423_bootloader.elf, .hex, and .bin. Build the 
 
 The canonical updater is `bootloader/tools/bl_upload.py`. It does not send an application-entry request by default; use `--enter` only for the unverified legacy request, or `--no-enter` explicitly. `tools/bootloader_update.py` is a legacy compatible tool with a different CLI.
 
-After SWD flashing the bootloader, reset the target and run within the 3-second window:
+After SWD flashing the bootloader, reset the target. A normal reset jumps straight to the application; send the host bootloader-entry command when an update is needed:
 
 ```powershell
 py -3 -m pip install pyserial

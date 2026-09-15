@@ -1,7 +1,8 @@
-﻿# Build artifacts
-build/
-objects/
-listings/
+﻿# Firmware build outputs
+/build/
+/build_sync/
+/objects/
+/listings/
 *.o
 *.d
 *.elf
@@ -10,32 +11,49 @@ listings/
 *.map
 *.axf
 
-# Python caches and local environments
+# Host applications and local build outputs
+**/node_modules/
+**/dist/
+**/dist_manual/
+**/src-tauri/target/
+**/src-tauri/gen/
+*.exe
+*.dll
+
+# Python, Rust, Node and editor state
 __pycache__/
 *.py[cod]
 .pytest_cache/
 .venv/
+*.pdb
+*.ilk
+.vscode/
+.idea/
+.DS_Store
 
-# Logs and temporary outputs
+# Logs and temporary files
 *.log
-*.synctex.gz
 *.tmp
+*.bak
+*.swp
 
-# Host dependencies and generated binaries
-**/node_modules/
-**/dist/
-**/dist_manual/
-*.exe
-*.dll
-
-# Generated captures and archives
+# Captures, archives and generated evidence
 *.csv
 *.zip
 *.7z
 *.rar
+/artifacts/
+E-top120.txt
+code_refs.txt
 
-# Nested vendor repositories
+# Local downloaded tools / duplicate prototypes
+/es-x64/
+/WebPCAN-Studio-v0.9.0/
+/webpcan-studio/
+
+# Nested vendor repository metadata
 AT32F423_Firmware_Library/.git/
-
-# Wrangler local state
 **/.wrangler/
+
+/upper/WebPCAN-Studio-v0.9.0/
+*.before-*

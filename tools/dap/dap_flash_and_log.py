@@ -10,7 +10,9 @@ from pathlib import Path
 
 from pyocd.core.helpers import ConnectHelper
 
-HEX_PATH = Path(r"E:\Desktop\CV_resume\Program\AT32F423_LSM6DSV_SPI_Test\build\lsm6dsv_spi_test.hex")
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+HEX_PATH = PROJECT_ROOT / "build" / "lsm6dsv_spi_test.hex"
+BOOT_HEX_PATH = PROJECT_ROOT / "bootloader" / "build" / "at32f423_bootloader.hex"
 COM_PORT = None
 BAUD = 2000000
 DEFAULT_SWD_FREQUENCY = 1_000_000
@@ -224,20 +226,25 @@ def read_uart(port: str, seconds=8.0, baud=BAUD) -> str:
 
 def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--hex", type=Path, default=HEX_PATH)
+    ap.add_argument("--hex", type=Path, default=None,
+                    help="Intel HEX image; defaults to the application image")
+    ap.add_argument("--bootloader", action="store_true",
+                    help="flash bootloader/build/at32f423_bootloader.hex instead of the application")
     ap.add_argument("--port", help="UART port; omit to skip UART logging")
     ap.add_argument("--baud", type=int, default=BAUD)
     ap.add_argument("--seconds", type=float, default=8.0)
     ap.add_argument("--swd-frequency", type=int, default=DEFAULT_SWD_FREQUENCY,
                     help="SWD clock in Hz; minimum 1000000")
     args = ap.parse_args()
+    image_path = BOOT_HEX_PATH if args.bootloader else (args.hex or HEX_PATH)
     if args.swd_frequency < MIN_SWD_FREQUENCY:
         print(f"SWD frequency must be at least {MIN_SWD_FREQUENCY} Hz")
         return 2
-    if not args.hex.exists():
-        print("missing hex", args.hex)
+    if not image_path.exists():
+        print("missing hex", image_path)
         return 1
-    mem = parse_hex(args.hex)
+    mem = parse_hex(image_path)
+    print(f"image file: {image_path}")
     print(f"hex bytes: {len(mem)}")
     flash_target(mem, args.swd_frequency)
     time.sleep(0.4)

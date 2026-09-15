@@ -22,6 +22,18 @@ static void clock_init(void){crm_reset();crm_periph_clock_enable(CRM_PWC_PERIPH_
 static void uart_init_local(void){gpio_init_type g;crm_periph_clock_enable(CRM_GPIOA_PERIPH_CLOCK,TRUE);crm_periph_clock_enable(CRM_USART4_PERIPH_CLOCK,TRUE);gpio_default_para_init(&g);g.gpio_pins=GPIO_PINS_0|GPIO_PINS_1;g.gpio_mode=GPIO_MODE_MUX;g.gpio_out_type=GPIO_OUTPUT_PUSH_PULL;g.gpio_pull=GPIO_PULL_NONE;g.gpio_drive_strength=GPIO_DRIVE_STRENGTH_STRONGER;gpio_init(GPIOA,&g);gpio_pin_mux_config(GPIOA,GPIO_PINS_SOURCE0,GPIO_MUX_8);gpio_pin_mux_config(GPIOA,GPIO_PINS_SOURCE1,GPIO_MUX_8);usart_init(USART4,BL_UART_BAUD,USART_DATA_8BITS,USART_STOP_1_BIT);usart_transmitter_enable(USART4,TRUE);usart_receiver_enable(USART4,TRUE);usart_enable(USART4,TRUE);}
 static void usb_init_local(void){gpio_init_type g;crm_periph_clock_enable(CRM_GPIOA_PERIPH_CLOCK,TRUE);gpio_default_para_init(&g);g.gpio_pins=GPIO_PINS_11|GPIO_PINS_12;g.gpio_mode=GPIO_MODE_MUX;g.gpio_out_type=GPIO_OUTPUT_PUSH_PULL;g.gpio_pull=GPIO_PULL_NONE;g.gpio_drive_strength=GPIO_DRIVE_STRENGTH_STRONGER;gpio_init(GPIOA,&g);gpio_pin_mux_config(GPIOA,GPIO_PINS_SOURCE11,GPIO_MUX_10);gpio_pin_mux_config(GPIOA,GPIO_PINS_SOURCE12,GPIO_MUX_10);crm_periph_clock_enable(CRM_OTGFS1_PERIPH_CLOCK,TRUE);crm_usb_clock_source_select(CRM_USB_CLOCK_SOURCE_HICK);crm_periph_clock_enable(CRM_ACC_PERIPH_CLOCK,TRUE);acc_write_c1(7980);acc_write_c2(8000);acc_write_c3(8020);acc_calibration_mode_enable(ACC_CAL_HICKTRIM,TRUE);nvic_irq_enable(OTGFS1_IRQn,3,0);usbd_init(&core,USB_FULL_SPEED_CORE_ID,USB_ID,&cdc_class_handler,&cdc_desc_handler);}
 void bl_io_init(void){clock_init();uart_init_local();usb_init_local();}
+void bl_io_deinit(void)
+{
+  /* Release OTGFS1 before the application reinitializes the same USB core. */
+  if(core.usb_reg != 0)
+  {
+    usb_interrupt_disable(core.usb_reg);
+    usbd_disconnect(&core.dev);
+  }
+  usb_delay_ms(20U);
+  crm_periph_reset(CRM_OTGFS1_PERIPH_RESET, TRUE);
+  crm_periph_reset(CRM_OTGFS1_PERIPH_RESET, FALSE);
+}
 void OTGFS1_IRQHandler(void){usbd_irq_handler(&core);}
 int bl_usb_ready(void){return core.dev.dev_config!=0;}
 static void usb_poll_rx(void){uint16_t n,i; if(!bl_usb_ready())return; n=usb_vcp_get_rxdata(&core.dev,usb_packet);for(i=0;i<n;i++){uint16_t next=(uint16_t)((usb_fifo_w+1U)&511U);if(next!=usb_fifo_r){usb_fifo[usb_fifo_w]=usb_packet[i];usb_fifo_w=next;}}}
