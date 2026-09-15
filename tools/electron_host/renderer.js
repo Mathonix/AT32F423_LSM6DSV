@@ -1,4 +1,4 @@
-﻿const { CMD, MODE, ACK, packet, parseBinary, decodeBinary, parseJustFloat } = window.host.protocol;
+const { CMD, MODE, ACK, packet, parseBinary, decodeBinary, parseJustFloat } = window.host.protocol;
 const $ = (id) => document.getElementById(id);
 let connected = false, seq = 0, binary = [], just = [], frames = 0, rateAt = performance.now(), pose = { yaw: 0, pitch: 0, roll: 0, temp: null }, setting = false, pendingExit = false, pendingReset = false;
 const log = (s) => { const n = $('log'); n.textContent += `[${new Date().toLocaleTimeString()}] ${s}\n`; n.scrollTop = n.scrollHeight; };
@@ -10,7 +10,24 @@ async function send(cmd, payload = []) { if (!connected) { say('请先连接串�
 function handle(frame) { const d = decodeBinary(frame); if (d.kind === 'pose') updatePose(d); else if (d.kind === 'ack') { log(`ACK 0x${d.cmd.toString(16).padStart(2,'0')} status=${d.status} detail=${d.detail}`); if (d.cmd === CMD.ENTER) { setting = d.status === ACK.SUCCESS; updateSettings(); say(setting ? '已进入设置模式' : `进入设置失败 status=${d.status}`); } else if (d.cmd === CMD.EXIT) { if (d.status === ACK.SUCCESS) { setting = false; updateSettings(); say('已退出设置模式'); } } else if (d.cmd === CMD.MODE) { if (d.status !== ACK.SUCCESS) { pendingExit = pendingReset = false; say(`模式设置失败 status=${d.status} detail=${d.detail}`); } else if (pendingReset) { pendingReset = false; say('模式已保存，设备即将重启'); } else if (pendingExit) { pendingExit = false; void send(CMD.EXIT); } else say('模式设置成功'); } else if (d.cmd === CMD.CAN_ID) say(d.status === 0 ? `CAN ID 已写入 0x${d.detail.toString(16).padStart(3,'0')}` : `CAN ID 设置失败 status=${d.status}`); else if (d.cmd === CMD.GYRO_60 || d.cmd === CMD.ACC_6FACE) say(d.status === 0 ? '校准命令已接受' : `校准未执行 status=${d.status} detail=${d.detail}`); } else if (d.kind === 'system') { $('temp').textContent = d.temp.toFixed(2); $('mode').textContent = modeNames[d.stream] || `流${d.stream}`; $('stream').textContent = `${d.fusion}Hz / ${d.output}Hz`; } }
 function updatePose(d) { if (![d.yaw,d.pitch,d.roll].every(Number.isFinite)) return; pose = { ...pose, ...d }; for (const [id,val] of [['yaw',pose.yaw],['pitch',pose.pitch],['roll',pose.roll],['yaw2',pose.yaw],['pitch2',pose.pitch],['roll2',pose.roll]]) $(id).textContent = val.toFixed(4); if (Number.isFinite(pose.temp)) $('temp').textContent = pose.temp.toFixed(2); frames++; draw(); }
 function draw() { const c=$('attitude'),x=c.getContext('2d'),w=c.width,h=c.height,cx=w/2,cy=h/2,s=Math.min(w,h)*.28; x.clearRect(0,0,w,h); x.fillStyle='#081420'; x.fillRect(0,0,w,h); x.strokeStyle='#173247'; x.lineWidth=1; for(let i=1;i<10;i++){x.beginPath();x.moveTo(i*w/10,0);x.lineTo(i*w/10,h);x.moveTo(0,i*h/10);x.lineTo(w,i*h/10);x.stroke()} const yaw=pose.yaw*Math.PI/180,pitch=pose.pitch*Math.PI/180,roll=pose.roll*Math.PI/180; const pts=[[-1,-.55],[1,-.55],[1,.55],[-1,.55]].map(([a,b])=>{let xx=a*s,yy=b*s*Math.cos(pitch);xx*=Math.cos(roll);yy*=Math.cos(roll);return[cx+xx*Math.cos(yaw)-yy*Math.sin(yaw),cy+xx*Math.sin(yaw)+yy*Math.cos(yaw)-Math.sin(pitch)*s*.5]}); x.fillStyle='#0d6887';x.strokeStyle='#65e0ec';x.lineWidth=3;x.beginPath();pts.forEach((p,i)=>i?x.lineTo(...p):x.moveTo(...p));x.closePath();x.fill();x.stroke();x.fillStyle='#eafaff';x.font='700 18px sans-serif';x.fillText('AT32 AHRS',cx-50,cy+7); }
-async function refresh() { const ports=await window.host.listPorts(); $('port').innerHTML='<option value="">选择串口</option>'+ports.map(p=>`<option value="${p.path}">${p.path}${p.manufacturer?` · ${p.manufacturer}`:''}</option>`).join(''); if(ports.length) $('port').value=ports[0].path; say(`发现 ${ports.length} 个串口`); }
+function escapeHtml(value) { return String(value).replace(/[&<>"']/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+async function refresh() {
+  try {
+    const ports = await window.host.listPorts();
+    const select = $('port');
+    const previous = select.value;
+    select.innerHTML = '<option value="">选择串口</option>' + ports.map((p) => {
+      const label = p.friendlyName || p.manufacturer || '';
+      return `<option value="${escapeHtml(p.path)}">${escapeHtml(p.path)}${label ? ` · ${escapeHtml(label)}` : ''}</option>`;
+    }).join('');
+    if (ports.some((p) => p.path === previous)) select.value = previous;
+    else if (ports.length) select.value = ports[0].path;
+    say(`发现 ${ports.length} 个串口`);
+  } catch (e) {
+    $('port').innerHTML = '<option value="">串口枚举失败</option>';
+    say(`串口枚举失败：${e.message}`);
+  }
+}
 async function connect() { const path=$('port').value; if(!path){say('请选择串口');return} try { await window.host.open({path,baudRate:Number($('baud').value)}); setConnected(true); say(`已连接 ${path}`); await send(CMD.QUERY); } catch(e){say(`连接失败：${e.message}`)} }
 async function disconnect() { await window.host.close(); setConnected(false); say('串口已断开'); }
 $('refresh').onclick=refresh; $('connect').onclick=connect; $('disconnect').onclick=disconnect; $('clear').onclick=()=>{$('log').textContent=''}; $('enter').onclick=()=>send(CMD.ENTER); $('exit').onclick=()=>send(CMD.EXIT); $('query').onclick=()=>send(CMD.QUERY); $('ping').onclick=()=>send(CMD.PING); $('zero').onclick=()=>send(CMD.ZERO);
@@ -19,5 +36,7 @@ $('setCan').onclick=async()=>{if(!setting){say('请先进入设置模式');retur
 $('gyro').onclick=()=>{if(setting&&confirm('发送 60 秒陀螺仪校准命令？'))void send(CMD.GYRO_60)}; $('acc').onclick=()=>{if(setting&&confirm('发送六面加速度校准命令？'))void send(CMD.ACC_6FACE)};
 window.host.onData((data)=>{binary.push(...data); parseBinary(binary,(f)=>handle(f)); just.push(...data); parseJustFloat(just,updatePose,0); });
 window.host.onError((m)=>say(`串口错误：${m}`)); window.host.onClosed(()=>{if(connected){setConnected(false);say('串口已关闭')}});
-setInterval(()=>{const now=performance.now();if(now-rateAt>900){$('rate').textContent=Math.round(frames*1000/(now-rateAt));frames=0;rateAt=now}},500); updateSettings(); draw(); refresh();
+setInterval(()=>{const now=performance.now();if(now-rateAt>900){$('rate').textContent=Math.round(frames*1000/(now-rateAt));frames=0;rateAt=now}},500);
+updateSettings(); draw();
+window.addEventListener('DOMContentLoaded', () => { void refresh(); });
 

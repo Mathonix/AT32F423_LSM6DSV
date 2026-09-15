@@ -14,6 +14,12 @@ function createWindow() {
     backgroundColor: '#08111f',
     webPreferences: { preload: path.join(__dirname, 'preload.js'), contextIsolation: true, nodeIntegration: false }
   });
+  win.webContents.on('render-process-gone', (_event, details) => {
+    console.error('renderer process exited:', details.reason, details.exitCode);
+  });
+  win.webContents.on('console-message', (_event, _level, message) => {
+    console.log('[renderer]', message);
+  });
   win.loadFile(path.join(__dirname, 'index.html'));
 }
 
@@ -24,7 +30,7 @@ function send(event, type, data) {
 
 ipcMain.handle('ports:list', async () => {
   const ports = await SerialPort.list();
-  return ports.map((p) => ({ path: p.path, manufacturer: p.manufacturer || '', serialNumber: p.serialNumber || '', vendorId: p.vendorId || '' }));
+  return ports.map((p) => ({ path: p.path, manufacturer: p.manufacturer || '', friendlyName: p.friendlyName || '', serialNumber: p.serialNumber || '', vendorId: p.vendorId || '', productId: p.productId || '' }));
 });
 
 ipcMain.handle('serial:open', async (_event, options) => {
