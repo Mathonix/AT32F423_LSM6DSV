@@ -1,6 +1,6 @@
-﻿# AT32F423 LSM6DSV SPI Test
+# AT32F423 LSM6DSV固件
 
-AT32F423KCU7 + LSM6DSV 姿态传感器固件、Bootloader、USB/UART/CAN 输出和 Motion Studio 上位机工程。
+AT32F423KCU7 + LSM6DSV 姿态传感器固件、Bootloader、USB/UART/CAN 输出和状态指示灯功能。
 
 > 当前主线测试固件：**六轴模式、快速启动关闭、JustFloat 1000 Hz**。
 
@@ -100,6 +100,67 @@ target running
 
 该脚本默认只烧录应用区。烧录 Bootloader 使用 Bootloader 目录中的专用构建配置，烧录前必须确认地址和目标镜像。
 
+## 陀螺仪启动与零偏校准
+
+陀螺仪启动采用“静止校准 + 可选历史零偏快速启动”的设计，保证正常版本的可靠性，同时为台架测试提供快速进入姿态输出的方式。
+
+### 正常启动模式
+
+生产版本默认关闭快速启动：
+
+1. 上电后初始化 LSM6DSV；
+2. 丢弃启动初期不稳定样本；
+3. 检测设备是否处于静止状态；
+4. 在静止窗口内采集陀螺仪和加速度计数据；
+5. 计算当前陀螺仪零偏并注入姿态融合算法；
+6. 进入正常姿态输出。
+
+正常启动模式不会直接信任旧的零偏记录，适合产品固件和长期运行场景。
+
+### 历史零偏快速启动
+
+调试版本可使用历史零偏快速启动：
+
+- 优先读取 Flash 中与当前温度匹配的历史零偏；
+- 读取成功后立即开始姿态输出；
+- 后台继续进行静止检测；
+- 确认设备静止后，以小步长修正当前零偏；
+- 零偏变化达到条件时保存新的温度关联记录；
+- 没有有效历史记录时使用固定默认零偏，并通过灯效提示。
+
+快速启动仅在编译时开启，不建议默认用于生产版本：
+
+```powershell
+# 关闭快速启动，生产/常规测试
+make -B DEBUG_BUILD=0 SIX_AXIS=1 all
+
+# 开启快速启动，台架验证
+make -B DEBUG_BUILD=1 SIX_AXIS=1 all
+```
+
+相关配置位于 `inc/app/app_config.h`：
+
+- `APP_GYR_FAST_START_ENABLE`：快速启动开关；
+- `APP_GYR_FAST_START_REST_MS`：后台静止确认时间；
+- `APP_GYR_FAST_START_SAVE_MS`：允许更新历史零偏的最短时间；
+- `APP_GYR_BIAS_TEMP_WINDOW_C`：历史零偏温度匹配范围；
+- `APP_GYR_FAST_START_BLEND`：后台零偏渐进修正系数。
+
+## WS2812 灯效状态
+
+WS2812 连接在 PA8，用于提示当前传感器、融合和校准状态。灯效不会改变数据协议，仅用于现场快速判断设备状态。
+
+| 灯效 | 含义 |
+|---|---|
+| 正常呼吸灯 | 设备已经运行，姿态融合和数据输出处于正常工作状态 |
+| 六轴工作状态 | 当前按六轴模式运行，磁力计不参与融合 |
+| 九轴工作状态 | 当前按九轴模式运行，磁力计有效并参与融合 |
+| 绿色/黄色提示 | 九轴模式下磁力计暂不可用、磁场异常或融合暂时退化为有效的六轴姿态 |
+| 红灯短闪两次 | 没有有效历史零偏，快速启动使用了固定默认零偏；后台仍会继续静止修正 |
+| 红色故障灯 | 传感器初始化失败、校准失败或其他严重运行错误 |
+| 设置/校准闪烁 | 正在执行设置、零偏校准或六面加速度计校准流程 |
+
+启动后如果看到正常呼吸灯夹杂两次红灯闪烁，表示设备仍可正常工作，但本次没有找到可用的历史零偏。保持设备静止一段时间，后台校准完成后会更新零偏历史。
 ## 输出协议
 
 默认输出为 VOFA+ JustFloat little-endian `float32`：
@@ -118,43 +179,9 @@ AA 55 | msg_id | len | seq | payload | CRC16-CCITT
 
 - `inc/telemetry/protocol.h`；
 - `src/drivers/protocol.c`；
-- `docs/`；
-- `upper/Motion_Studio/src-tauri/src/services/telemetry.rs`。
+- `docs/`。
 
 已支持的主机命令包括 Ping、查询状态、流模式切换、融合模式设置、CAN 节点 ID 设置和运行时输出频率设置。部分设置需要先进入 Settings 模式并复位后生效。
-
-## Motion Studio 上位机
-
-目录：
-
-```text
-upper/Motion_Studio
-```
-
-功能包括串口/USB CDC 连接、实时姿态、曲线、数据记录、JustFloat 解析、中文设置页面、六轴/九轴选项、输出协议和频率配置、CAN 配置页面以及柔和浅色主题。
-
-安装依赖并检查：
-
-```powershell
-cd upper\Motion_Studio
-npm install
-npm run check
-npm run build
-```
-
-启动 Web 开发版：
-
-```powershell
-npm run dev
-```
-
-启动 Tauri 桌面版：
-
-```powershell
-npm run dev:desktop
-```
-
-Windows 桌面版不要求安装完整 Visual Studio IDE；Tauri/Rust 的 Windows 原生编译依赖需按本机工具链配置。硬件连接时优先选择设备枚举出的 USB CDC 串口，例如 `COM16`，波特率使用 `2000000`。
 
 ## 运行检查
 
@@ -197,6 +224,16 @@ git diff --check
 git status --short
 git diff --cached --stat
 ```
+
+## 测试视频
+
+以下视频用于记录当前固件的六轴、九轴和六轴快速启动测试结果：
+
+- [九轴模式测试视频](docs/videos/nie_axis.mp4)
+- [六轴模式测试视频](docs/videos/six_axis.mp4)
+- [六轴快速启动测试视频](docs/videos/six_axis_fastboot.mp4)
+
+视频文件位于 docs/videos/，可直接下载查看。
 
 ## 注意事项
 
