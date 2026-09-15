@@ -1,0 +1,32 @@
+﻿<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>AT32 AHRS Web 上位机</title><link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<header><div><h1>AT32 AHRS 控制台</h1><p>LSM6DSV / IST8310 · Web Serial</p></div><span id="linkState" class="badge off">未连接</span></header>
+<main>
+<section class="toolbar card">
+  <button id="connectBtn" class="primary">连接 USB / UART</button><button id="disconnectBtn" disabled>断开</button>
+  <label>波特率 <select id="baud"><option>2000000</option><option>115200</option><option>921600</option></select></label>
+  <label>解析 <select id="parseMode"><option value="auto">自动（3通道）</option><option value="justfloat">JustFloat</option><option value="binary">二进制</option></select></label><label>JustFloat通道 <select id="justChannels"><option value="3" selected>3（Yaw/Pitch/Roll）</option><option value="4">4（含温度）</option></select></label>
+  <button id="refreshBtn">刷新状态</button><span id="message">浏览器需使用 HTTPS 或 localhost，并支持 Web Serial。</span>
+</section>
+<section class="metrics card"><div><small>Yaw</small><strong id="yaw">--</strong><em>°</em></div><div><small>Pitch</small><strong id="pitch">--</strong><em>°</em></div><div><small>Roll</small><strong id="roll">--</strong><em>°</em></div><div><small>温度</small><strong id="temp">--</strong><em>°C</em></div><div><small>数据速率</small><strong id="rate">--</strong><em>帧/s</em></div></section>
+<section class="grid">
+  <div class="card visual"><div class="section-title"><h2>姿态显示</h2><span id="modeLabel">模式：未知</span></div><canvas id="attitude" width="720" height="410"></canvas><div class="axis"><span>YAW <b id="yaw2">--</b></span><span>PITCH <b id="pitch2">--</b></span><span>ROLL <b id="roll2">--</b></span></div></div>
+  <div class="card settings"><div class="section-title"><h2>设备设置</h2><span id="settingsState" class="badge">未进入设置模式</span></div><p class="hint">连接后先进入设置模式。模式写入 Flash，重启后生效。</p>
+    <button id="enterBtn">进入设置模式</button><button id="exitBtn" disabled>退出设置模式</button>
+    <fieldset id="modeField" disabled><legend>融合模式</legend><label><input type="radio" name="fusion" value="0"> 六轴（陀螺仪 + 加速度）</label><label><input type="radio" name="fusion" value="1" checked> 九轴</label><label><input type="radio" name="fusion" value="2"> 九轴相对角</label></fieldset>
+    <label class="check"><input type="checkbox" id="restartNow"> 应用后立即重启</label><button id="applyBtn" class="primary" disabled>保存模式设置</button>
+    <div class="actions"><button id="zeroBtn">Yaw ??</button><button id="calBtn">?????</button><button id="pingBtn">PING</button></div>
+    <div class="actions"><label>CAN ?? ID <input id="canNodeId" value="1" inputmode="numeric" maxlength="4"></label><button id="canIdBtn">?? CAN ID</button></div>
+    <div class="actions"><button id="gyro60Btn">???60???</button><button id="acc6Btn">????????</button></div>
+  </div>
+</section>
+<section class="card log-card"><div class="section-title"><h2>通信日志</h2><button id="clearLog">清空</button></div><pre id="log"></pre></section>
+</main><footer>本地浏览器直接连接串口；网页服务器不会读取设备数据，串口数据只在当前浏览器标签页处理。</footer>
+<script src="/app.js"></script>
+</body></html>
+

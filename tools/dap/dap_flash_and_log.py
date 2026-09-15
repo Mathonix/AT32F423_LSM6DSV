@@ -14,6 +14,7 @@ HEX_PATH = Path(r"E:\Desktop\CV_resume\Program\AT32F423_LSM6DSV_SPI_Test\build\l
 COM_PORT = None
 BAUD = 2000000
 DEFAULT_SWD_FREQUENCY = 1_000_000
+MIN_SWD_FREQUENCY = 1_000_000
 AUTO_RESET_AFTER_FLASH = True
 
 FLASH_BASE = 0x40023C00
@@ -150,13 +151,13 @@ def reset_and_run_after_flash(target) -> None:
         print("automatic reset OK; target running")
 
 
-def flash_target(mem: dict[int, int]) -> None:
+def flash_target(mem: dict[int, int], swd_frequency: int = DEFAULT_SWD_FREQUENCY) -> None:
     words, start, end = words_from_mem(mem)
     print(f"image 0x{start:08X}-0x{end:08X}, {len(words)} words")
 
     opts = {
         "connect_mode": "under-reset",
-        "frequency": DEFAULT_SWD_FREQUENCY,
+        "frequency": swd_frequency,
     }
     session = ConnectHelper.session_with_chosen_probe(target_override="cortex_m", options=opts)
     if session is None:
@@ -227,13 +228,18 @@ def main() -> int:
     ap.add_argument("--port", help="UART port; omit to skip UART logging")
     ap.add_argument("--baud", type=int, default=BAUD)
     ap.add_argument("--seconds", type=float, default=8.0)
+    ap.add_argument("--swd-frequency", type=int, default=DEFAULT_SWD_FREQUENCY,
+                    help="SWD clock in Hz; minimum 1000000")
     args = ap.parse_args()
+    if args.swd_frequency < MIN_SWD_FREQUENCY:
+        print(f"SWD frequency must be at least {MIN_SWD_FREQUENCY} Hz")
+        return 2
     if not args.hex.exists():
         print("missing hex", args.hex)
         return 1
     mem = parse_hex(args.hex)
     print(f"hex bytes: {len(mem)}")
-    flash_target(mem)
+    flash_target(mem, args.swd_frequency)
     time.sleep(0.4)
     if not args.port:
         print("UART logging skipped; flash completed successfully")

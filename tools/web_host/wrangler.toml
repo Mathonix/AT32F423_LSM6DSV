@@ -1,0 +1,11 @@
+﻿name = "at32-ahrs-web-host"
+main = "src/index.js"
+compatibility_date = "2026-09-15"
+
+[assets]
+directory = "./public"
+binding = "ASSETS"
+not_found_handling = "single-page-application"
+
+# 自定义域名在 Cloudflare 控制台中将域名加入站点后绑定，或使用：
+# npx wrangler domains add ahrs.example.com

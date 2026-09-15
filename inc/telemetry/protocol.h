@@ -32,6 +32,12 @@ extern "C" {
 #define AHRS_CMD_SET_STREAM_MODE   0x13U /* Switch active stream mode */
 #define AHRS_CMD_QUERY_STATUS      0x14U /* Request System Info frame */
 #define AHRS_CMD_SYSTEM_RESET      0x15U /* Request system reboot */
+#define AHRS_CMD_ENTER_SETTINGS    0x17U /* Enter host settings mode */
+#define AHRS_CMD_EXIT_SETTINGS     0x18U /* Leave host settings mode */
+#define AHRS_CMD_SET_FUSION_MODE   0x19U /* payload: mode, apply_now */
+#define AHRS_CMD_SET_CAN_NODE_ID   0x1AU /* payload: uint16 LE, settings mode */
+#define AHRS_CMD_START_GYRO_CAL_60S 0x1BU /* start runtime gyro calibration */
+#define AHRS_CMD_START_ACC_6FACE_CAL 0x1CU /* start six-face calibration */
 
 /* Stream Modes */
 typedef enum

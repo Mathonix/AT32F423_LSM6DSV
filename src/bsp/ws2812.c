@@ -1,5 +1,6 @@
 #include "ws2812.h"
 #include "bsp.h"
+#include "app_config.h"
 
 #define WS_GPIO       GPIOA
 #define WS_PIN        GPIO_PINS_8
@@ -78,7 +79,7 @@ void ws2812_init(void)
   WS_GPIO->clr = WS_PIN;
   delay_us(100U);
 
-  /* Dim blue means firmware startup / sensor calibration. */
+  /* Blue means firmware startup / stationary calibration. */
   ws2812_set_rgb(0U, 0U, 12U);
   ws_last_ms = millis();
   ws_phase = 0U;
@@ -104,9 +105,12 @@ static uint8_t breathing_level(uint8_t phase)
                    (((WS_MAX_LEVEL - WS_MIN_LEVEL) * perceived + 16384U) >> 15));
 }
 
-void ws2812_normal_task(uint32_t now_ms)
+void ws2812_normal_task(uint32_t now_ms, ws2812_mode_t mode, uint8_t calibration_failed, uint8_t mag_rejected, uint8_t settings_pending_reboot, uint8_t history_error)
 {
   uint8_t level;
+  uint8_t red = 0U;
+  uint8_t green = 0U;
+  uint8_t blue = 0U;
 
   if((uint32_t)(now_ms - ws_last_ms) < WS_PERIOD_MS)
   {
@@ -124,7 +128,50 @@ void ws2812_normal_task(uint32_t now_ms)
   }
 
   level = breathing_level(ws_phase);
-  ws2812_set_rgb(0U, level, 0U);
+  /* Status colors: 6-axis=green, 9-axis=cyan. */
+  switch(mode)
+  {
+    case WS2812_MODE_9AXIS:
+      green = level;
+      blue = level;
+      break;
+    case WS2812_MODE_6AXIS:
+    default:
+      green = level;
+      break;
+  }
+  /* A rejected magnetic update alternates between the normal mode color and
+   * green. Keep the normal color visible longer, so the warning is clear
+   * without making the unit look permanently like a 6-axis device. */
+  if((mag_rejected != 0U) && (mode != WS2812_MODE_6AXIS))
+  {
+    const uint32_t base_ms = APP_WS2812_MAG_REJECT_BASE_MS;
+    const uint32_t green_ms = APP_WS2812_MAG_REJECT_GREEN_MS;
+    const uint32_t cycle_ms = base_ms + green_ms;
+    const uint32_t phase_ms = (cycle_ms != 0U) ? (now_ms % cycle_ms) : 0U;
+    if(phase_ms >= base_ms)
+    {
+      red = 0U;
+      green = level;
+      blue = 0U;
+    }
+  }
+
+  /* A fallback warning briefly overlays the normal color once per second.
+   * It is intentionally short so the breathing state remains visible. */
+  if((calibration_failed != 0U) && ((now_ms % 1000U) < 140U))
+  {
+    ws2812_set_rgb(48U, 0U, 0U); /* failed startup calibration: red flash */
+  }
+  else if(((settings_pending_reboot != 0U) || (history_error != 0U)) &&
+          ((now_ms % 1000U) < 120U))
+  {
+    ws2812_set_rgb(48U, 32U, 0U); /* yellow pending/error notification */
+  }
+  else
+  {
+    ws2812_set_rgb(red, green, blue);
+  }
   ws_phase++;
   if(ws_phase >= WS_PHASE_STEPS)
   {
@@ -145,3 +192,42 @@ void ws2812_show_error(uint8_t code)
 }
 
 
+
+
+void ws2812_settings_task(uint32_t now_ms, ws2812_mode_t mode)
+{
+  if((uint32_t)(now_ms - ws_last_ms) < WS_PERIOD_MS) return;
+  ws_last_ms = now_ms;
+  if(mode == WS2812_MODE_9AXIS)
+    ws2812_set_rgb(0U, 32U, 32U);
+  else
+    ws2812_set_rgb(0U, 32U, 0U);
+}
+
+void ws2812_calibration_task(uint32_t now_ms)
+{
+  if((uint32_t)(now_ms - ws_last_ms) < WS_PERIOD_MS) return;
+  ws_last_ms = now_ms;
+  if((now_ms % 1000U) < 180U)
+    ws2812_set_rgb(0U, 0U, 18U);
+  else
+    ws2812_set_rgb(0U, 0U, 0U);
+}
+
+void ws2812_acc_calibration_task(uint32_t now_ms, uint8_t face, uint8_t active, uint8_t failed)
+{
+  uint8_t on = 0U;
+  uint8_t i;
+  static uint32_t last_ms;
+  if(!active && !failed) return;
+  if((uint32_t)(now_ms-last_ms) < WS_PERIOD_MS) return;
+  last_ms=now_ms;
+  if(failed) { ws2812_set_rgb(((now_ms % 1000U) < 180U) ? 48U : 0U, 0U, 0U); return; }
+  /* Yellow prompt: repeat N short flashes for face N, then a pause. */
+  if(face == 0U || face > 6U) face = 1U;
+  {
+    uint32_t phase = now_ms % 1600U;
+    for(i=0U; i<face; ++i) if(phase >= (uint32_t)i*180U && phase < (uint32_t)i*180U+110U) on=1U;
+  }
+  ws2812_set_rgb(on ? 42U : 0U, on ? 28U : 0U, 0U);
+}

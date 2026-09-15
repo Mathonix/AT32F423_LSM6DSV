@@ -1,4 +1,4 @@
-﻿#include "can_test.h"
+#include "can_test.h"
 #include "at32f423_conf.h"
 #include "app_config.h"
 #include <string.h>
@@ -75,6 +75,18 @@ uint8_t can_test_get_cmd_flag(void)
 void can_test_clear_cmd_flag(uint8_t flag)
 {
   can_cmd_flags = (uint8_t)(can_cmd_flags & (uint8_t)~flag);
+}
+
+int can_test_set_node_id(uint16_t node_id)
+{
+  if(node_id > 0x7FFU) return -1;
+  damiao_can_id = node_id;
+  return 0;
+}
+
+uint16_t can_test_get_node_id(void)
+{
+  return damiao_can_id;
 }
 
 static void damiao_pack_euler(uint8_t data[8])
@@ -457,7 +469,7 @@ void can_test_task(uint32_t now_us)
     return;
   }
 
-  tx_message.standard_id = APP_CAN_TX_STANDARD_ID;
+  tx_message.standard_id = damiao_can_id;
   tx_message.extended_id = 0U;
   tx_message.id_type = CAN_ID_STANDARD;
   tx_message.frame_type = CAN_TFT_DATA;
@@ -522,4 +534,3 @@ void can_test_task(uint32_t now_us)
   can_test_snapshot(now_us / 1000U);
 #endif
 }
-

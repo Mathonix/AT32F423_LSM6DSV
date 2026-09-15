@@ -1,4 +1,4 @@
-# Build artifacts
+﻿# Build artifacts
 build/
 objects/
 listings/
@@ -21,5 +21,21 @@ __pycache__/
 *.synctex.gz
 *.tmp
 
+# Host dependencies and generated binaries
+**/node_modules/
+**/dist/
+**/dist_manual/
+*.exe
+*.dll
+
+# Generated captures and archives
+*.csv
+*.zip
+*.7z
+*.rar
+
 # Nested vendor repositories
 AT32F423_Firmware_Library/.git/
+
+# Wrangler local state
+**/.wrangler/

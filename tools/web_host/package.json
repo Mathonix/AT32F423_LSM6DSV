@@ -1,0 +1,15 @@
+﻿{
+  "name": "at32-ahrs-web-host",
+  "private": true,
+  "version": "1.0.0",
+  "description": "AT32F423 LSM6DSV Web Serial 上位机",
+  "scripts": {
+    "dev": "wrangler dev",
+    "preview": "wrangler dev --local",
+    "deploy": "wrangler deploy",
+    "check": "wrangler deploy --dry-run"
+  },
+  "devDependencies": {
+    "wrangler": "^4.0.0"
+  }
+}

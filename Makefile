@@ -33,7 +33,7 @@ OBJCOPY := $(PIO_GCC)/arm-none-eabi-objcopy
 SIZE    := $(PIO_GCC)/arm-none-eabi-size
 endif
 
-LDSCRIPT := $(LIB)/libraries/cmsis/cm4/device_support/startup/gcc/linker/AT32F423xC_FLASH.ld
+LDSCRIPT := linker/AT32F423_app.ld
 STARTUP  := $(LIB)/libraries/cmsis/cm4/device_support/startup/gcc/startup_at32f423.s
 
 SRCS := \
@@ -41,6 +41,9 @@ SRCS := \
   $(SRC_DIR)/bsp/bsp.c \
   $(SRC_DIR)/drivers/lsm6dsv.c \
   $(SRC_DIR)/drivers/ist8310.c \
+  $(SRC_DIR)/calibration/gyro_bias_history.c \
+  $(SRC_DIR)/calibration/acc_calibration.c \
+  $(SRC_DIR)/calibration/fusion_settings.c \
   $(SRC_DIR)/bsp/ws2812.c \
   $(SRC_DIR)/drivers/can_test.c \
   $(SRC_DIR)/drivers/usb_cdc.c \
@@ -87,7 +90,7 @@ INCLUDES := \
   -Imiddleware/usbd_class/cdc
 
 CFLAGS := -mcpu=$(MCU) -mthumb -mfpu=fpv4-sp-d16 -mfloat-abi=hard \
-  -D$(CHIP) -DUSE_STDPERIPH_DRIVER \
+  -D$(CHIP) -DUSE_STDPERIPH_DRIVER -DVECT_TAB_OFFSET=0x8000 \
   $(INCLUDES) \
   -O1 -g -Wall -ffunction-sections -fdata-sections \
   -fno-common -fno-builtin $(EXTRA_CFLAGS)
@@ -108,6 +111,7 @@ DEPFLAGS = -MMD -MP -MF $(@:.o=.d)
 
 vpath %.c $(SRC_DIR)/app \
   $(SRC_DIR)/bsp \
+  $(SRC_DIR)/calibration \
   $(SRC_DIR)/drivers \
   $(SRC_DIR)/fusion \
   $(SRC_DIR)/diagnostics \
@@ -164,7 +168,4 @@ $(BUILD)/$(TARGET).bin: $(BUILD)/$(TARGET).elf
 
 clean:
 	rm -rf $(BUILD)
-
-
-
 

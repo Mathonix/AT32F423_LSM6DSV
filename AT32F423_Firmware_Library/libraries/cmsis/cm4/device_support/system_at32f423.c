@@ -36,7 +36,9 @@
 /** @addtogroup AT32F423_system_private_defines
   * @{
   */
-#define VECT_TAB_OFFSET                  0x0 /*!< vector table base offset field. this value must be a multiple of 0x200. */
+#ifndef VECT_TAB_OFFSET
+ #define VECT_TAB_OFFSET                  0x0 /*!< vector table base offset field. this value must be a multiple of 0x200. */
+#endif
 /**
   * @}
   */
@@ -212,4 +214,3 @@ void wait_for_power_stable(void)
 /**
   * @}
   */
-

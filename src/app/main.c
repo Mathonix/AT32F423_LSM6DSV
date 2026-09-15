@@ -1,4 +1,4 @@
-﻿/**
+/**
  * AT32F423KCU7-4 + LSM6DSV
  *   IMU HA01 2000 Hz + IST8310 50 Hz, 9D VQF, DAP live telemetry
  */
@@ -13,8 +13,11 @@
 #include "vqf_live.h"
 #include "mag_calibration.h"
 #include "acc_calibration.h"
+#include "gyro_bias_history.h"
 #include "can_test.h"
 #include "usb_cdc.h"
+#include "protocol.h"
+#include "fusion_settings.h"
 
 #include <math.h>
 #include <string.h>
@@ -46,6 +49,7 @@
 #define CAL_ACC_REST_MS2 APP_CAL_ACC_REST_MS2
 #define CAL_REST_SECONDS APP_CAL_REST_SECONDS   /* startup stationary bias calibration */
 #define CAL_DROP_MS      APP_CAL_DROP_MS        /* startup settling/discard time */
+#define CAL_BIAS_TEMP_WINDOW_C APP_GYR_BIAS_TEMP_WINDOW_C
 #define GYR_LPF_CUTOFF_HZ APP_GYR_LPF_CUTOFF_HZ /* reduce gyro noise before integration */
 #define ERR_STREAK_RECOVER   20U
 #define MAG_PERIOD_N         40U /* read IST8310 at 50 Hz */
@@ -121,6 +125,292 @@ static void app_zero_yaw(float current_yaw)
 {
   app_yaw_offset = wrap_deg(app_yaw_offset + current_yaw);
 }
+
+/* UART and USB CDC accept the same framed host-command protocol. */
+typedef enum
+{
+  PROTOCOL_SOURCE_UART = 0,
+  PROTOCOL_SOURCE_USB = 1
+} protocol_source_t;
+
+/* Non-blocking automatic six-face accelerometer calibration. */
+#if APP_ACC_CAL_ENABLE
+typedef struct {
+  uint8_t active, face, face_mask, candidate;
+  uint8_t source, seq;
+  uint32_t start_ms, face_start_ms, stable_ms, collect_ms;
+  uint32_t samples;
+  float sum[3];
+  float face_mean[6][3];
+} acc_cal_runtime_t;
+static acc_cal_runtime_t acc_cal_rt;
+#endif
+volatile struct {
+  uint32_t magic, seq, millis;
+  uint8_t status, face, detected_face, face_mask;
+  uint16_t sample_count;
+  uint16_t reserved;
+  float bias_g[3], scale[3];
+} acc_cal_status_live = {0x41434353U,0U,0U,0U,0U,0U,0U,0U,0U,{0},{1.0f,1.0f,1.0f}};
+
+static protocol_parser_t uart_protocol_parser;
+static protocol_parser_t usb_protocol_parser;
+static stream_mode_t app_stream_mode = STREAM_MODE_VOFA_3CH;
+static fusion_mode_t app_fusion_mode = FUSION_MODE_9AXIS;
+static uint8_t app_relative_yaw_enabled;
+static volatile uint8_t protocol_reset_pending;
+static volatile uint8_t app_settings_mode;
+static volatile uint8_t app_settings_dirty;
+
+static void protocol_send_frame(protocol_source_t source, const uint8_t *frame, uint16_t len)
+{
+  if(source == PROTOCOL_SOURCE_UART)
+    (void)uart_dma_send(frame, len);
+  else
+    (void)usb_cdc_write(frame, len);
+}
+
+static void protocol_reply_ack(protocol_source_t source, uint8_t seq,
+                               uint8_t cmd_id, uint8_t status, uint16_t detail)
+{
+  uint8_t frame[AHRS_MAX_FRAME_LEN];
+  uint16_t len = protocol_pack_ack(frame, seq, cmd_id, status, detail);
+  if(len != 0U) protocol_send_frame(source, frame, len);
+}
+
+/* Keep the original four-byte maintenance commands for compatibility with
+ * older scripts: AA 0C 01 0D = zero yaw, AA 00 00 0D = reset. */
+static void legacy_command_feed(uint8_t byte, uint8_t buffer[4], uint8_t *index)
+{
+  if(*index == 0U)
+  {
+    if(byte == 0xAAU) buffer[(*index)++] = byte;
+    return;
+  }
+  buffer[(*index)++] = byte;
+  if(*index == 4U)
+  {
+    if(buffer[3] == 0x0DU)
+    {
+      if((buffer[1] == 0x0CU) && (buffer[2] == 0x01U))
+        app_zero_yaw(vofa_pose_live.yaw);
+      else if((buffer[1] == 0x00U) && (buffer[2] == 0x00U))
+        protocol_reset_pending = 1U;
+    }
+    *index = 0U;
+  }
+}
+
+static void protocol_frame_received(uint8_t msg_id, uint8_t seq,
+                                    const uint8_t *payload, uint8_t len,
+                                    void *user_data)
+{
+  const protocol_source_t source = (protocol_source_t)(uintptr_t)user_data;
+  uint8_t frame[AHRS_MAX_FRAME_LEN];
+  uint16_t frame_len;
+  uint8_t status = AHRS_ACK_SUCCESS;
+
+  switch(msg_id)
+  {
+    case AHRS_CMD_PING:
+      protocol_reply_ack(source, seq, msg_id, AHRS_ACK_SUCCESS, 0U);
+      break;
+    case AHRS_CMD_ZERO_YAW:
+      if(len != 0U) status = AHRS_ACK_INVALID_PARAM;
+      else app_zero_yaw(vofa_pose_live.yaw);
+      protocol_reply_ack(source, seq, msg_id, status, 0U);
+      break;
+    case AHRS_CMD_RECALIBRATE_GYRO:
+      /* Runtime calibration is not allowed to block the 2 kHz sensor loop. */
+      protocol_reply_ack(source, seq, msg_id, AHRS_ACK_EXEC_FAILED, 1U);
+      break;
+    case AHRS_CMD_SET_STREAM_MODE:
+      if((len != 1U) || (payload == NULL) ||
+         (payload[0] > STREAM_MODE_VOFA_6CH))
+      {
+        status = AHRS_ACK_INVALID_PARAM;
+      }
+      else
+      {
+        app_stream_mode = (stream_mode_t)payload[0];
+      }
+      protocol_reply_ack(source, seq, msg_id, status, (uint16_t)app_stream_mode);
+      break;
+    case AHRS_CMD_QUERY_STATUS:
+      if(len != 0U)
+      {
+        protocol_reply_ack(source, seq, msg_id, AHRS_ACK_INVALID_PARAM, 0U);
+        break;
+      }
+      frame_len = protocol_pack_system_info(frame, seq, APP_FUSION_HZ,
+                                             APP_VOFA_OUTPUT_HZ, OUTPUT_DIV,
+                                             imu_temp_live.temperature_c,
+                                             (uint8_t)app_stream_mode,
+                                             (uint8_t)(APP_CAN_ENABLE != 0U));
+      if(frame_len != 0U) protocol_send_frame(source, frame, frame_len);
+      break;
+    case AHRS_CMD_ENTER_SETTINGS:
+      if(len != 0U) status = AHRS_ACK_INVALID_PARAM;
+      else app_settings_mode = 1U;
+      protocol_reply_ack(source, seq, msg_id, status, 0U);
+      break;
+    case AHRS_CMD_EXIT_SETTINGS:
+      if(len != 0U) status = AHRS_ACK_INVALID_PARAM;
+      else app_settings_mode = 0U;
+      protocol_reply_ack(source, seq, msg_id, status, app_settings_dirty);
+      break;
+    case AHRS_CMD_SET_FUSION_MODE:
+      /* Settings are deliberately staged in flash. The running VQF mode is
+       * never changed in-place; reboot applies the selected mode. */
+      if((app_settings_mode == 0U) || (len < 1U) || (len > 2U) ||
+         (payload == NULL) || (payload[0] > FUSION_MODE_9AXIS_RELATIVE) ||
+         ((len == 2U) && (payload[1] > 1U)))
+      {
+        status = (app_settings_mode == 0U) ? AHRS_ACK_EXEC_FAILED : AHRS_ACK_INVALID_PARAM;
+      }
+      else if(fusion_settings_save_ex((fusion_mode_t)payload[0],
+                                       can_test_get_node_id()) != 0)
+      {
+        status = AHRS_ACK_EXEC_FAILED;
+      }
+      else
+      {
+        app_settings_dirty = 1U;
+        if((len == 2U) && (payload[1] != 0U))
+          protocol_reset_pending = 1U;
+      }
+      protocol_reply_ack(source, seq, msg_id, status, (uint16_t)payload[0]);
+      break;
+    case AHRS_CMD_SET_CAN_NODE_ID:
+      if((app_settings_mode == 0U) || (payload == NULL) || (len != 2U))
+      {
+        status = (app_settings_mode == 0U) ? AHRS_ACK_EXEC_FAILED : AHRS_ACK_INVALID_PARAM;
+      }
+      else
+      {
+        uint16_t node_id = (uint16_t)payload[0] | ((uint16_t)payload[1] << 8);
+        if((node_id > 0x7FFU) ||
+           (can_test_set_node_id(node_id) != 0) ||
+           (fusion_settings_save_ex(app_fusion_mode, node_id) != 0))
+        {
+          status = (node_id > 0x7FFU) ? AHRS_ACK_INVALID_PARAM : AHRS_ACK_EXEC_FAILED;
+        }
+        else
+        {
+          app_settings_dirty = 1U;
+        }
+      }
+      protocol_reply_ack(source, seq, msg_id, status,
+                         (uint16_t)can_test_get_node_id());
+      break;
+    case AHRS_CMD_START_GYRO_CAL_60S:
+      /* Runtime calibration is not yet a blocking operation. Reuse the
+       * existing safe command response until its non-blocking state machine
+       * is enabled, instead of silently pretending that it completed. */
+      protocol_reply_ack(source, seq, msg_id, AHRS_ACK_EXEC_FAILED, 0x0601U);
+      break;
+    case AHRS_CMD_START_ACC_6FACE_CAL:
+#if !APP_ACC_CAL_ENABLE
+      (void)payload;
+      (void)len;
+      protocol_reply_ack(source, seq, msg_id, AHRS_ACK_EXEC_FAILED, 0x0600U);
+#else
+      if((app_settings_mode == 0U) || (len != 0U))
+      {
+        status = (app_settings_mode == 0U) ? AHRS_ACK_EXEC_FAILED : AHRS_ACK_INVALID_PARAM;
+        protocol_reply_ack(source, seq, msg_id, status, 0x0602U);
+      }
+      else if(acc_cal_rt.active != 0U)
+      {
+        protocol_reply_ack(source, seq, msg_id, AHRS_ACK_EXEC_FAILED, 0x0604U);
+      }
+      else
+      {
+        memset(&acc_cal_rt, 0, sizeof(acc_cal_rt));
+        acc_cal_rt.active = 1U; acc_cal_rt.face = 0U;
+        acc_cal_rt.source = (uint8_t)source; acc_cal_rt.seq = seq;
+        acc_cal_rt.start_ms = millis(); acc_cal_rt.face_start_ms = acc_cal_rt.start_ms;
+        acc_cal_status_live.status = ACC_CAL_STATUS_RUNNING;
+        acc_cal_status_live.face = 1U; acc_cal_status_live.face_mask = 0U;
+        protocol_reply_ack(source, seq, msg_id, AHRS_ACK_SUCCESS, 0x0100U);
+      }
+#endif
+      break;
+    case AHRS_CMD_SYSTEM_RESET:
+      if(len != 0U)
+      {
+        protocol_reply_ack(source, seq, msg_id, AHRS_ACK_INVALID_PARAM, 0U);
+      }
+      else
+      {
+        protocol_reply_ack(source, seq, msg_id, AHRS_ACK_SUCCESS, 0U);
+        protocol_reset_pending = 1U;
+      }
+      break;
+    default:
+      protocol_reply_ack(source, seq, msg_id, AHRS_ACK_UNKNOWN_CMD, 0U);
+      break;
+  }
+}
+
+
+#if APP_ACC_CAL_ENABLE
+static int acc_cal_detect_face(const float a[3], const float gyr_dps[3])
+{
+  float n = sqrtf(a[0]*a[0] + a[1]*a[1] + a[2]*a[2]);
+  float ag[3] = {fabsf(a[0]),fabsf(a[1]),fabsf(a[2])};
+  uint32_t k; int axis=0; float best=ag[0];
+  if(n < (1.0f-APP_ACC_CAL_NORM_TOL_G) || n > (1.0f+APP_ACC_CAL_NORM_TOL_G)) return -1;
+  if(fabsf(gyr_dps[0]) > APP_ACC_CAL_GYR_REST_DPS || fabsf(gyr_dps[1]) > APP_ACC_CAL_GYR_REST_DPS || fabsf(gyr_dps[2]) > APP_ACC_CAL_GYR_REST_DPS) return -1;
+  for(k=1U;k<3U;k++) if(ag[k]>best){best=ag[k];axis=(int)k;}
+  if(best < APP_ACC_CAL_DOMINANT_MIN_G) return -1;
+  for(k=0U;k<3U;k++) if((int)k!=axis && ag[k]>APP_ACC_CAL_OTHER_MAX_G) return -1;
+  return axis*2 + ((a[axis] >= 0.0f) ? 1 : 0);
+}
+
+static void acc_cal_finish(uint8_t ok, uint16_t detail)
+{
+  uint8_t source=acc_cal_rt.source; uint8_t seq=acc_cal_rt.seq;
+  acc_cal_rt.active=0U;
+  acc_cal_status_live.status = ok ? ACC_CAL_STATUS_DONE : ACC_CAL_STATUS_FAILED;
+  acc_cal_status_live.face = ok ? 6U : acc_cal_rt.face+1U;
+  if(ok) { acc_cal_status_live.face_mask=0x3FU; acc_cal_status_live.bias_g[0]=acc_calibration_active.bias_g[0]; acc_cal_status_live.bias_g[1]=acc_calibration_active.bias_g[1]; acc_cal_status_live.bias_g[2]=acc_calibration_active.bias_g[2]; }
+  protocol_reply_ack((protocol_source_t)source, seq, AHRS_CMD_START_ACC_6FACE_CAL, ok ? AHRS_ACK_SUCCESS : AHRS_ACK_EXEC_FAILED, detail);
+}
+
+static void acc_calibration_sample_task(uint32_t now_ms, const float raw_g[3], const float gyr_dps[3])
+{
+  int dir; uint8_t axis, sign; uint32_t i;
+  if(acc_cal_rt.active==0U) return;
+  acc_cal_status_live.millis=now_ms; acc_cal_status_live.seq++; acc_cal_status_live.face=acc_cal_rt.face+1U;
+  acc_cal_status_live.detected_face=0U; acc_cal_status_live.sample_count=(uint16_t)(acc_cal_rt.samples>65535U?65535U:acc_cal_rt.samples);
+  if((uint32_t)(now_ms - ((acc_cal_rt.face_start_ms != 0U) ? acc_cal_rt.face_start_ms : acc_cal_rt.start_ms)) >
+     (uint32_t)(APP_ACC_CAL_FACE_TIMEOUT_S * 1000.0f)) { acc_cal_finish(0U,0x0603U); return; }
+  dir=acc_cal_detect_face(raw_g,gyr_dps);
+  if(dir<0 || (acc_cal_rt.face_mask & (uint8_t)(1U<<dir))!=0U) { acc_cal_rt.stable_ms=0U; acc_cal_rt.collect_ms=0U; acc_cal_rt.samples=0U; return; }
+  acc_cal_status_live.detected_face=(uint8_t)(dir+1);
+  if(acc_cal_rt.candidate != (uint8_t)(dir+1)) { acc_cal_rt.candidate=(uint8_t)(dir+1); acc_cal_rt.stable_ms=now_ms; acc_cal_rt.collect_ms=0U; acc_cal_rt.samples=0U; for(i=0;i<3;i++) acc_cal_rt.sum[i]=0.0f; return; }
+  if((uint32_t)(now_ms-acc_cal_rt.stable_ms) < APP_ACC_CAL_STABLE_MS) return;
+  if(acc_cal_rt.collect_ms==0U) acc_cal_rt.collect_ms=now_ms;
+  for(i=0;i<3;i++)
+    acc_cal_rt.sum[i]+=raw_g[i];
+  acc_cal_rt.samples++;
+  if((uint32_t)(now_ms-acc_cal_rt.collect_ms) < (uint32_t)(APP_ACC_CAL_FACE_SECONDS * 1000.0f)) return;
+  if(acc_cal_rt.samples < 50U) { acc_cal_finish(0U,0x0605U); return; }
+  axis=(uint8_t)(dir/2); sign=(uint8_t)(dir&1U);
+  for(i=0;i<3;i++) acc_cal_rt.face_mean[dir][i]=acc_cal_rt.sum[i]/(float)acc_cal_rt.samples;
+  acc_cal_rt.face_mask |= (uint8_t)(1U<<dir); acc_cal_rt.face++; acc_cal_rt.face_start_ms=now_ms; acc_cal_rt.candidate=0U; acc_cal_rt.stable_ms=0U; acc_cal_rt.collect_ms=0U; acc_cal_rt.samples=0U;
+  (void)axis; (void)sign;
+  if(acc_cal_rt.face>=6U)
+  {
+    acc_calibration_t cal; float pos,neg;
+    for(axis=0U;axis<3U;axis++) { pos=acc_cal_rt.face_mean[axis*2+1][axis]; neg=acc_cal_rt.face_mean[axis*2][axis]; cal.bias_g[axis]=(pos+neg)*0.5f; cal.scale[axis]=2.0f/(pos-neg); if(cal.scale[axis]<0.5f||cal.scale[axis]>1.5f) { acc_cal_finish(0U,0x0606U); return; } }
+    cal.valid=1U; if(acc_calibration_save(&cal)!=0) { acc_cal_finish(0U,0x0607U); return; }
+    acc_cal_status_live.bias_g[0]=cal.bias_g[0]; acc_cal_status_live.bias_g[1]=cal.bias_g[1]; acc_cal_status_live.bias_g[2]=cal.bias_g[2];
+    acc_cal_status_live.scale[0]=cal.scale[0]; acc_cal_status_live.scale[1]=cal.scale[1]; acc_cal_status_live.scale[2]=cal.scale[2]; acc_cal_finish(1U,0U);
+  }
+}
+#endif /* APP_ACC_CAL_ENABLE */
 
 static float temp_lpf_c;
 static float temp_lpf_alpha;
@@ -516,6 +806,18 @@ static void vofa_send_justfloat(float late)
     output_roll = vqf_live.roll;
   }
 
+  /* Relative yaw is an output-reference option only. The VQF/KF state and
+   * magnetometer fusion remain unchanged; latch the first published yaw as
+   * the boot reference. */
+  if(app_relative_yaw_enabled != 0U)
+  {
+    static uint8_t relative_yaw_initialized;
+    if(relative_yaw_initialized == 0U)
+    {
+      app_yaw_offset = wrap_deg(output_yaw);
+      relative_yaw_initialized = 1U;
+    }
+  }
   output_yaw = wrap_deg(output_yaw - app_yaw_offset);
 
   vofa_pose_live.seq++;
@@ -614,22 +916,63 @@ static void live_whoami(void)
   vqf_live.whoami = who;
 }
 
-static void fail_loop(int err)
+/* Keep the application observable and recoverable when the IMU is absent or
+ * SPI initialization fails. The old implementation stopped forever here,
+ * leaving the last SRAM telemetry snapshot looking like a valid zero-drift
+ * result and preventing a later sensor reconnection from recovering. */
+static int sensor_init_retry_loop(int initial_err)
 {
+  uint32_t next_retry_ms = 0U;
+  uint32_t last_led_ms = 0U;
+  int err = initial_err;
+
   vqf_live.init_err = err;
-  ws2812_show_error(1U);
-  while(1)
+  for(;;)
   {
+    const uint32_t now = millis();
     live_whoami();
-    vqf_live.millis = millis();
+    vqf_live.init_err = err;
+    vqf_live.millis = now;
+    vqf_live.fusion_hz = 0U;
+    vqf_live.out_hz = 0U;
     vqf_live.seq++;
-    led_toggle();
-    delay_ms(200);
+    /* Publish a changing sequence in the exact live block used by DAPLink
+     * tools, so stale SRAM is never mistaken for a valid zero-drift record. */
+    vqf_tune_live.millis = now;
+    vqf_tune_live.fusion_hz = 0U;
+    vqf_tune_live.seq++;
+
+    /* Keep the host link serviced so the failure remains diagnosable. */
+    usb_cdc_task();
+    if((uint32_t)(now - last_led_ms) >= 200U)
+    {
+      last_led_ms = now;
+      ws2812_show_error(1U);
+      led_toggle();
+    }
+
+    if((int32_t)(now - next_retry_ms) >= 0)
+    {
+      (void)lsm6dsv_spi_recover();
+      err = lsm6dsv_init_2khz();
+      live_whoami();
+      if(err == 0)
+      {
+        vqf_live.init_err = 0;
+        return 0;
+      }
+      next_retry_ms = millis() + 500U;
+    }
+    delay_ms(10U);
   }
 }
+#define APP_BOOT_REQUEST_ADDR 0x2000BFF0U
+#define APP_BOOT_REQUEST_MAGIC 0x424F4F54U
+static void app_request_bootloader(void){ *((volatile uint32_t *)APP_BOOT_REQUEST_ADDR) = APP_BOOT_REQUEST_MAGIC; __DMB(); nvic_system_reset(); }
 
 int main(void)
 {
+  SCB->VTOR = 0x08008000U;
   lsm6dsv_raw_t raw;
   float gyr[3];
   float acc[3];
@@ -653,7 +996,9 @@ int main(void)
   uint32_t t0;
   uint32_t vqf_us;
   uint32_t i;
-  float temp_c;
+  float temp_c = APP_GYR_TEMP_REF_C;
+  uint8_t bias_fallback = 0U;
+  uint8_t bias_history_write_error = 0U;
 #if APP_SFLP_BIAS_ENABLE
   float sflp_bias_dps[3] = {0.0f, 0.0f, 0.0f};
   uint8_t sflp_bias_ok = 0U;
@@ -667,10 +1012,23 @@ int main(void)
   ws2812_init();
   live_init();
   lsm6dsv_spi_init();
+#if APP_ACC_CAL_ENABLE
+  acc_calibration_load();
+#endif
 #if APP_CAN_ENABLE
   can_test_init();
 #endif
   usb_cdc_init();
+  protocol_parser_init(&uart_protocol_parser, protocol_frame_received,
+                       (void *)(uintptr_t)PROTOCOL_SOURCE_UART);
+  protocol_parser_init(&usb_protocol_parser, protocol_frame_received,
+                       (void *)(uintptr_t)PROTOCOL_SOURCE_USB);
+  {
+    uint16_t stored_can_id = APP_CAN_DEFAULT_CAN_ID;
+    (void)fusion_settings_load_ex(&app_fusion_mode, &stored_can_id);
+    (void)can_test_set_node_id(stored_can_id);
+  }
+  app_relative_yaw_enabled = (app_fusion_mode == FUSION_MODE_9AXIS_RELATIVE) ? 1U : 0U;
   delay_ms(20);
 
 #if APP_SFLP_BIAS_ENABLE
@@ -684,11 +1042,11 @@ int main(void)
   live_whoami();
   if(err != 0)
   {
-    fail_loop(err);
+    (void)sensor_init_retry_loop(err);
   }
 
   mag_err = ist8310_init();
-  mag_ok = (mag_err == 0) ? 1U : 0U;
+  mag_ok = ((mag_err == 0) && (app_fusion_mode != FUSION_MODE_6AXIS)) ? 1U : 0U;
   mag_pending = 0U;
   mag_start_n = 0U;
   mag_updates = 0U;
@@ -713,13 +1071,17 @@ int main(void)
     uint32_t target_samples;
     uint32_t tries;
     uint32_t got = 0U;
+    uint32_t cal_start_ms;
+    uint8_t cal_timeout = 0U;
     float acc_n3;
     float gyr_n;
-    float temp_c;
+    float cal_temp_sum = 0.0f;
+    uint32_t cal_temp_samples = 0U;
+    float calibration_temp_c = APP_GYR_TEMP_REF_C;
 
     if(CAL_BLOCK_SAMPLES == 0U || CAL_BLOCK_MAX == 0U)
     {
-      fail_loop(-21);
+      (void)sensor_init_retry_loop(-21);
     }
     target_blocks = (cal_n + CAL_BLOCK_SAMPLES - 1U) / CAL_BLOCK_SAMPLES;
     if(target_blocks == 0U) target_blocks = 1U;
@@ -729,6 +1091,7 @@ int main(void)
     tries = 0U;
     while((got < drop_n) && (tries < (drop_n * 4U)))
     {
+      ws2812_calibration_task(millis());
       tries++;
       if(lsm6dsv_wait_sample(2000U) != 0)
       {
@@ -742,10 +1105,21 @@ int main(void)
       (void)update_temperature(raw.temp_raw);
     }
 
+    /* Allow one extra second beyond the requested rest-capture duration.
+     * With APP_CAL_REST_SECONDS=3 s, the capture window is 4 s. */
+    cal_start_ms = millis();
     tries = 0U;
-    while((block_count < target_blocks) &&
+    while((cal_timeout == 0U) &&
+          (block_count < target_blocks) &&
           (tries < (target_samples * 4U)))
     {
+      ws2812_calibration_task(millis());
+      if((uint32_t)(millis() - cal_start_ms) >=
+         (uint32_t)((CAL_REST_SECONDS + 1.0f) * 1000.0f))
+      {
+        cal_timeout = 1U;
+        break;
+      }
       tries++;
       if(lsm6dsv_wait_sample(2000U) != 0)
       {
@@ -759,7 +1133,11 @@ int main(void)
       for(i = 0; i < 3U; i++)
       {
         gyr[i] = gyro_dps_from_raw(i, raw.gyr[i], temp_c) * DEG2RAD;
-        acc[i] = acc_calibrate_g(i, (float)raw.acc[i] * ACC_G_PER_LSB) * G_TO_MS2;
+  #if APP_ACC_CAL_ENABLE
+      acc[i] = acc_calibrate_g(i, (float)raw.acc[i] * ACC_G_PER_LSB) * G_TO_MS2;
+#else
+      acc[i] = (float)raw.acc[i] * ACC_G_PER_LSB * G_TO_MS2;
+#endif
       }
       gyr_n = sqrtf(gyr[0] * gyr[0] + gyr[1] * gyr[1] + gyr[2] * gyr[2]);
       acc_n3 = sqrtf(acc[0] * acc[0] + acc[1] * acc[1] + acc[2] * acc[2]);
@@ -768,6 +1146,8 @@ int main(void)
       {
         continue;
       }
+      cal_temp_sum += temp_c;
+      cal_temp_samples++;
       for(i = 0U; i < 3U; ++i)
       {
         block_gyr_sum[i] += gyr[i];
@@ -789,35 +1169,103 @@ int main(void)
         block_count++;
       }
     }
-    if(block_count < target_blocks)
+    /* A complete stationary window is required before accepting this boot's
+     * gyro bias.  If it fails, use the persistent history instead of halting
+     * the application.  A timeout also discards partial blocks so the VQF
+     * prime uses the same fallback path as a failed static calibration. */
+    if(cal_timeout != 0U)
     {
-      fail_loop(-20);
+      block_count = 0U;
+      block_samples = 0U;
     }
-    /* Trim 10% of the block means at both ends for each axis.  This is more
-     * robust than trimming individual samples: one knock cannot dominate a
-     * 32-sample block, while a short motion interval is discarded entirely
-     * when it lands in the tails. */
-    for(i = 0U; i < 3U; ++i)
     {
-      gyr_bias[i] = trimmed_mean(cal_gyr_blocks[i], block_count);
-      acc_avg[i] = trimmed_mean(cal_acc_blocks[i], block_count);
-    }
+      const uint8_t current_cal_ok = (uint8_t)((cal_timeout == 0U) &&
+                                               (block_count >= target_blocks));
+      float history_latest[3] = {0.0f, 0.0f, 0.0f};
+      float history_average[3] = {0.0f, 0.0f, 0.0f};
+      float history_nearest[3] = {0.0f, 0.0f, 0.0f};
+      float history_nearest_temp = 0.0f;
+      uint32_t history_count = 0U;
+      uint8_t history_nearest_valid = 0U;
+      uint8_t history_corrupt = 0U;
+      int history_valid;
+
+      if(block_count > 0U)
+      {
+        /* Trim 10% of the block means at both ends. */
+        for(i = 0U; i < 3U; ++i)
+        {
+          gyr_bias[i] = trimmed_mean(cal_gyr_blocks[i], block_count);
+          acc_avg[i] = trimmed_mean(cal_acc_blocks[i], block_count);
+        }
+      }
+      else
+      {
+        acc_avg[0] = 0.0f;
+        acc_avg[1] = 0.0f;
+        acc_avg[2] = G_TO_MS2;
+      }
+
+      history_valid = gyro_bias_history_load_for_temp(
+          history_latest, history_average, history_nearest, temp_c,
+          CAL_BIAS_TEMP_WINDOW_C, &history_nearest_temp,
+          &history_nearest_valid, &history_count, &history_corrupt);
+      if(current_cal_ok != 0U)
+      {
 #if APP_SFLP_BIAS_ENABLE
-    if((sflp_bias_ok != 0U) &&
-       (fabsf(sflp_bias_dps[0]) <= APP_SFLP_BIAS_MAX_DPS) &&
-       (fabsf(sflp_bias_dps[1]) <= APP_SFLP_BIAS_MAX_DPS) &&
-       (fabsf(sflp_bias_dps[2]) <= APP_SFLP_BIAS_MAX_DPS))
-    {
-      gyr_bias[0] = sflp_bias_dps[0] * DEG2RAD;
-      gyr_bias[1] = sflp_bias_dps[1] * DEG2RAD;
-      gyr_bias[2] = sflp_bias_dps[2] * DEG2RAD;
-    }
+        if((sflp_bias_ok != 0U) &&
+           (fabsf(sflp_bias_dps[0]) <= APP_SFLP_BIAS_MAX_DPS) &&
+           (fabsf(sflp_bias_dps[1]) <= APP_SFLP_BIAS_MAX_DPS) &&
+           (fabsf(sflp_bias_dps[2]) <= APP_SFLP_BIAS_MAX_DPS))
+        {
+          gyr_bias[0] = sflp_bias_dps[0] * DEG2RAD;
+          gyr_bias[1] = sflp_bias_dps[1] * DEG2RAD;
+          gyr_bias[2] = sflp_bias_dps[2] * DEG2RAD;
+        }
 #endif
+        /* Save the mean temperature of the same accepted stationary samples
+         * used to calculate this bias. */
+        if(cal_temp_samples != 0U)
+          calibration_temp_c = cal_temp_sum / (float)cal_temp_samples;
+        if(gyro_bias_history_save_at_temp(gyr_bias, calibration_temp_c) != 0)
+        {
+          bias_history_write_error = 1U;
+        }
+      }
+      else
+      {
+        bias_fallback = 1U;
+        if((history_valid != 0) && (history_nearest_valid != 0U))
+        {
+          for(i = 0U; i < 3U; ++i) gyr_bias[i] = history_nearest[i];
+        }
+        else if((history_valid != 0) && (history_count >= GYRO_BIAS_HISTORY_MAX))
+        {
+          for(i = 0U; i < 3U; ++i) gyr_bias[i] = history_average[i];
+        }
+        else if(history_valid != 0)
+        {
+          /* Fewer than 15 records: use the most recent intact calibration. */
+          for(i = 0U; i < 3U; ++i) gyr_bias[i] = history_latest[i];
+        }
+        else
+        {
+          gyr_bias[0] = APP_GYR_DEFAULT_BIAS_X_DPS * DEG2RAD;
+          gyr_bias[1] = APP_GYR_DEFAULT_BIAS_Y_DPS * DEG2RAD;
+          gyr_bias[2] = APP_GYR_DEFAULT_BIAS_Z_DPS * DEG2RAD;
+        }
+        (void)history_nearest_temp;
+        (void)history_corrupt; /* CRC-invalid/power-loss records are ignored. */
+      }
+    }
     vqf_prime_rest(acc_avg, gyr_bias);
   }
   vqf_live.seq = 2;
   last_ms = millis();
-  if(!mag_ok) ws2812_show_error(2U);
+  /* In 6-axis mode a missing/disabled magnetometer is expected; do not
+   * replace the normal status LED with a permanent amber error. */
+  if((!mag_ok) && (app_fusion_mode != FUSION_MODE_6AXIS))
+    ws2812_show_error(2U);
 
   {
     uint32_t last_sample_cy = dwt_cycles();
@@ -860,8 +1308,18 @@ int main(void)
     for(i = 0; i < 3U; i++)
     {
       gyr[i] = gyro_dps_from_raw(i, raw.gyr[i], temp_c) * DEG2RAD;
+#if APP_ACC_CAL_ENABLE
       acc[i] = acc_calibrate_g(i, (float)raw.acc[i] * ACC_G_PER_LSB) * G_TO_MS2;
+#else
+      acc[i] = (float)raw.acc[i] * ACC_G_PER_LSB * G_TO_MS2;
+#endif
     }
+
+#if APP_ACC_CAL_ENABLE
+    { float raw_acc_g[3] = { (float)raw.acc[0] * ACC_G_PER_LSB, (float)raw.acc[1] * ACC_G_PER_LSB, (float)raw.acc[2] * ACC_G_PER_LSB };
+      float gyr_dps_now[3] = { gyr[0] / DEG2RAD, gyr[1] / DEG2RAD, gyr[2] / DEG2RAD };
+      acc_calibration_sample_task(millis(), raw_acc_g, gyr_dps_now); }
+#endif
 
     /* Configurable gyro low-pass reduces white noise without changing the
      * 2 kHz fusion cadence. The first sample seeds the filter. */
@@ -1067,67 +1525,61 @@ int main(void)
     usb_cdc_task();
     {
       uint8_t ch;
-      static uint8_t u_buf[4];
-      static uint8_t u_idx = 0U;
-      static uint8_t cdc_buf[4];
-      static uint8_t cdc_idx = 0U;
-
+      static uint8_t uart_legacy_buf[4];
+      static uint8_t uart_legacy_idx;
+      static uint8_t usb_legacy_buf[4];
+      static uint8_t usb_legacy_idx;
       while(uart_read_byte(&ch))
       {
-        if(u_idx == 0U)
-        {
-          if(ch == 0xAAU) u_buf[u_idx++] = ch;
-        }
-        else
-        {
-          u_buf[u_idx++] = ch;
-          if(u_idx == 4U)
-          {
-            if(u_buf[3] == 0x0DU)
-            {
-              if((u_buf[1] == 0x0CU) && (u_buf[2] == 0x01U))
-              {
-                app_zero_yaw(vofa_pose_live.yaw);
-              }
-              else if((u_buf[1] == 0x00U) && (u_buf[2] == 0x00U))
-              {
-                nvic_system_reset();
-              }
-            }
-            u_idx = 0U;
-          }
-        }
+        protocol_parser_feed_byte(&uart_protocol_parser, ch);
+        legacy_command_feed(ch, uart_legacy_buf, &uart_legacy_idx);
       }
-
       while(usb_cdc_read_byte(&ch))
       {
-        if(cdc_idx == 0U)
-        {
-          if(ch == 0xAAU) cdc_buf[cdc_idx++] = ch;
-        }
-        else
-        {
-          cdc_buf[cdc_idx++] = ch;
-          if(cdc_idx == 4U)
-          {
-            if(cdc_buf[3] == 0x0DU)
-            {
-              if((cdc_buf[1] == 0x0CU) && (cdc_buf[2] == 0x01U))
-              {
-                app_zero_yaw(vofa_pose_live.yaw);
-              }
-              else if((cdc_buf[1] == 0x00U) && (cdc_buf[2] == 0x00U))
-              {
-                nvic_system_reset();
-              }
-            }
-            cdc_idx = 0U;
-          }
-        }
+        protocol_parser_feed_byte(&usb_protocol_parser, ch);
+        legacy_command_feed(ch, usb_legacy_buf, &usb_legacy_idx);
       }
     }
+    if(protocol_reset_pending != 0U)
+    {
+      protocol_reset_pending = 0U;
+      app_request_bootloader();
+    }
 
-    if(mag_ok) ws2812_normal_task(millis());
+    {
+      ws2812_mode_t led_mode = WS2812_MODE_6AXIS;
+      /* A magnetometer sample must have reached VQF before advertising 9D.
+       * Relative yaw is only an output reference and does not change this
+       * nine-axis status indication. */
+      if((mag_ok != 0U) && (vqf_get_mag_ready() != 0))
+      {
+        led_mode = WS2812_MODE_9AXIS;
+      }
+#if APP_ACC_CAL_ENABLE
+      if(acc_cal_rt.active != 0U || acc_cal_status_live.status == ACC_CAL_STATUS_FAILED)
+      {
+        ws2812_acc_calibration_task(millis(), acc_cal_rt.face + 1U, acc_cal_rt.active, acc_cal_status_live.status == ACC_CAL_STATUS_FAILED);
+      }
+      else
+#endif
+      if(app_settings_mode != 0U)
+      {
+        /* Settings mode has priority over all status warnings and freezes
+         * the LED brightness (no breathing). */
+        ws2812_settings_task(millis(), led_mode);
+      }
+      else if((app_fusion_mode == FUSION_MODE_6AXIS) ||
+              (mag_ok != 0U) || (APP_MAG_FUSION_ENABLE == 0U) ||
+              (bias_fallback != 0U) || (bias_history_write_error != 0U) ||
+              (app_settings_dirty != 0U))
+      {
+        ws2812_normal_task(millis(), led_mode,
+                           bias_fallback,
+                           (uint8_t)vqf_get_mag_dist_detected(),
+                           app_settings_dirty,
+                           bias_history_write_error);
+      }
+    }
 #if APP_CAN_ENABLE
     /* CAN needs microsecond timing: the millisecond tick cannot schedule 1 kHz. */
     can_test_task(dwt_cycles() / (system_core_clock / 1000000U));
@@ -1175,16 +1627,3 @@ recover_or_continue:
   }
   }
 }
-
-
-
-
-
-
-
-
-
-
-
-
-

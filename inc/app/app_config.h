@@ -1,4 +1,4 @@
-#ifndef APP_CONFIG_H
+﻿#ifndef APP_CONFIG_H
 #define APP_CONFIG_H
 
 /* Central application configuration. Keep all board-level tuning here. */
@@ -8,6 +8,9 @@
 /* LSM6DSV temperature telemetry is always published. */
 #define APP_GYR_TEMP_COMP_ENABLE       1U
 #define APP_GYR_TEMP_REF_C             25.0f
+/* Maximum temperature difference for selecting a temperature-matched
+ * historical gyro bias during startup fallback. */
+#define APP_GYR_BIAS_TEMP_WINDOW_C     5.0f
 #define APP_GYR_TEMP_LPF_HZ            1.0f
 #define APP_GYR_TEMP_COEFF_X_DPS_PER_C 0.0f
 #define APP_GYR_TEMP_COEFF_Y_DPS_PER_C 0.0f
@@ -24,15 +27,30 @@
 #define APP_SFLP_BIAS_MAX_DPS     5.0f
 #define APP_CAL_GYR_REST_DPS      1.0f
 #define APP_CAL_ACC_REST_MS2      0.8f
+/* Persistent gyro-bias history. The final two 2-KB sectors are reserved for
+ * calibration data and are outside the application image. */
+#define APP_GYR_BIAS_FLASH_SLOT0_ADDR 0x0803E800U
+#define APP_GYR_BIAS_FLASH_SLOT1_ADDR 0x0803F800U
+#define APP_FUSION_SETTINGS_ADDR       0x0803D800U
+#define APP_GYR_DEFAULT_BIAS_X_DPS     0.0f
+#define APP_GYR_DEFAULT_BIAS_Y_DPS     0.0f
+#define APP_GYR_DEFAULT_BIAS_Z_DPS     0.0f
 
 /* Full VQF parameters */
 #define APP_VQF_MOTION_BIAS_ENABLE 0U
 #define APP_VQF_TAU_ACC           3.0f
-#define APP_VQF_TAU_MAG           4.0f
+#define APP_VQF_TAU_MAG           2.0f
 
-/* Enable calibrated IST8310 updates in Full VQF for absolute yaw. */
+/* Enable calibrated IST8310 updates in Full VQF for 9-axis yaw stabilization. */
 #define APP_MAG_FUSION_ENABLE     1U
 #define APP_MAG_VQF_UPDATE_DIV    5U
+/* Relative-yaw output reference: 0 = VQF/KF yaw, 1 = yaw relative to boot.
+ * This changes only the published yaw reference; VQF remains 9-axis. */
+#define APP_RELATIVE_YAW_ENABLE     0U
+/* When VQF rejects magnetometer updates, keep the normal mode color longer
+ * than the green (effective 6-axis) warning color. */
+#define APP_WS2812_MAG_REJECT_BASE_MS   750U
+#define APP_WS2812_MAG_REJECT_GREEN_MS  250U
 
 /* Full VQF stationary gyro-bias estimator tuning. */
 #define APP_VQF_BIAS_SIGMA_REST_DPS       0.05f
@@ -90,5 +108,20 @@
 #define APP_UART_BAUD             2000000U
 #define APP_UART_ENABLE           1U
 #define APP_STREAM_DEFAULT_MODE   0U
+
+/* Six-face accelerometer calibration is compiled in but disabled by default. */
+#define APP_ACC_CAL_ENABLE          0U
+
+/* Reserved calibration sector immediately after the application image. */
+#define APP_ACC_CAL_FLASH_ADDR       0x0803C000U
+#define APP_ACC_CAL_FACE_SECONDS     1.0f
+#define APP_ACC_CAL_FACE_TIMEOUT_S   20.0f
+#define APP_ACC_CAL_GYR_REST_DPS     2.0f
+#define APP_ACC_CAL_NORM_TOL_G       0.15f
+#define APP_ACC_CAL_DOMINANT_MIN_G   0.75f
+#define APP_ACC_CAL_OTHER_MAX_G      0.35f
+#define APP_ACC_CAL_STABLE_MS        500U
+#define APP_ACC_CAL_SAMPLE_MS        500U
+
 
 #endif

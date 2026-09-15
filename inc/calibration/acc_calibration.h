@@ -1,13 +1,33 @@
-/* Provisional six-face diagonal calibration, 2026-09-12.
- * Source: acc_six_faces_20260912_231659_recheck_z_234958_fit.json
- * Standard 1g assumed. Not an installation/nonorthogonality calibration.
- * Apply once to nominal g, before conversion to m/s^2. */
 #ifndef ACC_CALIBRATION_H
 #define ACC_CALIBRATION_H
-static const float acc_cal_bias_g[3] = {-0.001931983667f, 0.000993790571f, -0.001302519166f};
-static const float acc_cal_gain[3] = {1.004898171941f, 1.002332655185f, 1.002755530949f};
+#include <stdint.h>
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+#define ACC_CAL_FACE_COUNT 6U
+#define ACC_CAL_STATUS_IDLE 0U
+#define ACC_CAL_STATUS_RUNNING 1U
+#define ACC_CAL_STATUS_DONE 2U
+#define ACC_CAL_STATUS_FAILED 3U
+
+typedef struct
+{
+  float bias_g[3];
+  float scale[3];
+  uint8_t valid;
+} acc_calibration_t;
+
+extern acc_calibration_t acc_calibration_active;
+void acc_calibration_load(void);
+int acc_calibration_save(const acc_calibration_t *cal);
 static inline float acc_calibrate_g(unsigned axis, float nominal_g)
 {
-  return (nominal_g - acc_cal_bias_g[axis]) * acc_cal_gain[axis];
+  if(axis >= 3U || acc_calibration_active.valid == 0U) return nominal_g;
+  return (nominal_g - acc_calibration_active.bias_g[axis]) * acc_calibration_active.scale[axis];
 }
+
+#ifdef __cplusplus
+}
+#endif
 #endif
