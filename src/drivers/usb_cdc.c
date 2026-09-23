@@ -83,6 +83,14 @@ void usb_cdc_isr(void)
   usbd_irq_handler(&otg_core);
 }
 
+int usb_cdc_tx_idle(void)
+{
+  cdc_struct_type *pcdc;
+  if(!usb_cdc_configured()) return 1;
+  pcdc = (cdc_struct_type *)otg_core.dev.class_handler->pdata;
+  return tx_r == tx_w && pcdc != NULL && pcdc->g_tx_completed != 0U;
+}
+
 int usb_cdc_configured(void)
 {
   return (otg_core.dev.conn_state == USB_CONN_STATE_CONFIGURED) ? 1 : 0;

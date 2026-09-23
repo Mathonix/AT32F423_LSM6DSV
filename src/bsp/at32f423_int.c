@@ -57,3 +57,8 @@ void OTGFS1_IRQHandler(void)
 }
 
 
+
+void USART4_IRQHandler(void)
+{
+  uart_rx_isr();
+}

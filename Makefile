@@ -8,7 +8,7 @@ LIB      := AT32F423_Firmware_Library
 SRC_DIR  := src
 APP_MAIN ?= app/main.c
 INC_DIR  := inc
-BUILD    := build
+BUILD    = build/$(TARGET)/$(if $(filter 1,$(DEBUG_BUILD)),debug,release)-$(if $(filter 1,$(SIX_AXIS)),6axis,9axis)
 
 CC       := arm-none-eabi-gcc
 CXX      := arm-none-eabi-g++
@@ -91,7 +91,7 @@ INCLUDES := \
 
 # Debug/bench builds keep fast startup enabled for validation. Set DEBUG_BUILD=0
 # for the normal production image (fast startup disabled by default).
-DEBUG_BUILD ?= 1
+DEBUG_BUILD ?= 0
 SIX_AXIS ?= 0
 FAST_START_CFLAG := -DAPP_GYR_FAST_START_ENABLE=$(DEBUG_BUILD)
 # SIX_AXIS=1 disables magnetometer fusion and forces the runtime mode to 6-axis.

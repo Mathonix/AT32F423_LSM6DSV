@@ -155,10 +155,12 @@ void protocol_parser_feed_byte(protocol_parser_t *parser, uint8_t byte)
   }
 }
 
-uint16_t protocol_pack_frame(uint8_t *buf, uint8_t msg_id, uint8_t seq, const void *payload, uint8_t len)
+uint16_t protocol_pack_frame(uint8_t *buf, uint16_t capacity, uint8_t msg_id, uint8_t seq, const void *payload, uint8_t len)
 {
   uint16_t crc;
-  if((buf == NULL) || (len > AHRS_MAX_PAYLOAD_LEN))
+  if((buf == NULL) || (len > AHRS_MAX_PAYLOAD_LEN) ||
+     ((uint16_t)(AHRS_FRAME_OVERHEAD + len) > capacity) ||
+     ((len != 0U) && (payload == NULL)))
   {
     return 0U;
   }
@@ -177,7 +179,7 @@ uint16_t protocol_pack_frame(uint8_t *buf, uint8_t msg_id, uint8_t seq, const vo
   return (uint16_t)(AHRS_FRAME_OVERHEAD + len);
 }
 
-uint16_t protocol_pack_attitude(uint8_t *buf, uint8_t seq, float roll, float pitch, float yaw, uint8_t flags, uint16_t timestamp_ms)
+uint16_t protocol_pack_attitude(uint8_t *buf, uint16_t capacity, uint8_t seq, float roll, float pitch, float yaw, uint8_t flags, uint16_t timestamp_ms)
 {
   ahrs_payload_attitude_t payload;
   payload.roll = roll;
@@ -186,10 +188,10 @@ uint16_t protocol_pack_attitude(uint8_t *buf, uint8_t seq, float roll, float pit
   payload.flags = flags;
   payload.reserved = 0U;
   payload.timestamp_ms = timestamp_ms;
-  return protocol_pack_frame(buf, AHRS_MSG_ATTITUDE_EULER, seq, &payload, (uint8_t)sizeof(payload));
+  return protocol_pack_frame(buf, capacity, AHRS_MSG_ATTITUDE_EULER, seq, &payload, (uint8_t)sizeof(payload));
 }
 
-uint16_t protocol_pack_quaternion(uint8_t *buf, uint8_t seq, float qw, float qx, float qy, float qz, uint16_t timestamp_ms)
+uint16_t protocol_pack_quaternion(uint8_t *buf, uint16_t capacity, uint8_t seq, float qw, float qx, float qy, float qz, uint16_t timestamp_ms)
 {
   ahrs_payload_quaternion_t payload;
   payload.qw = qw;
@@ -197,10 +199,10 @@ uint16_t protocol_pack_quaternion(uint8_t *buf, uint8_t seq, float qw, float qx,
   payload.qy = qy;
   payload.qz = qz;
   payload.timestamp_ms = timestamp_ms;
-  return protocol_pack_frame(buf, AHRS_MSG_QUATERNION, seq, &payload, (uint8_t)sizeof(payload));
+  return protocol_pack_frame(buf, capacity, AHRS_MSG_QUATERNION, seq, &payload, (uint8_t)sizeof(payload));
 }
 
-uint16_t protocol_pack_compact(uint8_t *buf, uint8_t seq, float roll, float pitch, float yaw, float gz, uint8_t flags, uint16_t timestamp_ms)
+uint16_t protocol_pack_compact(uint8_t *buf, uint16_t capacity, uint8_t seq, float roll, float pitch, float yaw, float gz, uint8_t flags, uint16_t timestamp_ms)
 {
   ahrs_payload_compact_t payload;
   payload.roll_x100 = (int16_t)(roll * 100.0f);
@@ -210,10 +212,10 @@ uint16_t protocol_pack_compact(uint8_t *buf, uint8_t seq, float roll, float pitc
   payload.flags = flags;
   payload.reserved = 0U;
   payload.timestamp_ms = timestamp_ms;
-  return protocol_pack_frame(buf, AHRS_MSG_COMPACT, seq, &payload, (uint8_t)sizeof(payload));
+  return protocol_pack_frame(buf, capacity, AHRS_MSG_COMPACT, seq, &payload, (uint8_t)sizeof(payload));
 }
 
-uint16_t protocol_pack_imu(uint8_t *buf, uint8_t seq, float gx, float gy, float gz, float ax, float ay, float az, float temp_c, uint16_t timestamp_ms)
+uint16_t protocol_pack_imu(uint8_t *buf, uint16_t capacity, uint8_t seq, float gx, float gy, float gz, float ax, float ay, float az, float temp_c, uint16_t timestamp_ms)
 {
   ahrs_payload_imu_t payload;
   payload.gx = gx;
@@ -224,10 +226,10 @@ uint16_t protocol_pack_imu(uint8_t *buf, uint8_t seq, float gx, float gy, float 
   payload.az = az;
   payload.temp_c_x100 = (int16_t)(temp_c * 100.0f);
   payload.timestamp_ms = timestamp_ms;
-  return protocol_pack_frame(buf, AHRS_MSG_IMU_RAW, seq, &payload, (uint8_t)sizeof(payload));
+  return protocol_pack_frame(buf, capacity, AHRS_MSG_IMU_RAW, seq, &payload, (uint8_t)sizeof(payload));
 }
 
-uint16_t protocol_pack_system_info(uint8_t *buf, uint8_t seq, uint32_t fusion_hz, uint32_t out_hz, uint16_t skip_n, float temp_c, uint8_t stream_mode, uint8_t can_ok)
+uint16_t protocol_pack_system_info(uint8_t *buf, uint16_t capacity, uint8_t seq, uint32_t fusion_hz, uint32_t out_hz, uint16_t skip_n, float temp_c, uint8_t stream_mode, uint8_t can_ok)
 {
   ahrs_payload_system_info_t payload;
   payload.fusion_hz = fusion_hz;
@@ -237,14 +239,14 @@ uint16_t protocol_pack_system_info(uint8_t *buf, uint8_t seq, uint32_t fusion_hz
   payload.stream_mode = stream_mode;
   payload.can_ok = can_ok;
   payload.reserved = 0U;
-  return protocol_pack_frame(buf, AHRS_MSG_SYSTEM_INFO, seq, &payload, (uint8_t)sizeof(payload));
+  return protocol_pack_frame(buf, capacity, AHRS_MSG_SYSTEM_INFO, seq, &payload, (uint8_t)sizeof(payload));
 }
 
-uint16_t protocol_pack_ack(uint8_t *buf, uint8_t seq, uint8_t cmd_id, uint8_t status, uint16_t detail)
+uint16_t protocol_pack_ack(uint8_t *buf, uint16_t capacity, uint8_t seq, uint8_t cmd_id, uint8_t status, uint16_t detail)
 {
   ahrs_payload_ack_t payload;
   payload.cmd_id = cmd_id;
   payload.status = status;
   payload.detail = detail;
-  return protocol_pack_frame(buf, AHRS_MSG_ACK, seq, &payload, (uint8_t)sizeof(payload));
+  return protocol_pack_frame(buf, capacity, AHRS_MSG_ACK, seq, &payload, (uint8_t)sizeof(payload));
 }

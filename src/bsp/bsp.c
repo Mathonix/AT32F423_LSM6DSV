@@ -3,6 +3,8 @@
  */
 
 #include "bsp.h"
+#include "protocol.h"
+#include <string.h>
 
 #if defined (__CC_ARM)
 #pragma import(__use_no_semihosting)
@@ -19,6 +21,15 @@ void _sys_exit(int x)
 
 static volatile uint32_t g_millis;
 static volatile uint8_t uart_dma_running;
+#define UART_CTRL_SLOTS 8U
+static uint8_t uart_ctrl_data[UART_CTRL_SLOTS][AHRS_MAX_FRAME_LEN];
+static uint16_t uart_ctrl_len[UART_CTRL_SLOTS];
+static uint8_t uart_ctrl_head, uart_ctrl_tail, uart_ctrl_count, uart_ctrl_active;
+
+#define UART_RX_RING_SIZE 1024U
+static uint8_t uart_rx_ring[UART_RX_RING_SIZE];
+static volatile uint16_t uart_rx_read, uart_rx_write;
+volatile uint32_t uart_rx_overruns, uart_rx_drops;
 static uint32_t g_dwt_last;
 static uint64_t g_cycles_hi;
 
@@ -276,6 +287,8 @@ static void uart_init(void)
   usart_transmitter_enable(PRINT_UART, TRUE);
   usart_receiver_enable(PRINT_UART, TRUE);
   usart_enable(PRINT_UART, TRUE);
+  nvic_irq_enable(USART4_IRQn, 2, 0);
+  usart_interrupt_enable(PRINT_UART, USART_RDBF_INT, TRUE);
 
   uart_dma_init();
 #else
@@ -301,7 +314,57 @@ int uart_dma_busy(void)
 #endif
 }
 
-int uart_dma_send(const uint8_t *data, uint16_t len)
+static int uart_dma_send_raw(const uint8_t *data, uint16_t len);
+
+/* All callers execute in the main context; DMA only reads the active slot. */
+int uart_control_enqueue(const uint8_t *data, uint16_t len)
+{
+#if APP_UART_ENABLE
+  if(data == NULL || len == 0U || len > AHRS_MAX_FRAME_LEN ||
+     uart_ctrl_count == UART_CTRL_SLOTS) return -1;
+  memcpy(uart_ctrl_data[uart_ctrl_head], data, len);
+  uart_ctrl_len[uart_ctrl_head] = len;
+  uart_ctrl_head = (uint8_t)((uart_ctrl_head + 1U) % UART_CTRL_SLOTS);
+  uart_ctrl_count++;
+  return 0;
+#else
+  (void)data; (void)len;
+  return -1;
+#endif
+}
+
+void uart_tx_task(void)
+{
+#if APP_UART_ENABLE
+  if(uart_dma_busy()) return;
+  if(uart_ctrl_active)
+  {
+    uart_ctrl_tail = (uint8_t)((uart_ctrl_tail + 1U) % UART_CTRL_SLOTS);
+    uart_ctrl_count--;
+    uart_ctrl_active = 0U;
+  }
+  if(uart_ctrl_count != 0U)
+  {
+    /* Send via the raw DMA path below; keep this slot until completion. */
+    if(uart_dma_send_raw(uart_ctrl_data[uart_ctrl_tail],
+                     uart_ctrl_len[uart_ctrl_tail]) == 0)
+      uart_ctrl_active = 1U;
+  }
+#endif
+}
+
+int uart_tx_idle(void)
+{
+#if APP_UART_ENABLE
+  uart_tx_task();
+  return (uart_ctrl_count == 0U && !uart_dma_busy() &&
+          usart_flag_get(PRINT_UART, USART_TDC_FLAG) != RESET);
+#else
+  return 1;
+#endif
+}
+
+static int uart_dma_send_raw(const uint8_t *data, uint16_t len)
 {
 #if APP_UART_ENABLE
   if(len == 0U)
@@ -329,19 +392,47 @@ int uart_dma_send(const uint8_t *data, uint16_t len)
 #endif
 }
 
+int uart_dma_send(const uint8_t *data, uint16_t len)
+{
+  /* Prevent high-rate telemetry from starving a queued control reply. */
+  if(uart_ctrl_count != 0U) return -1;
+  return uart_dma_send_raw(data, len);
+}
+
+void uart_rx_isr(void)
+{
+#if APP_UART_ENABLE
+  uint8_t val;
+  uint16_t next;
+  /* Read STS before DT to clear the hardware overrun flag. */
+  if(usart_flag_get(PRINT_UART, USART_ROERR_FLAG) != RESET)
+    uart_rx_overruns++;
+  if(usart_flag_get(PRINT_UART, USART_RDBF_FLAG) == RESET) return;
+  val = (uint8_t)usart_data_receive(PRINT_UART);
+  next = (uint16_t)((uart_rx_write + 1U) & (UART_RX_RING_SIZE - 1U));
+  if(next == uart_rx_read)
+  {
+    uart_rx_drops++;
+    return;
+  }
+  uart_rx_ring[uart_rx_write] = val;
+  __DMB();
+  uart_rx_write = next;
+#endif
+}
+
 int uart_read_byte(uint8_t *ch)
 {
 #if APP_UART_ENABLE
-  if(usart_flag_get(PRINT_UART, USART_RDBF_FLAG) != RESET)
-  {
-    uint8_t val = (uint8_t)usart_data_receive(PRINT_UART);
-    if(ch != NULL) *ch = val;
-    return 1;
-  }
+  uint16_t read = uart_rx_read;
+  if(read == uart_rx_write) return 0;
+  if(ch != NULL) *ch = uart_rx_ring[read];
+  uart_rx_read = (uint16_t)((read + 1U) & (UART_RX_RING_SIZE - 1U));
+  return 1;
 #else
   (void)ch;
-#endif
   return 0;
+#endif
 }
 
 void bsp_init(void)

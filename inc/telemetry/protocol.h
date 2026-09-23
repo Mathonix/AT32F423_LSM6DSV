@@ -165,13 +165,13 @@ uint16_t protocol_crc16(const uint8_t *data, uint16_t len);
 void protocol_parser_init(protocol_parser_t *parser, protocol_frame_cb_t cb, void *user_data);
 void protocol_parser_feed_byte(protocol_parser_t *parser, uint8_t byte);
 
-uint16_t protocol_pack_frame(uint8_t *buf, uint8_t msg_id, uint8_t seq, const void *payload, uint8_t len);
-uint16_t protocol_pack_attitude(uint8_t *buf, uint8_t seq, float roll, float pitch, float yaw, uint8_t flags, uint16_t timestamp_ms);
-uint16_t protocol_pack_quaternion(uint8_t *buf, uint8_t seq, float qw, float qx, float qy, float qz, uint16_t timestamp_ms);
-uint16_t protocol_pack_compact(uint8_t *buf, uint8_t seq, float roll, float pitch, float yaw, float gz, uint8_t flags, uint16_t timestamp_ms);
-uint16_t protocol_pack_imu(uint8_t *buf, uint8_t seq, float gx, float gy, float gz, float ax, float ay, float az, float temp_c, uint16_t timestamp_ms);
-uint16_t protocol_pack_system_info(uint8_t *buf, uint8_t seq, uint32_t fusion_hz, uint32_t out_hz, uint16_t skip_n, float temp_c, uint8_t stream_mode, uint8_t can_ok);
-uint16_t protocol_pack_ack(uint8_t *buf, uint8_t seq, uint8_t cmd_id, uint8_t status, uint16_t detail);
+uint16_t protocol_pack_frame(uint8_t *buf, uint16_t capacity, uint8_t msg_id, uint8_t seq, const void *payload, uint8_t len);
+uint16_t protocol_pack_attitude(uint8_t *buf, uint16_t capacity, uint8_t seq, float roll, float pitch, float yaw, uint8_t flags, uint16_t timestamp_ms);
+uint16_t protocol_pack_quaternion(uint8_t *buf, uint16_t capacity, uint8_t seq, float qw, float qx, float qy, float qz, uint16_t timestamp_ms);
+uint16_t protocol_pack_compact(uint8_t *buf, uint16_t capacity, uint8_t seq, float roll, float pitch, float yaw, float gz, uint8_t flags, uint16_t timestamp_ms);
+uint16_t protocol_pack_imu(uint8_t *buf, uint16_t capacity, uint8_t seq, float gx, float gy, float gz, float ax, float ay, float az, float temp_c, uint16_t timestamp_ms);
+uint16_t protocol_pack_system_info(uint8_t *buf, uint16_t capacity, uint8_t seq, uint32_t fusion_hz, uint32_t out_hz, uint16_t skip_n, float temp_c, uint8_t stream_mode, uint8_t can_ok);
+uint16_t protocol_pack_ack(uint8_t *buf, uint16_t capacity, uint8_t seq, uint8_t cmd_id, uint8_t status, uint16_t detail);
 
 #ifdef __cplusplus
 }

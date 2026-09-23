@@ -57,3 +57,9 @@ AT32F423_Firmware_Library/.git/
 
 /upper/WebPCAN-Studio-v0.9.0/
 *.before-*
+
+# Large documentation assets
+/docs/videos/*.mp4
+/AT32F423_Firmware_Library/*.chm
+/docs/datasheets/AT32F423_RM_EN_V2.03.pdf
+/docs/datasheets/LSM6DSV_datasheet.pdf

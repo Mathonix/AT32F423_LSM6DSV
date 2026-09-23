@@ -36,8 +36,15 @@ void led_toggle(void);
 uint8_t lsm_int1_read(void);
 uint8_t lsm_int2_read(void);
 int uart_dma_busy(void);
+/* Control frames are copied into persistent storage before DMA starts. */
+int uart_control_enqueue(const uint8_t *data, uint16_t len);
+void uart_tx_task(void);
+int uart_tx_idle(void);
 int uart_dma_send(const uint8_t *data, uint16_t len);
 int uart_read_byte(uint8_t *ch);
+void uart_rx_isr(void);
+extern volatile uint32_t uart_rx_overruns;
+extern volatile uint32_t uart_rx_drops;
 
 #ifdef __cplusplus
 }
