@@ -1,11 +1,12 @@
 ENTRY(Reset_Handler)
-_estack = 0x2000C000;
+/* Keep the shared boot-request mailbox outside the bootloader stack. */
+_estack = 0x2000BFF0;
 _Min_Heap_Size = 0x100;
 _Min_Stack_Size = 0x800;
 MEMORY
 {
   FLASH (rx)  : ORIGIN = 0x08000000, LENGTH = 32K
-  RAM (xrw)   : ORIGIN = 0x20000000, LENGTH = 48K
+  RAM (xrw)   : ORIGIN = 0x20000000, LENGTH = 48K - 16
 }
 SECTIONS
 {

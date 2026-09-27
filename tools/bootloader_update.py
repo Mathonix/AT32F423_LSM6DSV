@@ -1,14 +1,20 @@
 ﻿#!/usr/bin/env python3
 """AT32F423 user bootloader updater over UART (2 Mbps) or USB CDC."""
 import argparse, struct, time, zlib
+from pathlib import Path
 import serial
 
 MAGIC=b"BL"; VER=1; MAX_CHUNK=256
-CMD_HELLO=1; CMD_BEGIN=2; CMD_DATA=3; CMD_END=4; CMD_ABORT=5
+CMD_HELLO=1; CMD_BEGIN=2; CMD_DATA=3; CMD_END=4; CMD_ABORT=5; CMD_BOOT=6
 
 def crc32(b): return zlib.crc32(b) & 0xffffffff
-def frame(cmd, addr=0, payload=b"", value_crc=None):
-    n=len(payload); c=crc32(payload) if value_crc is None else value_crc
+def frame(cmd, addr=0, payload=b"", value_crc=None, *, length=None):
+    n=len(payload) if length is None else length
+    if cmd == CMD_DATA and (n != len(payload) or not 1 <= n <= MAX_CHUNK):
+        raise ValueError("invalid DATA length")
+    if cmd != CMD_DATA and payload:
+        raise ValueError("only DATA carries a payload")
+    c=crc32(payload) if value_crc is None else value_crc
     return MAGIC+bytes((VER,cmd,0,0))+struct.pack("<III",addr,n,c)+payload
 
 def read_reply(ser, timeout=2):
@@ -20,13 +26,16 @@ def read_reply(ser, timeout=2):
             if p<0: del buf[:-1]; break
             if p: del buf[:p]
             if len(buf)<14: break
-            r=bytes(buf[:14]); del buf[:14]
-            if r[2]!=VER or crc32(r[:10]) != struct.unpack_from('<I',r,10)[0]: continue
+            r=bytes(buf[:14])
+            if r[2]!=VER or not r[3]&0x80 or crc32(r[:10]) != struct.unpack_from('<I',r,10)[0]:
+                del buf[0]
+                continue
+            del buf[:14]
             return r[3]&0x7f, r[4], struct.unpack_from('<I',r,6)[0]
     raise TimeoutError("等待 bootloader ACK 超时")
 
-def command(ser, cmd, addr=0, payload=b"", value_crc=None):
-    ser.write(frame(cmd,addr,payload,value_crc)); ser.flush()
+def command(ser, cmd, addr=0, payload=b"", value_crc=None, *, length=None):
+    ser.write(frame(cmd,addr,payload,value_crc,length=length)); ser.flush()
     rc, st, value=read_reply(ser)
     if rc != cmd or st != 0: raise RuntimeError(f"命令 0x{cmd:02X} 失败: status={st}, value={value}")
     return value
@@ -34,17 +43,24 @@ def command(ser, cmd, addr=0, payload=b"", value_crc=None):
 def main():
     ap=argparse.ArgumentParser(); ap.add_argument("--port",required=True); ap.add_argument("--image",required=True)
     ap.add_argument("--baud",type=int,default=2000000); ap.add_argument("--chunk",type=int,default=256)
-    a=ap.parse_args(); data=open(a.image,"rb").read()
-    if len(data) % 4: data += b"\xff" * (4 - len(data) % 4)
-    if not data: raise SystemExit("固件为空")
+    a=ap.parse_args(); data=Path(a.image).read_bytes()
+    if not 8 <= len(data) <= 0x34000: raise SystemExit("固件长度超出应用分区")
+    if not 4 <= a.chunk <= MAX_CHUNK or a.chunk % 4:
+        raise SystemExit("分块大小必须是 4~256 之间的 4 字节倍数")
+    sp, pc = struct.unpack_from("<II", data)
+    if not (0x20000000 < sp <= 0x2000C000 and sp % 8 == 0 and
+            pc & 1 and 0x08008000 <= (pc & ~1) < 0x08008000 + len(data)):
+        raise SystemExit("固件向量表无效，请确认应用链接地址为 0x08008000")
     with serial.Serial(a.port,a.baud,timeout=.05,write_timeout=2) as s:
         time.sleep(.15); s.reset_input_buffer(); s.reset_output_buffer()
         command(s,CMD_HELLO)
-        command(s,CMD_BEGIN,0x08008000,b"",crc32(data))
-        for off in range(0,len(data),min(MAX_CHUNK,max(4,a.chunk))):
-            part=data[off:off+min(MAX_CHUNK,max(4,a.chunk))]
-            command(s,CMD_DATA,0x08008000+off,part)
+        command(s,CMD_BEGIN,0x08008000,b"",crc32(data),length=len(data))
+        for off in range(0,len(data),a.chunk):
+            part=data[off:off+a.chunk]
+            next_off = command(s,CMD_DATA,0x08008000+off,part)
+            if next_off != off + len(part): raise RuntimeError("设备写入偏移不匹配")
             print(f"\r写入 {min(off+len(part),len(data))}/{len(data)}",end="",flush=True)
-        command(s,CMD_END,value_crc=crc32(data))
+        command(s,CMD_END,0x08008000,value_crc=crc32(data),length=len(data))
+        command(s,CMD_BOOT)
         print("\n升级完成，等待 bootloader 校验并启动应用。")
 if __name__=='__main__': main()

@@ -139,6 +139,8 @@ void usbd_core_out_handler(usbd_core_type *udev, uint8_t ept_addr)
   */
 void usbd_core_setup_handler(usbd_core_type *udev, uint8_t ept_num)
 {
+  /* RX rejected this SETUP; never execute the previous setup_buffer again. */
+  if(udev->ept0_sts == USB_EPT0_STALL) return;
   /* setup parse */
   usbd_setup_request_parse(&udev->setup, udev->setup_buffer);
 
@@ -569,11 +571,8 @@ void usbd_ept_recv(usbd_core_type *udev, uint8_t ept_addr, uint8_t *buffer, uint
   ept_info->total_len = len;
   ept_info->trans_len = 0;
 
-  if((ept_addr & 0x7F) == 0)
-  {
-    /* endpoint 0 */
-    ept_info->total_len = ept_info->maxpacket;
-  }
+  /* Keep the caller's buffer capacity, even though the peripheral always
+   * arms a full EP0 packet. RX must reject bytes beyond this capacity. */
 
   if(ept_info->total_len == 0 || ((ept_addr & 0x7F) == 0))
   {

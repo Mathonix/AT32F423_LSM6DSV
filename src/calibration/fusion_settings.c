@@ -89,6 +89,12 @@ int fusion_settings_save_ex(fusion_mode_t mode, uint16_t can_node_id)
   uint32_t old_addr = SETTINGS_SLOT1, new_addr, i, word;
   if(mode > FUSION_MODE_9AXIS_RELATIVE || can_node_id > 0x7FFU) return -1;
   old = latest_record(&old_addr);
+  /* Do not erase/program Flash when the requested configuration is already
+   * persisted. Settings are reachable over an unauthenticated physical link,
+   * so this avoids trivial flash-wear amplification. */
+  if(old != NULL && old->mode == (uint8_t)mode &&
+     old->can_node_id == can_node_id)
+    return 0;
   new_addr = (old_addr == SETTINGS_SLOT1) ? SETTINGS_SLOT0 : SETTINGS_SLOT1;
   memset(&r, 0, sizeof(r));
   r.magic = SETTINGS_MAGIC;
@@ -111,7 +117,7 @@ int fusion_settings_save_ex(fusion_mode_t mode, uint16_t can_node_id)
   }
   flash_lock();
   if(st != FLASH_OPERATE_DONE) return -2;
-  return valid((const settings_record_t *)new_addr) ? 0 : -3;
+  return valid((const settings_record_t *)(uintptr_t)new_addr) ? 0 : -3;
 }
 
 int fusion_settings_load(fusion_mode_t *mode)

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+from contextlib import nullcontext
 import math
 import queue
 import threading
@@ -35,10 +36,21 @@ from protocol import (
     MODE_9AXIS,
     MODE_9AXIS_RELATIVE,
     decode_binary,
-    JustFloatDecoder,
+    MixedStreamDecoder,
+    StreamStats,
+    describe_ack,
     pack_command,
     unpack_binary,
 )
+
+
+def _pose_from_justfloat(values):
+    if len(values) < 3:
+        return [None] * 6
+    yaw, pitch, roll = values[:3]
+    if len(values) == 6:
+        return [yaw, pitch, roll, values[5], values[3], values[4]]
+    return [yaw, pitch, roll, values[3] if len(values) == 4 else None, None, None]
 
 
 class AttitudeCanvas(tk.Canvas):
@@ -153,6 +165,8 @@ class App:
         self.events = queue.Queue(maxsize=20000)
         self.serial_lock = threading.Lock()
         self.reader_thread = None
+        self.connection_generation = 0
+        self.connecting = False
         self.seq = 0
         self.csv_file = None
         self.csv_writer = None
@@ -168,9 +182,9 @@ class App:
         self.baud = tk.StringVar(value="2000000")
         self.parse_mode = tk.StringVar(value="auto")
         self.parse_mode_value = "auto"
-        self.just_decoder = JustFloatDecoder()
         self.selected_mode = tk.IntVar(value=MODE_9AXIS)
         self.immediate_restart = tk.BooleanVar(value=True)
+        self.can_id = tk.StringVar(value="0x001")
         self.mode_text = tk.StringVar(value="当前模式：未知")
         self.settings_text = tk.StringVar(value="运行模式：未进入设置")
         self.vars = {k: tk.StringVar(value="--") for k in
@@ -237,7 +251,6 @@ class App:
 
     def _parse_mode_changed(self, _event=None):
         self.parse_mode_value = self.parse_mode.get()
-        self.just_decoder = JustFloatDecoder()
 
     def refresh(self):
         """?????????????????????????"""
@@ -278,64 +291,116 @@ class App:
                                      else "\uff08\u8bf7\u5148\u8fdb\u5165\u8bbe\u7f6e\u6a21\u5f0f\uff09")
 
     def toggle(self):
-        if self.ser: self.disconnect()
+        if self.ser or self.connecting: self.disconnect()
         else:
             try:
                 device = self._port_device(self.port.get())
                 if not device:
                     raise ValueError("??????")
-                self.ser = serial.Serial(device, int(self.baud.get()), timeout=0.05, write_timeout=0.5)
-                self.ser.reset_input_buffer()
-                self.just_decoder = JustFloatDecoder()
+                baud = int(self.baud.get())
+                if baud <= 0:
+                    raise ValueError("波特率必须为正数")
+                self.connection_generation += 1
                 self.stop.clear()
-                self.reader_thread = threading.Thread(target=self.reader, daemon=True, name="ahrs-serial-reader")
-                self.reader_thread.start()
-                self.connect_btn.config(text="断开"); self.log_line("已连接 " + self.port.get())
-            except Exception as exc: messagebox.showerror("连接失败", str(exc))
+                self.connecting = True
+                self.connect_btn.config(text="取消连接")
+                threading.Thread(target=self._connect_worker,
+                                 args=(device, baud, self.connection_generation),
+                                 daemon=True, name="ahrs-serial-connect").start()
+            except Exception as exc:
+                self.connecting = False
+                self.connect_btn.config(text="连接")
+                messagebox.showerror("连接失败", str(exc))
+
+    def _connect_worker(self, device, baud, generation):
+        ser = None
+        try:
+            ser = serial.Serial(device, baud, timeout=0.05, write_timeout=0.5)
+            ser.reset_input_buffer()
+            with getattr(self, "serial_lock", nullcontext()):
+                if self.stop.is_set() or generation != self.connection_generation:
+                    ser.close()
+                else:
+                    self._event(("connected", (generation, ser, device)))
+        except (serial.SerialException, OSError, ValueError) as exc:
+            if ser is not None:
+                ser.close()
+            if not self.stop.is_set() and generation == self.connection_generation:
+                self._event(("connect_error", (generation, str(exc))))
 
     def disconnect(self):
+        self.connection_generation += 1
+        self.connecting = False
         self.stop.set(); ser, self.ser = self.ser, None
         self.settings_mode = False
         self._update_settings_controls()
-        if ser:
-            try:
-                with self.serial_lock:
+        with self.serial_lock:
+            if ser:
+                try:
                     ser.close()
-            except Exception: pass
+                except (serial.SerialException, OSError): pass
+            # Dispose of connection results queued just before cancellation.
+            while True:
+                try:
+                    kind, data = self.events.get_nowait()
+                except queue.Empty:
+                    break
+                if kind == "connected":
+                    data[1].close()
         self.connect_btn.config(text="连接"); self.log_line("已断开")
 
-    def reader(self):
-        binary, just = bytearray(), bytearray()
+    def reader(self, ser, generation):
+        binary = bytearray()
+        mixed = MixedStreamDecoder()
+        stats = StreamStats()
+        previous_mode = None
         last = time.monotonic(); count = 0
-        ser = self.ser
-        while not self.stop.is_set() and ser is self.ser and ser.is_open:
+        while (not self.stop.is_set() and generation == self.connection_generation
+               and ser is self.ser and ser.is_open):
             try:
                 chunk = ser.read(4096)
             except (serial.SerialException, OSError) as exc:
                 if not self.stop.is_set(): self._event(("log", "???????" + str(exc)))
                 break
             if not chunk: continue
+            if generation != self.connection_generation or self.stop.is_set():
+                break
             selected = self.parse_mode_value
-            if selected in ("auto", "binary"):
-                binary.extend(chunk)
-                for msg, _seq, payload in unpack_binary(binary):
-                    self._event(("binary", decode_binary(msg, payload)))
+            if selected != previous_mode:
+                binary.clear()
+                mixed = MixedStreamDecoder()
+                stats = StreamStats()
+                previous_mode = selected
             if selected in ("auto", "justfloat"):
-                just.extend(chunk)
-                for vals in self.just_decoder.feed(just):
-                    self._event(("pose", vals)); count += 1
+                for item in mixed.feed(chunk):
+                    if item[0] == "binary":
+                        self._event(("binary", decode_binary(item[1], item[3])))
+                    else:
+                        self._event(("pose", _pose_from_justfloat(item[1])))
+                    count += 1
+                stats = mixed.stats
+            elif selected == "binary":
+                binary.extend(chunk)
+                for msg, _seq, payload in unpack_binary(binary, stats):
+                    self._event(("binary", decode_binary(msg, payload)))
+                    count += 1
             now = time.monotonic()
             if now - last >= 1.0:
-                self._event(("rate", count)); count = 0; last = now
-        self._event(("reader_stopped", None))
+                self._event(("rate", {"fps": count / (now - last), "crc": stats.crc_errors,
+                                      "resync": stats.resync_bytes}))
+                count = 0; last = now
+        self._event(("reader_stopped", generation))
 
     def _event(self, item):
         try: self.events.put_nowait(item)
         except queue.Full:
-            try: self.events.get_nowait()
+            try:
+                discarded = self.events.get_nowait()
+                if discarded[0] == "connected": discarded[1][1].close()
             except queue.Empty: pass
             try: self.events.put_nowait(item)
-            except queue.Full: pass
+            except queue.Full:
+                if item[0] == "connected": item[1][1].close()
 
     def send(self, cmd, payload=b""):
         if not self.ser:
@@ -433,7 +498,29 @@ class App:
                             temp = vals[3] if len(vals) > 3 else None
                             csv_rows.append([time.time(), vals[0], vals[1], vals[2], temp])
                 elif kind == "rate":
-                    self.vars["rate"].set(f"{data} Hz")
+                    self.vars["rate"].set(f"{data['fps']:.1f} Hz")
+                    self.vars["crc"].set(f"{data['crc']} / 丢弃字节 {data['resync']}")
+                elif kind == "connected":
+                    generation, ser, device = data
+                    if generation != self.connection_generation or self.stop.is_set():
+                        ser.close()
+                        continue
+                    self.ser = ser
+                    self.connecting = False
+                    self.reader_thread = threading.Thread(target=self.reader, args=(ser, generation),
+                                                          daemon=True, name="ahrs-serial-reader")
+                    self.reader_thread.start()
+                    self.connect_btn.config(text="断开")
+                    self.log_line("已连接 " + device)
+                elif kind == "connect_error":
+                    generation, error = data
+                    if generation == self.connection_generation:
+                        self.connecting = False
+                        self.connect_btn.config(text="连接")
+                        self.log_line("连接失败：" + error)
+                elif kind == "reader_stopped":
+                    if data == self.connection_generation:
+                        self.disconnect()
                 elif kind == "binary":
                     if data.get("kind") == "attitude":
                         latest_pose = [data["yaw"], data["pitch"], data["roll"]]
@@ -466,43 +553,44 @@ class App:
     def handle_binary(self, data):
         kind = data.get("kind")
         if kind == "attitude": self.events.put(("pose", (data["yaw"], data["pitch"], data["roll"])))
-        elif kind == "ack":
-            cmd = data["cmd_id"]; status = data["status"]; detail = data["detail"]
-            self.log_line(f"ACK cmd=0x{cmd:02X} status={status} detail={detail}")
-            if cmd == CMD_ENTER_SETTINGS:
-                if status == 0:
-                    self.settings_mode = True
-                    self._update_settings_controls()
-                    self.settings_text.set("???????")
-                else:
-                    self.settings_text.set(f"?????status={status}, detail={detail}")
-            elif cmd == CMD_EXIT_SETTINGS:
-                if status == 0:
-                    self.settings_mode = False
-                    self._update_settings_controls()
-                    self.settings_text.set("???????")
-                else:
-                    self.settings_text.set(f"?????status={status}, detail={detail}")
-            elif cmd == CMD_SET_FUSION_MODE:
-                if status == 0:
-                    self.pending_restart = not self.immediate_restart.get()
-                    self.settings_text.set("????????????????????" if self.pending_restart else "?????????????")
-                    if self.pending_exit_after_mode and self.settings_mode:
-                        self.pending_exit_after_mode = False
-                        self.exit_settings()
-                else:
-                    self.pending_restart = False
-                    self.pending_exit_after_mode = False
-                    self.settings_text.set(f"?????status={status}, detail={detail}")
-            elif cmd == CMD_SET_CAN_NODE_ID and status == 0:
-                self.log_line(f"CAN ID ???? 0x{detail:03X}")
-            elif cmd in (CMD_START_GYRO_CAL_60S, CMD_START_ACC_6FACE_CAL):
-                self.settings_text.set("?????" if status == 0 else f"?????status={status}, detail={detail}")
+        elif kind == "ack": self._handle_ack(data)
         elif kind == "system":
             self.vars["temperature"].set(f"{data['temperature_c']:.2f} °C")
             self.mode_text.set(f"设备模式：{data.get('stream_mode', '?')}")
             self.log_line(f"系统 {data['fusion_hz']}Hz/{data['out_hz']}Hz mode={data['stream_mode']} CAN={data['can_ok']}")
         else: self.log_line(f"收到消息 0x{data.get('msg_id', 0):02X}")
+
+    def _handle_ack(self, data):
+        cmd = data["cmd_id"]; status = data["status"]; detail = data["detail"]
+        description = describe_ack(cmd, status, detail)
+        self.log_line(description)
+        if status != 0:
+            if cmd == CMD_SET_FUSION_MODE:
+                self.pending_restart = False
+                self.pending_exit_after_mode = False
+            self.settings_text.set(description)
+            return
+        if cmd == CMD_ENTER_SETTINGS:
+            self.settings_mode = True
+            self._update_settings_controls()
+            self.settings_text.set("已进入设置模式")
+        elif cmd == CMD_EXIT_SETTINGS:
+            self.settings_mode = False
+            self._update_settings_controls()
+            self.settings_text.set("已退出设置模式" + ("，参数已变更，重启后生效" if detail else ""))
+        elif cmd == CMD_SET_FUSION_MODE:
+            self.pending_restart = not self.immediate_restart.get()
+            mode_name = {MODE_6AXIS: "六轴", MODE_9AXIS: "九轴",
+                         MODE_9AXIS_RELATIVE: "九轴相对角"}.get(detail, "未知模式")
+            if self.pending_exit_after_mode and self.settings_mode:
+                self.pending_exit_after_mode = False
+                self.exit_settings()
+            self.settings_text.set(mode_name + ("已保存，重启后生效" if self.pending_restart else "已保存，正在重启"))
+        elif cmd == CMD_SET_CAN_NODE_ID:
+            self.can_id.set(f"0x{detail:03X}")
+            self.log_line(f"CAN ID 已保存为 0x{detail:03X}")
+        elif cmd in (CMD_START_GYRO_CAL_60S, CMD_START_ACC_6FACE_CAL):
+            self.settings_text.set(description)
 
     def log_line(self, text):
         self.log.config(state="normal"); self.log.insert("end", time.strftime("%H:%M:%S ") + text + "\n"); self.log.see("end"); self.log.config(state="disabled")

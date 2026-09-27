@@ -141,24 +141,47 @@ static usb_sts_type class_setup_handler(void *udev, usb_setup_type *setup)
   usbd_core_type *pudev = (usbd_core_type *)udev;
   cdc_struct_type *pcdc = (cdc_struct_type *)pudev->class_handler->pdata;
 
+  /* A new SETUP cancels any pending control OUT transaction. */
+  pcdc->g_req = 0U;
+  pcdc->g_len = 0U;
   switch(setup->bmRequestType & USB_REQ_TYPE_RESERVED)
   {
     /* class request */
     case USB_REQ_TYPE_CLASS:
-      if(setup->wLength)
+      /* CDC line coding is exactly seven bytes. The control buffer is only
+       * eight bytes long; never let host supplied wLength reach the USB
+       * transfer engine unchecked. */
+      if(setup->wIndex != 0U ||
+         (setup->bmRequestType & USB_REQ_RECIPIENT_MASK) != USB_REQ_RECIPIENT_INTERFACE)
       {
-        if(setup->bmRequestType & USB_REQ_DIR_DTH)
-        {
-          usb_vcp_cmd_process(udev, setup->bRequest, pcdc->g_cmd, setup->wLength);
-          usbd_ctrl_send(pudev, pcdc->g_cmd, setup->wLength);
-        }
-        else
-        {
-          pcdc->g_req = setup->bRequest;
-          pcdc->g_len = setup->wLength;
-          usbd_ctrl_recv(pudev, pcdc->g_cmd, pcdc->g_len);
-
-        }
+        usbd_ctrl_unsupport(pudev);
+        return USB_FAIL;
+      }
+      if(setup->bRequest == GET_LINE_CODING &&
+         (setup->bmRequestType & USB_REQ_DIR_DTH) &&
+         setup->wLength == 7U && setup->wValue == 0U)
+      {
+        usb_vcp_cmd_process(udev, setup->bRequest, pcdc->g_cmd, 7U);
+        usbd_ctrl_send(pudev, pcdc->g_cmd, 7U);
+      }
+      else if(setup->bRequest == SET_LINE_CODING &&
+              !(setup->bmRequestType & USB_REQ_DIR_DTH) &&
+              setup->wLength == 7U && setup->wValue == 0U)
+      {
+        pcdc->g_req = setup->bRequest;
+        pcdc->g_len = 7U;
+        usbd_ctrl_recv(pudev, pcdc->g_cmd, 7U);
+      }
+      else if(setup->bRequest == 0x22U && /* SET_CONTROL_LINE_STATE (DTR/RTS) */
+              !(setup->bmRequestType & USB_REQ_DIR_DTH) &&
+              setup->wLength == 0U && (setup->wValue & ~3U) == 0U)
+      {
+        /* No UART modem lines; the core sends the zero-length status ACK. */
+      }
+      else
+      {
+        usbd_ctrl_unsupport(pudev);
+        return USB_FAIL;
       }
       break;
     /* standard request */
@@ -216,12 +239,13 @@ static usb_sts_type class_ept0_rx_handler(void *udev)
   cdc_struct_type *pcdc = (cdc_struct_type *)pudev->class_handler->pdata;
   uint32_t recv_len = usbd_get_recv_len(pudev, 0);
   /* ...user code... */
-  if( pcdc->g_req == SET_LINE_CODING)
+  if(pcdc->g_req == SET_LINE_CODING && pcdc->g_len == 7U && recv_len == 7U)
   {
     /* class process */
     usb_vcp_cmd_process(udev, pcdc->g_req, pcdc->g_cmd, recv_len);
   }
-
+  pcdc->g_req = 0U;
+  pcdc->g_len = 0U;
   return status;
 }
 
@@ -327,6 +351,8 @@ static usb_sts_type cdc_struct_init(cdc_struct_type *pcdc)
   pcdc->g_tx_completed = 1;
   pcdc->g_rx_completed = 0;
   pcdc->alt_setting = 0;
+  pcdc->g_req = 0U;
+  pcdc->g_len = 0U;
   pcdc->linecoding.bitrate = linecoding.bitrate;
   pcdc->linecoding.data = linecoding.data;
   pcdc->linecoding.format = linecoding.format;
@@ -402,7 +428,8 @@ static void usb_vcp_cmd_process(void *udev, uint8_t cmd, uint8_t *buff, uint16_t
   switch(cmd)
   {
     case SET_LINE_CODING:
-      pcdc->linecoding.bitrate = (uint32_t)(buff[0] | (buff[1] << 8) | (buff[2] << 16) | (buff[3] <<24));
+      pcdc->linecoding.bitrate = (uint32_t)buff[0] | ((uint32_t)buff[1] << 8) |
+                                ((uint32_t)buff[2] << 16) | ((uint32_t)buff[3] << 24);
       pcdc->linecoding.format = buff[4];
       pcdc->linecoding.parity = buff[5];
       pcdc->linecoding.data = buff[6];

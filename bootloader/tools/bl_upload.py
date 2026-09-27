@@ -1,7 +1,8 @@
 """AT32F423 user bootloader uploader for USB CDC or UART.
 Protocol is shared by both transports; USB CDC is exposed as a COM port.
 """
-import argparse, struct, time, zlib
+import argparse, binascii, struct, time, zlib
+from pathlib import Path
 import serial
 
 MAGIC=b"BL"; VERSION=1; APP_BASE=0x08008000; MAX_CHUNK=256
@@ -21,15 +22,20 @@ def ack_ok(data, cmd):
 def read_ack(ser, cmd, timeout=3.0):
     end=time.monotonic()+timeout; buf=bytearray()
     while time.monotonic()<end:
-        buf += ser.read(ser.in_waiting or 1)
+        buf += ser.read(min(4096, ser.in_waiting or 1))
         while len(buf)>=14:
             i=buf.find(MAGIC)
-            if i<0: buf.clear(); break
+            if i<0:
+                del buf[:len(buf) - int(buf[-1:] == MAGIC[:1])]
+                break
             if i: del buf[:i]
             if len(buf)<14: break
-            frame=bytes(buf[:14]); del buf[:14]
+            frame=bytes(buf[:14])
             v=ack_ok(frame,cmd)
-            if v is not None: return v
+            if v is not None:
+                del buf[:14]
+                return v
+            del buf[0]
     raise TimeoutError(f"timeout waiting ACK for 0x{cmd:02X}")
 
 def request(ser, cmd, seq, addr, length, image_crc, payload=b""):
@@ -37,12 +43,22 @@ def request(ser, cmd, seq, addr, length, image_crc, payload=b""):
     return read_ack(ser,cmd)
 
 def enter_bootloader(ser):
-    # Existing application maintenance command: app records boot request then resets.
-    ser.write(bytes((0xAA,0x00,0x00,0x0D))); ser.flush(); time.sleep(0.4)
+    # The legacy four-byte reset requests APPLICATION reset, not update mode.
+    body = bytes((0x16, 0, 0))
+    ser.write(b"\xAA\x55" + body + struct.pack("<H", binascii.crc_hqx(body, 0xFFFF)))
+    ser.flush(); time.sleep(0.4)
+
+def validate_image(data):
+    if not 8 <= len(data) <= 0x34000:
+        raise ValueError("image size outside application partition")
+    sp, pc = struct.unpack_from("<II", data)
+    if not (0x20000000 < sp <= 0x2000C000 and sp % 8 == 0 and
+            pc & 1 and APP_BASE <= (pc & ~1) < APP_BASE + len(data)):
+        raise ValueError("invalid application vectors (link the image at 0x08008000)")
 
 def upload(port, baud, path, enter):
-    data=open(path,"rb").read()
-    if not data or len(data)>0x34000: raise ValueError("image size exceeds application partition")
+    data=Path(path).read_bytes()
+    validate_image(data)
     image_crc=zlib.crc32(data)&0xffffffff
     ser=serial.Serial(port, baudrate=baud, timeout=0.05, write_timeout=2)
     try:
@@ -55,7 +71,8 @@ def upload(port, baud, path, enter):
             if next_off!=off+len(chunk): raise RuntimeError(f"offset mismatch: expected {off+len(chunk)}, got {next_off}")
             print(f"\r{next_off}/{len(data)} ({next_off*100/len(data):5.1f}%)",end="",flush=True)
         request(ser,4,0,APP_BASE,len(data),image_crc)
-        print("\nUpload complete; reset the device to run the application.")
+        request(ser,6,0,0,0,0)
+        print("\nUpload complete; application startup requested.")
     finally: ser.close()
 
 def main():
@@ -67,7 +84,7 @@ def main():
     group.add_argument(
         "--enter",
         action="store_true",
-        help="best-effort legacy request to the running application",
+        help="best-effort framed bootloader-entry request to the running application",
     )
     group.add_argument(
         "--no-enter",

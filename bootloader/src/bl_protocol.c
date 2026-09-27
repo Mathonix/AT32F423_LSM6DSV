@@ -11,6 +11,7 @@ static uint8_t rx[BL_FRAME_SIZE];
 static uint16_t rxn;
 static uint32_t image_len, image_crc, image_next;
 static uint8_t active;
+static uint8_t boot_allowed, boot_requested;
 
 uint32_t bl_crc32(const uint8_t *p, uint32_t n)
 {
@@ -41,8 +42,7 @@ static int valid_app(void)
 {
   uint32_t sp = *(const uint32_t *)BL_APP_BASE;
   uint32_t pc = *(const uint32_t *)(BL_APP_BASE + 4U);
-  return ((sp & 0x2FFE0000U) == 0x20000000U &&
-          pc >= BL_APP_BASE && pc < BL_APP_END && (pc & 1U));
+  return bl_app_vectors_valid(sp, pc);
 }
 
 static int erase_app(void)
@@ -84,6 +84,18 @@ void bl_protocol_reset(void)
   image_len = 0U;
   image_crc = 0U;
   image_next = 0U;
+  boot_allowed = (uint8_t)valid_app();
+  boot_requested = 0U;
+}
+
+int bl_protocol_can_boot(void)
+{
+  return boot_allowed && !active && valid_app();
+}
+
+int bl_protocol_boot_requested(void)
+{
+  return boot_requested && bl_protocol_can_boot();
 }
 
 static void handle_frame(const uint8_t *p, uint16_t n)
@@ -100,21 +112,27 @@ static void handle_frame(const uint8_t *p, uint16_t n)
   }
   else if(cmd == BL_CMD_BEGIN)
   {
-    if(addr != BL_APP_BASE || len == 0U || len > (BL_APP_END - BL_APP_BASE))
+    if(addr != BL_APP_BASE || len < 8U || len > (BL_APP_END - BL_APP_BASE))
       reply(cmd, BL_ST_BAD_PARAM, 0U);
-    else if(!erase_app())
-      reply(cmd, BL_ST_FLASH, 0U);
     else
     {
-      image_len = len; image_crc = crc; image_next = 0U; active = 1U;
-      reply(cmd, BL_ST_OK, 0U);
+      /* Once erase starts, only a successful END may authorize startup. */
+      active = 0U; boot_allowed = 0U; boot_requested = 0U;
+      image_len = len; image_crc = crc; image_next = 0U;
+      if(!erase_app()) reply(cmd, BL_ST_FLASH, 0U);
+      else
+      {
+        active = 1U;
+        reply(cmd, BL_ST_OK, 0U);
+      }
     }
   }
   else if(cmd == BL_CMD_DATA)
   {
     if(!active || addr != BL_APP_BASE + image_next || len == 0U ||
        len > BL_MAX_CHUNK || n != BL_HEADER_SIZE + len ||
-       image_next + len > image_len)
+       image_next + len > image_len || (addr & 3U) != 0U ||
+       ((len & 3U) != 0U && image_next + len != image_len))
       reply(cmd, BL_ST_BAD_PARAM, image_next);
     else if(bl_crc32(p + BL_HEADER_SIZE, len) != crc)
       reply(cmd, BL_ST_CRC, image_next);
@@ -132,23 +150,32 @@ static void handle_frame(const uint8_t *p, uint16_t n)
       reply(cmd, BL_ST_BAD_PARAM, image_next);
     else if(bl_crc32((const uint8_t *)BL_APP_BASE, image_len) != image_crc)
       reply(cmd, BL_ST_CRC, image_next);
-    else if(!valid_app())
+    else if(!valid_app() ||
+            ((*(const uint32_t *)(BL_APP_BASE + 4U)) & ~1U) >= BL_APP_BASE + image_len)
       reply(cmd, BL_ST_NO_APP, image_next);
     else
     {
       active = 0U;
+      boot_allowed = 1U;
       reply(cmd, BL_ST_OK, image_next);
     }
   }
   else if(cmd == BL_CMD_ABORT)
   {
-    bl_protocol_reset();
+    /* Do not revalidate just the vectors of a partially written image. */
+    active = 0U; boot_requested = 0U;
+    image_len = image_crc = image_next = 0U;
     reply(cmd, BL_ST_OK, 0U);
   }
   else if(cmd == BL_CMD_BOOT)
   {
-    active = 0U;
-    reply(cmd, BL_ST_OK, 0U);
+    if(active) reply(cmd, BL_ST_BUSY, image_next);
+    else if(!bl_protocol_can_boot()) reply(cmd, BL_ST_NO_APP, 0U);
+    else
+    {
+      boot_requested = 1U;
+      reply(cmd, BL_ST_OK, 0U);
+    }
   }
   else
   {
@@ -170,6 +197,9 @@ void bl_protocol_feed(uint8_t b)
       continue;
     }
     memcpy(&len, rx + 10U, sizeof(len));
+    /* Only DATA carries a payload. BEGIN/END use length for the entire
+     * image, which is larger than both BL_MAX_CHUNK and the RX buffer. */
+    if(rx[3] != BL_CMD_DATA) len = 0U;
     if(len > BL_MAX_CHUNK)
     {
       memmove(rx, rx + 1U, --rxn);

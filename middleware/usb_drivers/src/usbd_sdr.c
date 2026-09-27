@@ -444,6 +444,15 @@ usb_sts_type usbd_endpoint_request(usbd_core_type *udev)
   uint8_t ept_addr = LBYTE(setup->wIndex);
   usb_ept_info *ept_info;
 
+  /* wIndex comes directly from SETUP. Check it before indexing either
+   * endpoint array or using it to derive a peripheral register address. */
+  if((setup->wIndex & 0xFF70U) != 0U ||
+     (ept_addr & 0x0FU) >= USB_EPT_MAX_NUM)
+  {
+    usbd_ctrl_unsupport(udev);
+    return USB_FAIL;
+  }
+
   if((setup->bmRequestType & USB_REQ_TYPE_RESERVED) != USB_REQ_TYPE_STANDARD)
   {
     udev->class_handler->setup_handler(udev, &udev->setup);

@@ -1,5 +1,6 @@
 #ifndef BOOT_CONFIG_H
 #define BOOT_CONFIG_H
+#include <stdint.h>
 #define BL_FLASH_BASE 0x08000000U
 #define BL_FLASH_END  0x08008000U
 #define BL_APP_BASE   0x08008000U
@@ -18,4 +19,14 @@
 #define BL_MAX_CHUNK 256U
 #define BL_MAGIC0 0x42U
 #define BL_MAGIC1 0x4CU
+
+/* Used for both normal startup and final upload validation. Accept legacy
+ * images with an initial SP at the physical SRAM end, but never an empty,
+ * misaligned or out-of-range stack, or a non-Thumb reset vector. */
+static inline int bl_app_vectors_valid(uint32_t sp, uint32_t pc)
+{
+  return sp > 0x20000000U && sp <= 0x2000C000U && (sp & 7U) == 0U &&
+         (pc & 1U) != 0U && (pc & ~1U) >= BL_APP_BASE &&
+         (pc & ~1U) < BL_APP_END;
+}
 #endif

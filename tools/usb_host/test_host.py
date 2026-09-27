@@ -70,6 +70,30 @@ def make_event_sink():
 
 
 class AppConnectionTests(unittest.TestCase):
+    def test_disconnect_closes_connection_result_waiting_in_queue(self):
+        fake = FakeSerial()
+        dummy = make_event_sink()
+        dummy.connection_generation = 1
+        dummy.connecting = True
+        dummy.ser = None
+        dummy.serial_lock = threading.Lock()
+        dummy._update_settings_controls = lambda: None
+        dummy.connect_btn = SimpleNamespace(config=lambda **kwargs: None)
+        dummy.log_line = lambda _text: None
+        dummy.events.put(("connected", (1, fake, "TEST")))
+        host_app.App.disconnect(dummy)
+        self.assertTrue(fake.closed)
+        self.assertTrue(dummy.events.empty())
+        self.assertEqual(dummy.connection_generation, 2)
+
+    def test_queue_eviction_closes_unclaimed_connection(self):
+        fake = FakeSerial()
+        dummy = make_event_sink()
+        dummy.events = queue.Queue(maxsize=1)
+        dummy._event(("connected", (1, fake, "TEST")))
+        dummy._event(("log", "next event"))
+        self.assertTrue(fake.closed)
+
     def test_connect_worker_publishes_connected_serial(self):
         fake = FakeSerial()
         dummy = make_event_sink()
@@ -106,6 +130,20 @@ class AppConnectionTests(unittest.TestCase):
 
 
 class ReaderIntegrationTests(unittest.TestCase):
+    def test_stale_reader_drops_chunk_after_reconnection(self):
+        dummy = make_event_sink()
+        dummy.connection_generation = 1
+        dummy.parse_mode_value = "auto"
+        fake = FakeSerial()
+        dummy.ser = fake
+        def reconnect_during_read(_size):
+            dummy.connection_generation = 2
+            return struct.pack("<fff", 1, 2, 3) + JustFloatDecoder.TAIL
+        fake.read = reconnect_during_read
+        host_app.App.reader(dummy, fake, 1)
+        self.assertEqual(dummy.events.get_nowait(), ("reader_stopped", 1))
+        self.assertTrue(dummy.events.empty())
+
     def test_auto_reader_decodes_ack_between_justfloat_frames(self):
         first = struct.pack("<fff", 1.0, 2.0, 3.0) + JustFloatDecoder.TAIL
         second = struct.pack("<fff", 4.0, 5.0, 6.0) + JustFloatDecoder.TAIL
@@ -147,7 +185,7 @@ class ReaderIntegrationTests(unittest.TestCase):
             events.append(dummy.events.get_nowait())
         rates = [data for kind, data in events if kind == "rate"]
         self.assertEqual(len(rates), 1)
-        self.assertEqual(rates[0], {"fps": 4, "crc": 0, "resync": 0})
+        self.assertEqual(rates[0], {"fps": 2, "crc": 0, "resync": 0})
 
 
 class PoseMappingTests(unittest.TestCase):
@@ -230,6 +268,41 @@ class AckHandlingTests(unittest.TestCase):
 
 
 class ProtocolResyncTests(unittest.TestCase):
+    def test_all_fragment_sizes_and_channel_counts(self):
+        for channels in (3, 4, 6):
+            values = tuple(float(i + 1) for i in range(channels))
+            frame = struct.pack("<" + "f" * channels, *values) + JustFloatDecoder.TAIL
+            ack = pack_command(MSG_ACK, 1, struct.pack("<BBH", CMD_PING, 0, 0))
+            stream = ack + (frame + ack) * 3
+            expected = [("binary", MSG_ACK, 1, struct.pack("<BBH", CMD_PING, 0, 0))]
+            expected += [("justfloat", values), expected[0]] * 3
+            for size in range(1, len(stream) + 1):
+                decoder = MixedStreamDecoder()
+                items = []
+                for start in range(0, len(stream), size):
+                    items.extend(decoder.feed(stream[start:start + size]))
+                self.assertEqual(items, expected, (channels, size))
+
+    def test_fragmented_binary_payload_owns_embedded_float_tail(self):
+        payload = struct.pack("<fff", 1, 2, 3) + JustFloatDecoder.TAIL
+        frame = pack_command(0x01, 1, payload)
+        decoder = MixedStreamDecoder()
+        self.assertEqual(decoder.feed(frame[:-2]), [])
+        self.assertEqual(decoder.feed(frame[-2:]), [("binary", 0x01, 1, payload)])
+
+    def test_noise_buffer_is_bounded(self):
+        decoder = MixedStreamDecoder()
+        self.assertEqual(decoder.feed(b"x" * 100000), [])
+        self.assertLessEqual(len(decoder.buffer), 70)
+
+    def test_corrupt_crc_does_not_swallow_next_frame(self):
+        valid = pack_command(CMD_PING, 2)
+        corrupt = bytearray(pack_command(0x7F, 1, b"xxx" + valid))
+        corrupt[-1] ^= 1
+        stats = StreamStats()
+        self.assertEqual(unpack_binary(corrupt, stats), [(CMD_PING, 2, b"")])
+        self.assertEqual(stats.crc_errors, 1)
+
     def test_mixed_decoder_skips_incomplete_false_sync(self):
         frame = pack_command(CMD_PING, 12)
         false_prefix = b"\xAA\x55\x00\x3F\x00"
@@ -274,6 +347,20 @@ class ProtocolResyncTests(unittest.TestCase):
 
 
 class DecodeTests(unittest.TestCase):
+    def test_nonfinite_attitude_does_not_reach_canvas(self):
+        data = decode_binary(0x01, struct.pack("<fffBBH", float("nan"), 0, 0, 0, 0, 0))
+        self.assertEqual(data["kind"], "binary")
+
+    def test_justfloat_six_channels_split_near_tail(self):
+        values = (1., 2., 3., 4., 5., 6.)
+        frame = struct.pack("<6f", *values) + JustFloatDecoder.TAIL
+        for split in range(1, len(frame)):
+            decoder = JustFloatDecoder()
+            buffer = bytearray(frame[:split])
+            self.assertEqual(decoder.feed(buffer), [])
+            buffer.extend(frame[split:])
+            self.assertEqual(decoder.feed(buffer), [values])
+
     def test_compact_frame_reports_attitude(self):
         payload = struct.pack("<hhhhBBH", 120, -450, 900, -31, 0x08, 0, 42)
         data = decode_binary(MSG_COMPACT, payload)

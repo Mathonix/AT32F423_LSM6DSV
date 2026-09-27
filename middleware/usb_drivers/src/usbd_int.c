@@ -324,12 +324,27 @@ void usbd_enumdone_handler(usbd_core_type *udev)
   * @param  udev: to the structure of usbd_core_type
   * @retval none
   */
+/* FIFO reads consume words, but callers may provide non-word-sized buffers.
+ * Copy only actual bytes, and always drain rejected packets from the FIFO. */
+static void usbd_read_rx_fifo(otg_global_type *usbx, uint8_t *dest, uint32_t count)
+{
+  while(count != 0U)
+  {
+    uint32_t word = USB_FIFO(usbx, 0);
+    uint32_t bytes = count < 4U ? count : 4U;
+    for(uint32_t i = 0U; i < bytes; ++i)
+      if(dest != 0) *dest++ = (uint8_t)(word >> (8U * i));
+    count -= bytes;
+  }
+}
+
 void usbd_rxflvl_handler(usbd_core_type *udev)
 {
   otg_global_type *usbx = udev->usb_reg;
   uint32_t stsp;
   uint32_t count;
   uint32_t pktsts;
+  uint32_t ept_num;
   usb_ept_info *ept_info;
 
   /* disable rxflvl interrupt */
@@ -345,15 +360,34 @@ void usbd_rxflvl_handler(usbd_core_type *udev)
   pktsts = (stsp &USB_OTG_GRXSTSP_PKTSTS) >> 17;
 
   /* get endpoint infomation struct */
-  ept_info = &udev->ept_out[stsp & USB_OTG_GRXSTSP_EPTNUM];
+  ept_num = stsp & USB_OTG_GRXSTSP_EPTNUM;
+  if(ept_num >= USB_EPT_MAX_NUM)
+  {
+    usbd_read_rx_fifo(usbx, 0, count);
+    usb_global_interrupt_enable(usbx, USB_OTG_RXFLVL_INT, TRUE);
+    return;
+  }
+  ept_info = &udev->ept_out[ept_num];
 
   /* received out data packet */
   if(pktsts == USB_OUT_STS_DATA)
   {
     if(count != 0)
     {
-      /* read packet to buffer */
-      usb_read_packet(usbx, ept_info->trans_buf, (stsp & USB_OTG_GRXSTSP_EPTNUM), count);
+      if(ept_info->trans_buf == 0 || ept_info->trans_len > ept_info->total_len ||
+         count > ept_info->total_len - ept_info->trans_len)
+      {
+        usbd_read_rx_fifo(usbx, 0, count);
+        if(ept_num == 0U)
+        {
+          udev->ept0_sts = USB_EPT0_STALL;
+          usbd_ctrl_unsupport(udev);
+        }
+        else usbd_set_stall(udev, (uint8_t)ept_num);
+        usb_global_interrupt_enable(usbx, USB_OTG_RXFLVL_INT, TRUE);
+        return;
+      }
+      usbd_read_rx_fifo(usbx, ept_info->trans_buf, count);
       ept_info->trans_buf += count;
       ept_info->trans_len += count;
 
@@ -362,9 +396,17 @@ void usbd_rxflvl_handler(usbd_core_type *udev)
   /* setup data received */
   else if ( pktsts == USB_SETUP_STS_DATA)
   {
-    /* read packet to buffer */
-    usb_read_packet(usbx, udev->setup_buffer, (stsp & USB_OTG_GRXSTSP_EPTNUM), count);
-    ept_info->trans_len += count;
+    if(ept_num == 0U && count == 8U)
+    {
+      usbd_read_rx_fifo(usbx, udev->setup_buffer, count);
+      udev->ept0_sts = USB_EPT0_SETUP;
+    }
+    else
+    {
+      usbd_read_rx_fifo(usbx, 0, count);
+      udev->ept0_sts = USB_EPT0_STALL;
+      usbd_ctrl_unsupport(udev);
+    }
   }
 
   /* enable rxflvl interrupt */

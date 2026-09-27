@@ -169,7 +169,7 @@ $(BUILD)/%.o: %.cpp | $(BUILD)
 $(BUILD)/startup_at32f423.o: $(STARTUP) | $(BUILD)
 	$(CC) $(CFLAGS) -c $< -o $@
 
-$(BUILD)/$(TARGET).elf: $(OBJS)
+$(BUILD)/$(TARGET).elf: $(OBJS) $(LDSCRIPT)
 	$(CXX) $(OBJS) $(LDFLAGS) -o $@
 	$(SIZE) $@
 

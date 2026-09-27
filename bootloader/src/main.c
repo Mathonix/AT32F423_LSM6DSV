@@ -1,6 +1,7 @@
 #include "at32f423.h"
 #include "at32f423_misc.h"
 #include "boot_config.h"
+#include "boot_request.h"
 #include "bl_io.h"
 #include "bl_protocol.h"
 
@@ -22,19 +23,23 @@ static uint32_t boot_time_ms(void)
 
 static int boot_requested(void)
 {
-  volatile uint32_t *p = (volatile uint32_t *)0x2000BFF0U;
+  volatile uint32_t *p = (volatile uint32_t *)APP_BOOT_REQUEST_ADDR;
   uint32_t v = *p;
   *p = 0U;
   __DMB();
-  return v == 0x424F4F54U;
+  return v == APP_BOOT_REQUEST_MAGIC;
 }
 
-static int app_ok(void)
+/* No C stack accesses are permitted after installing the application's MSP.
+ * All peripheral interrupts have been disabled before restoring PRIMASK. */
+__attribute__((naked, noreturn)) static void branch_app(uint32_t sp, uint32_t pc)
 {
-  uint32_t sp = *(const uint32_t *)BL_APP_BASE;
-  uint32_t pc = *(const uint32_t *)(BL_APP_BASE + 4U);
-  return ((sp >= 0x20000000U) && (sp <= 0x2000C000U) &&
-          ((pc & ~1U) >= BL_APP_BASE) && ((pc & ~1U) < BL_APP_END) && (pc & 1U));
+  __asm volatile("msr msp, r0\n"
+                 "movs r2, #0\n"
+                 "msr control, r2\n"
+                 "isb\n"
+                 "cpsie i\n"
+                 "bx r1\n");
 }
 
 static void jump_app(void)
@@ -42,6 +47,7 @@ static void jump_app(void)
   const uint32_t sp = *(const uint32_t *)BL_APP_BASE;
   const uint32_t pc = *(const uint32_t *)(BL_APP_BASE + 4U);
 
+  bl_io_deinit();
   __disable_irq();
   SysTick->CTRL = 0U;
   SysTick->LOAD = 0U;
@@ -56,13 +62,7 @@ static void jump_app(void)
   SCB->VTOR = BL_APP_BASE;
   __DSB();
   __ISB();
-  __set_CONTROL(0U);
-  __ISB();
-  __set_MSP(sp);
-  __DSB();
-  __ISB();
-  ((void (*)(void))pc)();
-  for(;;) {}
+  branch_app(sp, pc);
 }
 
 int main(void)
@@ -73,20 +73,15 @@ int main(void)
 
   const int force = boot_requested();
   const uint32_t deadline = boot_time_ms() + BL_BOOT_TIMEOUT_MS;
-  while(force || (int32_t)(boot_time_ms() - deadline) < 0)
-  {
-    uint8_t b;
-    bl_io_task();
-    while(bl_io_read(&b))
-      bl_protocol_feed(b);
-  }
-
-  if(app_ok()) jump_app();
   for(;;)
   {
     uint8_t b;
     bl_io_task();
     while(bl_io_read(&b))
       bl_protocol_feed(b);
+    if(bl_protocol_boot_requested() ||
+       (!force && (int32_t)(boot_time_ms() - deadline) >= 0 &&
+        bl_protocol_can_boot()))
+      jump_app();
   }
 }

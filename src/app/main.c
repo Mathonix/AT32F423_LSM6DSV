@@ -18,6 +18,7 @@
 #include "usb_cdc.h"
 #include "protocol.h"
 #include "fusion_settings.h"
+#include "boot_request.h"
 
 #include <math.h>
 #include <string.h>
@@ -374,8 +375,8 @@ static void protocol_frame_received(uint8_t msg_id, uint8_t seq,
       {
         uint16_t node_id = (uint16_t)payload[0] | ((uint16_t)payload[1] << 8);
         if((node_id > 0x7FFU) ||
-           (can_test_set_node_id(node_id) != 0) ||
-           (app_save_settings(app_fusion_mode, node_id) != 0))
+           (app_save_settings(app_fusion_mode, node_id) != 0) ||
+           (can_test_set_node_id(node_id) != 0))
         {
           status = (node_id > 0x7FFU) ? AHRS_ACK_INVALID_PARAM : AHRS_ACK_EXEC_FAILED;
         }
@@ -1089,8 +1090,6 @@ static int sensor_init_retry_loop(int initial_err)
     delay_ms(10U);
   }
 }
-#define APP_BOOT_REQUEST_ADDR 0x2000BFF0U
-#define APP_BOOT_REQUEST_MAGIC 0x424F4F54U
 static void app_perform_reset(reset_request_t request)
 {
   if(request == RESET_BOOTLOADER)

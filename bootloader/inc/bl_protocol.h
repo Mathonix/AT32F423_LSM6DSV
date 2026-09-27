@@ -18,4 +18,6 @@
 uint32_t bl_crc32(const uint8_t *p, uint32_t n);
 void bl_protocol_reset(void);
 void bl_protocol_feed(uint8_t b);
+int bl_protocol_can_boot(void);
+int bl_protocol_boot_requested(void);
 #endif
