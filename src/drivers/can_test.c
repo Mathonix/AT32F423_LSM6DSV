@@ -3,160 +3,78 @@
 #include "app_config.h"
 #include <string.h>
 
-volatile can_test_live_t can_test_live = {
-  .magic = CAN_TEST_LIVE_MAGIC
-};
-
-static uint32_t can_last_tx_us;
-static uint32_t can_data_counter;
-static uint8_t can_pending_mask;
-static uint32_t can_last_status_us;
-
-static float can_att_roll;
-static float can_att_pitch;
-static float can_att_yaw;
-static float can_att_gx_rad;
-static float can_att_gy_rad;
-static float can_att_gz_rad;
-static float can_att_ax_ms2;
-static float can_att_ay_ms2;
-static float can_att_az_ms2;
-static float can_att_qw = 1.0f;
-static float can_att_qx = 0.0f;
-static float can_att_qy = 0.0f;
-static float can_att_qz = 0.0f;
-static float can_att_temp = 25.0f;
-static uint8_t can_att_flags;
+volatile can_test_live_t can_test_live = {.magic = CAN_TEST_LIVE_MAGIC};
+static uint32_t can_last_tx_us, can_data_counter, can_last_status_us;
+static uint8_t can_pending_mask, can_cycle;
 static volatile uint8_t can_cmd_flags;
-
-static uint16_t damiao_can_id = APP_CAN_DEFAULT_CAN_ID;
-static uint16_t damiao_mst_id = APP_CAN_DEFAULT_MST_ID;
-
-static inline uint16_t damiao_float_to_uint(float x_float, float x_min, float x_max, int bits)
-{
-  float span = x_max - x_min;
-  float offset = x_min;
-  if(x_float < x_min) x_float = x_min;
-  if(x_float > x_max) x_float = x_max;
-  return (uint16_t)((x_float - offset) * ((float)((1U << bits) - 1U)) / span);
-}
+static can_config_t can_config, pending_config;
+static can_sample_t can_sample;
+static uint8_t baud_pending;
+static uint8_t baud_mailbox;
+static uint32_t baud_deadline_us;
 
 void can_test_update_data(float roll, float pitch, float yaw,
-                          float gx_dps, float gy_dps, float gz_dps,
-                          float ax_g, float ay_g, float az_g,
-                          float qw, float qx, float qy, float qz,
-                          float temp_c, uint8_t flags)
+                          float gx, float gy, float gz, float ax, float ay, float az,
+                          float qw, float qx, float qy, float qz, float temperature, uint8_t flags)
 {
-  const float dps_to_rad = 3.14159265f / 180.0f;
-  const float g_to_ms2   = 9.80665f;
-
-  can_att_roll   = roll;
-  can_att_pitch  = pitch;
-  can_att_yaw    = yaw;
-  can_att_gx_rad = gx_dps * dps_to_rad;
-  can_att_gy_rad = gy_dps * dps_to_rad;
-  can_att_gz_rad = gz_dps * dps_to_rad;
-  can_att_ax_ms2 = ax_g * g_to_ms2;
-  can_att_ay_ms2 = ay_g * g_to_ms2;
-  can_att_az_ms2 = az_g * g_to_ms2;
-  can_att_qw     = qw;
-  can_att_qx     = qx;
-  can_att_qy     = qy;
-  can_att_qz     = qz;
-  can_att_temp   = temp_c;
-  can_att_flags  = flags;
+  (void)flags;
+  can_sample = (can_sample_t){roll, pitch, yaw, gx * .01745329252f, gy * .01745329252f, gz * .01745329252f,
+    ax * 9.80665f, ay * 9.80665f, az * 9.80665f, qw, qx, qy, qz, temperature};
 }
-
-uint8_t can_test_get_cmd_flag(void)
+uint8_t can_test_get_cmd_flag(void) { return can_cmd_flags; }
+void can_test_clear_cmd_flag(uint8_t flag) { can_cmd_flags &= (uint8_t)~flag; }
+uint16_t can_test_get_node_id(void) { return can_config.node_id; }
+void can_test_get_config(can_config_t *c) { *c = can_config; }
+int can_test_config_busy(void) { return baud_pending; }
+int can_test_set_config(const can_config_t *c)
 {
-  return can_cmd_flags;
-}
-
-void can_test_clear_cmd_flag(uint8_t flag)
-{
-  can_cmd_flags = (uint8_t)(can_cmd_flags & (uint8_t)~flag);
-}
-
-int can_test_set_node_id(uint16_t node_id)
-{
-  if(node_id > 0x7FFU) return -1;
-  damiao_can_id = node_id;
+  if(!can_config_valid(c) || baud_pending || !can_test_live.init_ok) return -1;
+  if(c->baud_index != can_config.baud_index) {
+    can_baudrate_type b;
+    can_baudrate_default_para_init(&b);
+    b.baudrate_div = can_baud_divisor(c->baud_index);
+    b.rsaw_size = CAN_RSAW_2TQ;
+    /* PCLK1=75 MHz. 400k uses 17 TQ/div11 = 401069.5 bit/s (+0.267%).
+     * All other choices use 15 TQ and are exact. */
+    b.bts1_size = c->baud_index == 2 ? CAN_BTS1_12TQ : CAN_BTS1_10TQ;
+    b.bts2_size = CAN_BTS2_4TQ;
+    for(unsigned i = 0; i < 3; ++i) can_transmit_cancel(CAN2, (can_tx_mailbox_num_type)i);
+    can_pending_mask = 0;
+    if(can_baudrate_set(CAN2, &b) != SUCCESS) {
+      b.baudrate_div = can_baud_divisor(can_config.baud_index);
+      b.bts1_size = can_config.baud_index == 2 ? CAN_BTS1_12TQ : CAN_BTS1_10TQ;
+      if(can_baudrate_set(CAN2, &b) != SUCCESS) can_test_live.init_ok = 0;
+      return -2;
+    }
+  }
+  can_config = *c; can_cycle = 0; can_last_tx_us = 0;
   return 0;
 }
-
-uint16_t can_test_get_node_id(void)
+int can_test_set_node_id(uint16_t id)
 {
-  return damiao_can_id;
+  can_config_t c = can_config; c.node_id = id;
+  return can_test_set_config(&c);
 }
-
-static void damiao_pack_euler(uint8_t data[8])
+__attribute__((weak)) int can_test_save_config(const can_config_t *c) { (void)c; return -1; }
+static uint8_t transmit(uint16_t id, const uint8_t data[8])
 {
-  uint16_t pitch_u = damiao_float_to_uint(can_att_pitch, DAMIAO_PITCH_MIN, DAMIAO_PITCH_MAX, 16);
-  uint16_t yaw_u   = damiao_float_to_uint(can_att_yaw,   DAMIAO_YAW_MIN,   DAMIAO_YAW_MAX,   16);
-  uint16_t roll_u  = damiao_float_to_uint(can_att_roll,  DAMIAO_ROLL_MIN,  DAMIAO_ROLL_MAX,  16);
-
-  data[0] = DAMIAO_CAN_TYPE_EULER; /* 0x03 */
-  data[1] = 0x00U;
-  data[2] = (uint8_t)(pitch_u & 0xFFU);
-  data[3] = (uint8_t)((pitch_u >> 8) & 0xFFU);
-  data[4] = (uint8_t)(yaw_u & 0xFFU);
-  data[5] = (uint8_t)((yaw_u >> 8) & 0xFFU);
-  data[6] = (uint8_t)(roll_u & 0xFFU);
-  data[7] = (uint8_t)((roll_u >> 8) & 0xFFU);
+  can_tx_message_type message;
+  memset(&message, 0, sizeof(message));
+  message.standard_id = id; message.id_type = CAN_ID_STANDARD;
+  message.frame_type = CAN_TFT_DATA; message.dlc = 8;
+  memcpy(message.data, data, 8);
+  uint8_t mailbox = can_message_transmit(CAN2, &message);
+  can_test_live.tx_count++;
+  can_test_live.last_data_counter = can_data_counter++;
+  if(mailbox <= CAN_TX_MAILBOX2) {
+    can_pending_mask |= 1U << mailbox; can_test_live.last_mailbox = mailbox;
+    can_test_live.last_status = CAN_TX_STATUS_PENDING;
+  } else {
+    can_test_live.tx_no_mailbox_count++; can_test_live.last_mailbox = 0xFFFFFFFF;
+    can_test_live.last_status = CAN_TX_STATUS_NO_EMPTY;
+  }
+  return mailbox;
 }
-
-static void damiao_pack_gyro(uint8_t data[8])
-{
-  uint16_t gx_u = damiao_float_to_uint(can_att_gx_rad, DAMIAO_GYRO_MIN, DAMIAO_GYRO_MAX, 16);
-  uint16_t gy_u = damiao_float_to_uint(can_att_gy_rad, DAMIAO_GYRO_MIN, DAMIAO_GYRO_MAX, 16);
-  uint16_t gz_u = damiao_float_to_uint(can_att_gz_rad, DAMIAO_GYRO_MIN, DAMIAO_GYRO_MAX, 16);
-
-  data[0] = DAMIAO_CAN_TYPE_GYRO; /* 0x02 */
-  data[1] = 0x00U;
-  data[2] = (uint8_t)(gx_u & 0xFFU);
-  data[3] = (uint8_t)((gx_u >> 8) & 0xFFU);
-  data[4] = (uint8_t)(gy_u & 0xFFU);
-  data[5] = (uint8_t)((gy_u >> 8) & 0xFFU);
-  data[6] = (uint8_t)(gz_u & 0xFFU);
-  data[7] = (uint8_t)((gz_u >> 8) & 0xFFU);
-}
-
-static void damiao_pack_accel(uint8_t data[8])
-{
-  uint16_t ax_u = damiao_float_to_uint(can_att_ax_ms2, DAMIAO_ACCEL_MIN, DAMIAO_ACCEL_MAX, 16);
-  uint16_t ay_u = damiao_float_to_uint(can_att_ay_ms2, DAMIAO_ACCEL_MIN, DAMIAO_ACCEL_MAX, 16);
-  uint16_t az_u = damiao_float_to_uint(can_att_az_ms2, DAMIAO_ACCEL_MIN, DAMIAO_ACCEL_MAX, 16);
-  int16_t t_i   = (int16_t)(can_att_temp + 0.5f);
-  if(t_i < 0) t_i = 0;
-  if(t_i > 255) t_i = 255;
-
-  data[0] = DAMIAO_CAN_TYPE_ACCEL; /* 0x01 */
-  data[1] = (uint8_t)t_i;
-  data[2] = (uint8_t)(ax_u & 0xFFU);
-  data[3] = (uint8_t)((ax_u >> 8) & 0xFFU);
-  data[4] = (uint8_t)(ay_u & 0xFFU);
-  data[5] = (uint8_t)((ay_u >> 8) & 0xFFU);
-  data[6] = (uint8_t)(az_u & 0xFFU);
-  data[7] = (uint8_t)((az_u >> 8) & 0xFFU);
-}
-
-static void damiao_pack_quat(uint8_t data[8])
-{
-  uint16_t w_u = damiao_float_to_uint(can_att_qw, DAMIAO_QUAT_MIN, DAMIAO_QUAT_MAX, 14);
-  uint16_t x_u = damiao_float_to_uint(can_att_qx, DAMIAO_QUAT_MIN, DAMIAO_QUAT_MAX, 14);
-  uint16_t y_u = damiao_float_to_uint(can_att_qy, DAMIAO_QUAT_MIN, DAMIAO_QUAT_MAX, 14);
-  uint16_t z_u = damiao_float_to_uint(can_att_qz, DAMIAO_QUAT_MIN, DAMIAO_QUAT_MAX, 14);
-
-  data[0] = DAMIAO_CAN_TYPE_QUAT; /* 0x04 */
-  data[1] = (uint8_t)((w_u >> 6) & 0xFFU);
-  data[2] = (uint8_t)(((w_u & 0x3FU) << 2) | ((x_u >> 12) & 0x03U));
-  data[3] = (uint8_t)((x_u >> 4) & 0xFFU);
-  data[4] = (uint8_t)(((x_u & 0x0FU) << 4) | ((y_u >> 10) & 0x0FU));
-  data[5] = (uint8_t)((y_u >> 2) & 0xFFU);
-  data[6] = (uint8_t)(((y_u & 0x03U) << 6) | ((z_u >> 8) & 0x3FU));
-  data[7] = (uint8_t)(z_u & 0xFFU);
-}
-
 static void can_test_snapshot(uint32_t now_ms)
 {
   can_test_live.seq++;
@@ -171,154 +89,46 @@ static void can_test_snapshot(uint32_t now_ms)
   can_test_live.seq++;
 }
 
-static void can_test_poll_receive(uint32_t now_ms)
+
+static void can_test_poll_receive(uint32_t now_us)
 {
-  uint8_t processed = 0U;
-
-  while((can_receive_message_pending_get(CAN2, CAN_RX_FIFO0) != 0U) &&
-        (processed < 8U))
-  {
-    can_rx_message_type rx_message;
-    uint8_t i;
-
-    can_message_receive(CAN2, CAN_RX_FIFO0, &rx_message);
+  uint32_t now_ms = now_us / 1000U;
+  for(unsigned processed = 0; processed < 8 && can_receive_message_pending_get(CAN2, CAN_RX_FIFO0); ++processed) {
+    can_rx_message_type rx;
+    uint8_t reply[8], actions; uint16_t id; can_config_t next;
+    can_message_receive(CAN2, CAN_RX_FIFO0, &rx);
     can_test_live.rx_count++;
-    if(rx_message.id_type == CAN_ID_STANDARD)
-    {
-      can_test_live.rx_standard_count++;
-      can_test_live.rx_last_id = rx_message.standard_id;
-    }
-    else
-    {
-      can_test_live.rx_extended_count++;
-      can_test_live.rx_last_id = rx_message.extended_id;
-    }
-    can_test_live.rx_last_dlc = rx_message.dlc;
-    can_test_live.rx_last_frame_type = (uint32_t)rx_message.frame_type;
+    if(rx.id_type == CAN_ID_STANDARD) can_test_live.rx_standard_count++;
+    else can_test_live.rx_extended_count++;
+    can_test_live.rx_last_id = rx.id_type == CAN_ID_STANDARD ? rx.standard_id : rx.extended_id;
+    can_test_live.rx_last_dlc = rx.dlc; can_test_live.rx_last_frame_type = rx.frame_type;
     can_test_live.rx_last_millis = now_ms;
-    for(i = 0U; i < 8U; ++i)
-    {
-      can_test_live.rx_last_data[i] = (i < rx_message.dlc) ? rx_message.data[i] : 0U;
+    for(unsigned i = 0; i < 8; ++i) can_test_live.rx_last_data[i] = i < rx.dlc ? rx.data[i] : 0;
+    if(rx.id_type != CAN_ID_STANDARD || rx.frame_type != CAN_TFT_DATA ||
+       !can_damiao_request(rx.standard_id, rx.dlc, rx.data, &can_config, &can_sample, &id, reply, &next, &actions)) continue;
+    if(baud_pending && actions) { reply[3] = DAMIAO_ACK_FAIL; actions = 0; }
+    if(actions & CAN_ACTION_SAVE) {
+      if(can_test_save_config(&can_config)) reply[3] = DAMIAO_ACK_FAIL;
     }
-
-    /* 1. Damiao Fast Request: [can_id_L, can_id_H, reg, 0xCC] */
-    if((rx_message.id_type == CAN_ID_STANDARD) &&
-       (rx_message.dlc == 4U) &&
-       (rx_message.data[3] == DAMIAO_REQ_HEADER))
-    {
-      uint16_t req_id = (uint16_t)rx_message.data[0] | ((uint16_t)rx_message.data[1] << 8);
-      uint8_t reg = rx_message.data[2];
-
-      if((req_id == damiao_can_id) || (req_id == 0U) || (req_id == 0x6FFU))
-      {
-        can_tx_message_type reply;
-        reply.standard_id = damiao_mst_id;
-        reply.extended_id = 0U;
-        reply.id_type = CAN_ID_STANDARD;
-        reply.frame_type = CAN_TFT_DATA;
-        reply.dlc = 8U;
-
-        if(reg == DAMIAO_REG_ACCEL)
-        {
-          damiao_pack_accel(reply.data);
-          (void)can_message_transmit(CAN2, &reply);
-        }
-        else if(reg == DAMIAO_REG_GYRO)
-        {
-          damiao_pack_gyro(reply.data);
-          (void)can_message_transmit(CAN2, &reply);
-        }
-        else if(reg == DAMIAO_REG_EULER)
-        {
-          damiao_pack_euler(reply.data);
-          (void)can_message_transmit(CAN2, &reply);
-        }
-        else if(reg == DAMIAO_REG_QUAT)
-        {
-          damiao_pack_quat(reply.data);
-          (void)can_message_transmit(CAN2, &reply);
-        }
-      }
+    if((actions & CAN_ACTION_CONFIG) && next.baud_index == can_config.baud_index) {
+      if(can_test_set_config(&next)) reply[3] = DAMIAO_ACK_FAIL;
     }
-    /* 2. Damiao Register Request: [0xCC, RID, R/W, 0xDD, DATA[4..7]] */
-    else if((rx_message.id_type == CAN_ID_STANDARD) &&
-            (rx_message.dlc == 8U) &&
-            (rx_message.data[0] == DAMIAO_REQ_HEADER) &&
-            (rx_message.data[3] == DAMIAO_REQ_TAIL))
-    {
-      uint8_t rid = rx_message.data[1];
-      uint8_t rw  = rx_message.data[2];
-      can_tx_message_type reply;
-
-      reply.standard_id = damiao_mst_id;
-      reply.extended_id = 0U;
-      reply.id_type = CAN_ID_STANDARD;
-      reply.frame_type = CAN_TFT_DATA;
-      reply.dlc = 8U;
-      reply.data[0] = DAMIAO_REQ_HEADER;
-      reply.data[1] = rid;
-      reply.data[2] = DAMIAO_REQ_TAIL;
-      reply.data[3] = DAMIAO_ACK_SUCCESS;
-      memset(&reply.data[4], 0, 4U);
-
-      if(rid == DAMIAO_REG_REBOOT)
-      {
-        can_cmd_flags |= CAN_CMD_FLAG_REBOOT;
-      }
-      else if(rid == DAMIAO_REG_ZERO_YAW)
-      {
-        can_cmd_flags |= CAN_CMD_FLAG_ZERO_YAW;
-      }
-      else if(rid == DAMIAO_REG_CALIB_GYRO)
-      {
-        can_cmd_flags |= CAN_CMD_FLAG_RECAL;
-      }
-      else if(rid == DAMIAO_REG_CAN_ID)
-      {
-        if(rw == 1U) damiao_can_id = rx_message.data[4];
-        reply.data[4] = (uint8_t)damiao_can_id;
-      }
-      else if(rid == DAMIAO_REG_MST_ID)
-      {
-        if(rw == 1U) damiao_mst_id = (uint16_t)rx_message.data[4] | ((uint16_t)rx_message.data[5] << 8);
-        reply.data[4] = (uint8_t)damiao_mst_id;
-        reply.data[5] = (uint8_t)(damiao_mst_id >> 8);
-      }
-      else if(rid == DAMIAO_REG_EULER)
-      {
-        damiao_pack_euler(reply.data);
-      }
-      else if(rid == DAMIAO_REG_GYRO)
-      {
-        damiao_pack_gyro(reply.data);
-      }
-      else if(rid == DAMIAO_REG_ACCEL)
-      {
-        damiao_pack_accel(reply.data);
-      }
-      else if(rid == DAMIAO_REG_QUAT)
-      {
-        damiao_pack_quat(reply.data);
-      }
-      else
-      {
-        reply.data[3] = DAMIAO_ACK_NO_REG;
-      }
-
-      (void)can_message_transmit(CAN2, &reply);
+    uint8_t mailbox = transmit(id, reply);
+    if(mailbox > CAN_TX_MAILBOX2 || reply[0] != 0xCC || reply[3]) continue;
+    if((actions & CAN_ACTION_CONFIG) && next.baud_index != can_config.baud_index) {
+      /* Send the acknowledgement at the OLD baud. Commit only on actual TX
+       * success; a missing peer/ACK or occupied mailbox never changes baud. */
+      pending_config = next; baud_mailbox = mailbox; baud_pending = 1;
+      baud_deadline_us = now_us + 100000U;
     }
-
-    processed++;
+    if(actions & CAN_ACTION_ZERO) can_cmd_flags |= CAN_CMD_FLAG_ZERO_YAW;
+    if(actions & CAN_ACTION_REBOOT) can_cmd_flags |= CAN_CMD_FLAG_REBOOT;
   }
-
   can_test_live.rx_pending = can_receive_message_pending_get(CAN2, CAN_RX_FIFO0);
-  if(can_flag_get(CAN2, CAN_RF0OF_FLAG) != RESET)
-  {
-    can_test_live.rx_overrun_count++;
-    can_flag_clear(CAN2, CAN_RF0OF_FLAG);
+  if(can_flag_get(CAN2, CAN_RF0OF_FLAG) != RESET) {
+    can_test_live.rx_overrun_count++; can_flag_clear(CAN2, CAN_RF0OF_FLAG);
   }
 }
-
 static void can_test_poll_mailboxes(void)
 {
   uint8_t bit;
@@ -352,12 +162,15 @@ static void can_test_poll_mailboxes(void)
   }
 }
 
+
 void can_test_init(void)
 {
   gpio_init_type gpio_init_struct;
   can_base_type can_base_struct;
   can_baudrate_type can_baudrate_struct;
 
+  can_config_defaults(&can_config);
+  can_sample.qw = 1; can_sample.temperature = 25;
   crm_periph_clock_enable(CRM_GPIOA_PERIPH_CLOCK, TRUE);
   crm_periph_clock_enable(CRM_CAN2_PERIPH_CLOCK, TRUE);
 
@@ -427,110 +240,48 @@ void can_test_init(void)
   can_test_snapshot(0U);
 }
 
+
 void can_test_task(uint32_t now_us)
 {
-#if APP_CAN_TX_ENABLE
-  can_tx_message_type tx_message;
-  uint8_t mailbox;
-#endif
-
-  if(can_test_live.init_ok == 0U)
-  {
-    return;
-  }
-
-  if((uint32_t)(now_us - can_last_status_us) >= 1000U)
-  {
+  if(!can_test_live.init_ok) return;
+  if((uint32_t)(now_us - can_last_status_us) >= 1000U) {
+    if(baud_pending) {
+      can_transmit_status_type status = can_transmit_status_get(CAN2, (can_tx_mailbox_num_type)baud_mailbox);
+      if(status == CAN_TX_STATUS_SUCCESSFUL) {
+        baud_pending = 0;
+        (void)can_test_set_config(&pending_config);
+      } else if(status == CAN_TX_STATUS_FAILED || (int32_t)(now_us - baud_deadline_us) >= 0) {
+        can_transmit_cancel(CAN2, (can_tx_mailbox_num_type)baud_mailbox); baud_pending = 0;
+      }
+    }
     can_test_poll_mailboxes();
 #if APP_CAN_RX_ENABLE
-    can_test_poll_receive(now_us / 1000U);
+    can_test_poll_receive(now_us);
 #endif
-    can_last_status_us = now_us;
-    can_test_snapshot(now_us / 1000U);
+    can_last_status_us = now_us; can_test_snapshot(now_us / 1000U);
   }
-
 #if APP_CAN_TX_ENABLE
-  if((uint32_t)(now_us - can_last_tx_us) < APP_CAN_TX_PERIOD_US)
-  {
-    return;
-  }
-  /* Preserve the 1 kHz phase instead of accumulating main-loop jitter.
-   * If execution was delayed by more than one period, skip the backlog rather
-   * than emitting a burst of stale attitude frames. */
-  can_last_tx_us += APP_CAN_TX_PERIOD_US;
-  if((uint32_t)(now_us - can_last_tx_us) >= APP_CAN_TX_PERIOD_US)
-  {
-    can_last_tx_us = now_us;
-  }
-
-  if(can_test_live.bus_off != 0U)
-  {
-    can_test_live.tx_no_mailbox_count++;
-    return;
-  }
-
-  tx_message.standard_id = damiao_can_id;
-  tx_message.extended_id = 0U;
-  tx_message.id_type = CAN_ID_STANDARD;
-  tx_message.frame_type = CAN_TFT_DATA;
-  tx_message.dlc = 8U;
-
-#if (APP_CAN_DAMIAO_MODE == 0U)
-  /* Mode 0: Euler angle frame (0x03: Pitch, Yaw, Roll) */
-  damiao_pack_euler(tx_message.data);
-#elif (APP_CAN_DAMIAO_MODE == 1U)
-  /* Mode 1: Interleave Euler (0x03) and Gyro (0x02) */
-  {
-    static uint8_t can_toggle = 0U;
-    can_toggle ^= 1U;
-    if(can_toggle != 0U)
-    {
-      damiao_pack_euler(tx_message.data);
-    }
-    else
-    {
-      damiao_pack_gyro(tx_message.data);
+  unsigned count = can_output_count(can_config.output_mask);
+  if(baud_pending || !can_config.active || !count) return;
+  /* Spread groups evenly through the requested PER-GROUP period. No burst,
+   * no reduction to quarter-rate when all four groups are selected. */
+  uint32_t slot_us = (uint32_t)can_config.period_ms * 1000U / count;
+  unsigned due = (uint32_t)(now_us - can_last_tx_us) / slot_us;
+  if(!due) return;
+  /* Main loop is 2 kHz: all four groups at 1 kHz require two frames per
+   * iteration. Bound work to three mailboxes and discard a stale backlog. */
+  if(due > 3) { due = 1; can_last_tx_us = now_us - slot_us; }
+  if(can_test_live.bus_off) { can_test_live.tx_no_mailbox_count++; return; }
+  for(unsigned slot = 0; slot < due; ++slot) {
+    uint8_t data[8]; can_last_tx_us += slot_us;
+    for(unsigned i = 0; i < 4; ++i) {
+      uint8_t type = can_cycle + 1; can_cycle = (can_cycle + 1) & 3U;
+      if(!(can_config.output_mask & (1U << (type - 1)))) continue;
+      can_damiao_pack(type, &can_sample, data);
+      /* Manual specifies MST_ID for responses but no active-frame ID.
+       * Preserve this project's existing active output on CAN_ID. */
+      (void)transmit(can_config.node_id, data); break;
     }
   }
-#else
-  /* Mode 2: Cycle all 4 frames: Euler -> Gyro -> Accel -> Quat */
-  {
-    static uint8_t can_cycle = 0U;
-    if(can_cycle == 0U)
-    {
-      damiao_pack_euler(tx_message.data);
-    }
-    else if(can_cycle == 1U)
-    {
-      damiao_pack_gyro(tx_message.data);
-    }
-    else if(can_cycle == 2U)
-    {
-      damiao_pack_accel(tx_message.data);
-    }
-    else
-    {
-      damiao_pack_quat(tx_message.data);
-    }
-    can_cycle = (uint8_t)((can_cycle + 1U) & 3U);
-  }
-#endif
-
-  mailbox = can_message_transmit(CAN2, &tx_message);
-  can_test_live.tx_count++;
-  can_test_live.last_data_counter = can_data_counter++;
-  if(mailbox <= CAN_TX_MAILBOX2)
-  {
-    can_pending_mask = (uint8_t)(can_pending_mask | (uint8_t)(1U << mailbox));
-    can_test_live.last_mailbox = mailbox;
-    can_test_live.last_status = (uint32_t)CAN_TX_STATUS_PENDING;
-  }
-  else
-  {
-    can_test_live.tx_no_mailbox_count++;
-    can_test_live.last_mailbox = 0xFFFFFFFFU;
-    can_test_live.last_status = (uint32_t)CAN_TX_STATUS_NO_EMPTY;
-  }
-  can_test_snapshot(now_us / 1000U);
 #endif
 }

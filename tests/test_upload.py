@@ -6,6 +6,7 @@ import struct
 import tempfile
 import unittest
 from unittest import mock
+from types import SimpleNamespace
 import zlib
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -118,6 +119,66 @@ class UploadTests(unittest.TestCase):
                 canonical.upload("TEST", 2000000, path, False)
         self.assertEqual([p[3] for p in serial.written], [1, 2, 3, 3, 3, 4, 6])
         self.assertTrue(serial.closed)
+
+    def test_reopens_usb_device_when_com_number_changes(self):
+        adapter = SimpleNamespace(device='COM17', vid=0x2e3c, pid=0xf401, serial_number='board-a')
+        other = SimpleNamespace(device='COM16', vid=0x2e3c, pid=0xf401, serial_number='board-b')
+        connection = FakeSerial(ack(1, value=canonical.APP_BASE))
+        with mock.patch.object(canonical.list_ports, 'comports', return_value=[other, adapter]), \
+             mock.patch.object(canonical.serial, 'Serial', return_value=connection) as opener:
+            result = canonical.reopen_bootloader((0x2e3c, 0xf401, 'board-a', 'COM16'), 2000000)
+        self.assertIs(result, connection)
+        self.assertEqual(opener.call_args.args[0], 'COM17')
+        self.assertEqual([p[3] for p in connection.written], [1])
+
+    def test_ambiguous_device_identity_never_opens_or_erases(self):
+        ports = [SimpleNamespace(device=name, vid=1, pid=2, serial_number='duplicate')
+                 for name in ('COM16', 'COM17')]
+        with mock.patch.object(canonical.list_ports, 'comports', return_value=ports), \
+             mock.patch.object(canonical.serial, 'Serial') as opener:
+            with self.assertRaisesRegex(RuntimeError, 'ambiguous'):
+                canonical.reopen_bootloader((1, 2, 'duplicate', 'COM16'), 2000000)
+        opener.assert_not_called()
+
+    def test_wrong_boot_partition_closes_handle_without_begin(self):
+        port = SimpleNamespace(device='COM16', vid=1, pid=2, serial_number='board-a')
+        connection = FakeSerial(ack(1, value=0x08000000))
+        with mock.patch.object(canonical.list_ports, 'comports', return_value=[port]), \
+             mock.patch.object(canonical.serial, 'Serial', return_value=connection):
+            with self.assertRaisesRegex(RuntimeError, 'application base'):
+                canonical.reopen_bootloader((1, 2, 'board-a', 'COM16'), 2000000)
+        self.assertTrue(connection.closed)
+        self.assertEqual([p[3] for p in connection.written], [1])
+
+    def test_entry_closes_old_handle_and_uploads_only_on_reopened_handle(self):
+        data = struct.pack('<II', 0x2000bff0, 0x08008009) + bytes(17)
+        original = FakeSerial()
+        reopened = FakeSerial(ack(2) + ack(3, value=len(data)) + ack(4, value=len(data)) + ack(6))
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory)/'app.bin'
+            path.write_bytes(data)
+            with mock.patch.object(canonical, 'port_identity', return_value=(1, 2, 'board-a', 'COM16')), \
+                 mock.patch.object(canonical.serial, 'Serial', return_value=original), \
+                 mock.patch.object(canonical, 'reopen_bootloader', return_value=reopened) as reopen, \
+                 mock.patch.object(canonical.time, 'sleep'):
+                canonical.upload('COM16', 2000000, path, True)
+        self.assertTrue(original.closed)
+        self.assertTrue(reopened.closed)
+        reopen.assert_called_once_with((1, 2, 'board-a', 'COM16'), 2000000)
+        self.assertEqual([p[2] for p in original.written], [0x16])
+        self.assertEqual([p[3] for p in reopened.written], [2, 3, 4, 6])
+
+    def test_failed_end_does_not_send_boot(self):
+        data = struct.pack('<II', 0x2000bff0, 0x08008009) + bytes(17)
+        connection = FakeSerial(ack(1, value=canonical.APP_BASE) + ack(2) + ack(3, value=len(data)) + ack(4, status=3))
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory)/'app.bin'
+            path.write_bytes(data)
+            with mock.patch.object(canonical.serial, 'Serial', return_value=connection):
+                with self.assertRaisesRegex(RuntimeError, 'rejected'):
+                    canonical.upload('TEST', 2000000, path, False)
+        self.assertTrue(connection.closed)
+        self.assertNotIn(6, [p[3] for p in connection.written])
 
 
 if __name__ == "__main__":

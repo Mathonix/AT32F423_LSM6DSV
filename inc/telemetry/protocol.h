@@ -3,6 +3,7 @@
 
 #include <stdint.h>
 #include <stddef.h>
+#include "can_protocol.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -23,6 +24,12 @@ extern "C" {
 #define AHRS_MSG_IMU_RAW           0x03U /* GyrXYZ, AccXYZ, Temp, Timestamp */
 #define AHRS_MSG_COMPACT           0x04U /* Scaled int16 attitude, gz, status */
 #define AHRS_MSG_SYSTEM_INFO       0x05U /* Rate, skip_n, temp, mode, can_ok */
+#define AHRS_MSG_SELECTED_DATA     0x06U /* mask:u16, timestamp:u16, selected floats */
+#define AHRS_MSG_DEVICE_CONFIG     0x07U /* Versioned startup and per-port config */
+#define AHRS_MSG_CAN_CONFIG        0x08U /* version/ready, active+saved config, bus_off/reserved */
+#define AHRS_MSG_ACC_CAL_STATUS    0x0AU /* versioned six-face progress and persisted parameters */
+#define AHRS_MSG_FILTER_CONFIG     0x0BU /* active/saved profile and effective filter constants */
+#define AHRS_MSG_FUSION_DIAGNOSTIC 0x0CU /* timestamp, raw gyro, bias, residual, raw pose, sigma */
 #define AHRS_MSG_ACK               0x90U /* Command Acknowledge */
 
 /* Uplink Command IDs (Host -> MCU) */
@@ -39,7 +46,37 @@ extern "C" {
 #define AHRS_CMD_SET_CAN_NODE_ID   0x1AU /* payload: uint16 LE, settings mode */
 #define AHRS_CMD_START_GYRO_CAL_60S 0x1BU /* start runtime gyro calibration */
 #define AHRS_CMD_START_ACC_6FACE_CAL 0x1CU /* start six-face calibration */
-#define AHRS_CMD_SET_OUTPUT_HZ      0x1DU /* payload: uint16 LE Hz, runtime */
+#define AHRS_CMD_SET_OUTPUT_HZ      0x1DU /* payload: uint16 LE Hz; apply and persist */
+#define AHRS_CMD_SET_STARTUP_CONFIG 0x1EU /* mode, fast_start, apply_now, optional init_ms:u16, range_dps:u16 */
+#define AHRS_CMD_QUERY_CONFIG       0x1FU /* empty; reply DEVICE_CONFIG */
+#define AHRS_CMD_SET_OUTPUT_CONFIG  0x20U /* port, format, mask:u16 LE, persist */
+#define AHRS_CMD_QUERY_CAN_CONFIG   0x21U /* empty; reply CAN_CONFIG */
+#define AHRS_CMD_SET_CAN_CONFIG     0x22U /* can_config_t (10 bytes), persist; settings mode */
+#define AHRS_CMD_QUERY_ACC_CAL      0x24U /* empty; reply ACC_CAL_STATUS (0x23 reserved for firmware info) */
+#define AHRS_CMD_CANCEL_ACC_CAL     0x25U /* empty; cancel pending six-face observations */
+#define AHRS_CMD_QUERY_FILTER       0x26U /* empty; reply FILTER_CONFIG; capability discovery */
+#define AHRS_CMD_SET_FILTER         0x27U /* profile:u8, persist:u8; settings mode, apply live */
+#define AHRS_CMD_QUERY_FUSION_DIAGNOSTIC 0x28U /* empty; one diagnostic snapshot */
+
+#define AHRS_CONFIG_VERSION        3U
+#define AHRS_FIELD_COUNT           9U
+#define AHRS_FIELDS_ALL            0x01FFU
+#define AHRS_FIELDS_ATTITUDE       0x0007U
+/* Bit/float order: yaw, pitch, roll, ax, ay, az, gx, gy, gz.
+ * Units: deg, m/s^2, deg/s. mask=0 disables telemetry, not command replies. */
+#define OUTPUT_FORMAT_JUSTFLOAT    0U
+#define OUTPUT_FORMAT_CUSTOM       1U
+#define OUTPUT_FORMAT_LEGACY       2U
+typedef struct {
+  uint8_t format;
+  uint8_t legacy_mode;
+  uint16_t field_mask;
+} output_config_t;
+
+int protocol_output_config_valid(const output_config_t *config);
+uint16_t protocol_pack_output(uint8_t *buf, uint16_t capacity, uint8_t seq,
+                              const output_config_t *config, const float fields[AHRS_FIELD_COUNT],
+                              float temperature, uint8_t flags, uint16_t timestamp_ms);
 
 /* Stream Modes */
 typedef enum
@@ -65,6 +102,39 @@ typedef enum
 #define AHRS_ACK_EXEC_FAILED       0x03U
 
 #pragma pack(push, 1)
+
+typedef struct {
+  uint8_t version, active_profile, saved_profile, capabilities;
+  uint16_t estimator_hz, reserved;
+  float tau_mag_s, rest_tau_s;
+} ahrs_payload_filter_config_t;
+typedef struct {
+  uint8_t version, profile, rest, mag_flags;
+  uint32_t timestamp_ms;
+  float raw_gyro_dps[3], bias_dps[3], residual_dps[3], raw_euler_deg[3];
+  float bias_sigma_dps;
+} ahrs_payload_fusion_diagnostic_t;
+
+typedef struct {
+  uint8_t version, source, active_mode, saved_mode;
+  uint8_t active_fast_start, saved_fast_start, capabilities, reserved;
+  uint16_t output_hz;
+  output_config_t outputs[2]; /* Active UART then USB configuration */
+  uint16_t active_gyro_init_ms, saved_gyro_init_ms;
+  uint16_t active_gyro_range_dps, saved_gyro_range_dps, saved_output_hz;
+} ahrs_payload_device_config_t;
+typedef struct {
+  uint8_t version, ready;
+  can_config_t active, saved;
+  uint8_t bus_off, reserved;
+} ahrs_payload_can_config_t;
+
+typedef struct {
+  uint8_t version, status, phase, detected_face, face_mask, enabled, valid, reserved;
+  uint16_t progress_permille, error;
+  uint32_t samples, elapsed_ms, remaining_ms;
+  float bias_g[3], scale[3], raw_g[3];
+} ahrs_payload_acc_cal_t; /* 60 bytes; face 0=none, 1..6=-X,+X,-Y,+Y,-Z,+Z */
 
 typedef struct
 {
@@ -144,6 +214,7 @@ typedef enum
 typedef struct protocol_parser_s protocol_parser_t;
 
 typedef void (*protocol_frame_cb_t)(uint8_t msg_id, uint8_t seq, const uint8_t *payload, uint8_t len, void *user_data);
+typedef void (*protocol_vofa_cb_t)(void *user_data);
 
 struct protocol_parser_s
 {
@@ -158,11 +229,16 @@ struct protocol_parser_s
   void *user_data;
   uint32_t parsed_frames;
   uint32_t crc_errors;
+  uint8_t vofa_match;
+  protocol_vofa_cb_t vofa_cb;
 };
 
 /* API */
 uint16_t protocol_crc16(const uint8_t *data, uint16_t len);
 void protocol_parser_init(protocol_parser_t *parser, protocol_frame_cb_t cb, void *user_data);
+/* Optional ASCII "vofa" command (case-insensitive, no newline required).
+ * Recognized only outside AA55 frames; state is independent for each port. */
+void protocol_parser_set_vofa_callback(protocol_parser_t *parser, protocol_vofa_cb_t cb);
 void protocol_parser_feed_byte(protocol_parser_t *parser, uint8_t byte);
 
 uint16_t protocol_pack_frame(uint8_t *buf, uint16_t capacity, uint8_t msg_id, uint8_t seq, const void *payload, uint8_t len);

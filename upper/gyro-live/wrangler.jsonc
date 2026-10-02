@@ -1,0 +1,19 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  // 与线上 Worker gyro-233688（修复前版本 33276162）相同的名称 / 域名 / 兼容日期 / 静态资源配置
+  "name": "gyro-233688",
+  // 源码 src/index.js，由 wrangler(esbuild) 打包；scripts/build.mjs 验证打包结果与线上逐字节一致
+  "main": "src/index.js",
+  // 线上实际值为 2026-09-15（导出目录 wrangler.toml 中的 2026-09-08 与线上不符）
+  "compatibility_date": "2026-09-15",
+  "workers_dev": true,
+  "routes": [{ "pattern": "gyro.233688.xyz", "custom_domain": true }],
+  "assets": {
+    // scripts/build.mjs 把 src/public 原样复制到 dist/public
+    "directory": "./dist/public",
+    "binding": "ASSETS",
+    "not_found_handling": "single-page-application",
+    // 线上 raw_run_worker_first=false（静态资源优先，/healthz 由 Worker 处理）
+    "run_worker_first": false
+  }
+}

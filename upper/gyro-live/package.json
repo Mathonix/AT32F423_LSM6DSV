@@ -1,0 +1,32 @@
+{
+  "name": "gyro-233688",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22.12.0"
+  },
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "verify:original": "node scripts/build.mjs --verify-original",
+    "test": "node --test test/*.test.mjs",
+    "test:browser": "npm run build && node test/browser.check.mjs",
+    "test:config-browser": "npm run build && node test/config.browser.check.mjs",
+    "test:can-browser": "npm run build && node test/can.browser.check.mjs",
+    "test:can-draft-browser": "npm run build && node test/can-draft.browser.check.mjs",
+    "test:startup-browser": "npm run build && node test/startup.browser.check.mjs",
+    "test:model-browser": "npm run build && node test/pcb-model.browser.check.mjs",
+    "test:reconnect-browser": "npm run build && node test/reconnect.browser.check.mjs",
+    "test:range-rate-browser": "npm run build && node test/range-rate.browser.check.mjs",
+    "test:acc-browser": "node test/acc-calibration.browser.check.mjs",
+    "test:firmware-browser": "node test/firmware-upgrade.browser.check.mjs",
+    "dev": "npm run build && wrangler dev --port 8798",
+    "deploy": "npm run build && npm test && wrangler deploy"
+  },
+  "devDependencies": {
+    "esbuild": "0.28.2",
+    "occt-import-js": "0.0.23",
+    "puppeteer-core": "^25.12.0",
+    "three": "0.186.1",
+    "wrangler": "4.131.2"
+  }
+}

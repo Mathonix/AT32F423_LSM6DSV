@@ -2,7 +2,7 @@
 
 ## Archive status
 
-This directory contains the AT32F423KCU7-4 bootloader source and build outputs. GCC cross-build is verified locally. USB CDC, UART, and the full update flow still require board-level validation.
+This directory contains the AT32F423KCU7-4 bootloader source and build outputs. GCC cross-build and complete USB CDC and UART application uploads are board-verified as of 2026-10-01. See [hardware validation](../docs/firmware-upgrade-hardware-validation.md).
 
 ## Flash map
 
@@ -24,6 +24,8 @@ Request header is 18 bytes, little endian: magic[2] (42 4C), version[1], command
 
 Reply is 14 bytes: magic[2], version[1], command|0x80[1], status[1], reserved[1], value[4], crc32[4]. Reply CRC covers the first 10 bytes.
 
+Each transport has its own parser and receives only its own replies. UART ACK transmission never waits for the USB IN endpoint. BEGIN binds the transfer to its physical port until that port sends ABORT or the MCU restarts. HELLO on the other port remains read-only; BEGIN/DATA/END/ABORT/BOOT from that other port return BUSY. To change transport during a transfer, send ABORT on the original port, then start a complete upload on the new one. This port ownership is volatile and does not replace the planned v2 persistent image state or session identifiers.
+
 ## Build
 
 ```powershell
@@ -35,7 +37,7 @@ Outputs are bootloader/build/at32f423_bootloader.elf, .hex, and .bin. Build the 
 
 ## Updater
 
-The canonical updater is `bootloader/tools/bl_upload.py`. It does not send an application-entry request by default; use `--enter` for a best-effort framed entry request, or `--no-enter` explicitly when already in maintenance mode. USB re-enumeration during entry may require reopening the COM port and retrying without `--enter`. `tools/bootloader_update.py` uses the same wire protocol with a different CLI. Both tools send BOOT only after a successful END.
+The canonical updater is `bootloader/tools/bl_upload.py`. It does not send an application-entry request by default; use `--enter` to request maintenance mode from a compatible application, or `--no-enter` when already in maintenance mode. With `--enter`, it closes the old native serial handle and waits for the same VID/PID/serial identity to return, including a changed COM number. Adapters without a serial descriptor must return on the original COM name with the same VID/PID. Ambiguous identities or a wrong application base are rejected before BEGIN. The old board Bootloader failed this entry test; the current source Bootloader was installed once over SWD and its full Boot region was read back before USB testing. `tools/bootloader_update.py` retains the older manual-entry CLI. Both tools send BOOT only after a successful END.
 
 After SWD flashing the bootloader, reset the target. A normal reset gives the host a 3-second window; send the application bootloader-entry command for an unlimited maintenance window:
 
@@ -48,6 +50,6 @@ USART4 is PA0 TX / PA1 RX, 8N1, 2 Mbps. USB CDC also appears as a COM port; only
 
 ## Validation status
 
-Verified: GCC build/link, partition addresses, frame parsing, contiguous address checks, per-chunk CRC32, whole-image CRC32, and application vector validation. Not yet board-verified: SWD first flash, automatic jump, complete UART update, complete USB update, power-loss recovery, and automatic application restart after update. Updating erases the application region first; do not power off during update.
+Verified: GCC build/link, partition addresses, frame parsing, contiguous address checks, per-chunk CRC32, whole-image CRC32, and application vector validation. Board-verified on 2026-10-01: bounded SWD Boot installation, automatic jump, application-command entry, complete USB CDC and UART (COM6, 2 Mbps) uploads, BOOT startup, resumed PING/telemetry, exact full application readback, and retained device settings/accelerometer calibration. UART was also tested while the USB cable remained connected. Real power-loss recovery remains unverified. Updating erases the application region first; do not power off during update.
 
 Hardware-free regressions: `python -B tests/run_native.py` and `python -B -m unittest discover -s tests -p 'test_*.py' -v` from the repository root. CRC detects corruption, not a malicious firmware image. There is no signed firmware verification or persistent image-commit marker; after power loss startup validates vectors only. Do not treat this bootloader as secure boot or power-fail-atomic firmware storage.

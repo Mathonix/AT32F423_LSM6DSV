@@ -29,6 +29,7 @@ void bsp_systick_tick(void);
 void delay_ms(uint32_t ms);
 void delay_us(uint32_t us);
 uint32_t dwt_cycles(void);
+uint32_t micros(void);
 uint32_t millis(void);
 void led_on(void);
 void led_off(void);

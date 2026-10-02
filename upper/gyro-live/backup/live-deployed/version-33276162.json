@@ -1,0 +1,11 @@
+{
+  "worker": "gyro-233688",
+  "account": "e30118e3ed578608e54c16bd9de66929",
+  "version_id": "33276162-733e-4970-b4cb-c7fba240999e",
+  "deployed": "2026-09-18T12:52:20Z (2026-09-18 20:52 Asia/Shanghai)",
+  "compatibility_date": "2026-09-15",
+  "assets": { "binding": "ASSETS", "not_found_handling": "single-page-application", "serve_directly": true, "raw_run_worker_first": false },
+  "script_etag": "c1b2924ca19c034ea4a525fa440de9434677f5936bd5ec3774b8559af44052f7",
+  "previous_versions": ["d80a99fb-40fd-476a-bd7a-663f6c9e7dd9", "44d39b6a-6683-4753-8274-7c305b8fa7f8"],
+  "rollback": "wrangler rollback 33276162-733e-4970-b4cb-c7fba240999e --name gyro-233688"
+}

@@ -76,9 +76,10 @@ int main(void)
   for(;;)
   {
     uint8_t b;
+    bl_io_port_t source;
     bl_io_task();
-    while(bl_io_read(&b))
-      bl_protocol_feed(b);
+    while(bl_io_read(&source, &b))
+      bl_protocol_feed_from(source, b);
     if(bl_protocol_boot_requested() ||
        (!force && (int32_t)(boot_time_ms() - deadline) >= 0 &&
         bl_protocol_can_boot()))

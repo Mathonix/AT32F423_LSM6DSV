@@ -1,0 +1,108 @@
+import puppeteer from 'puppeteer-core';
+import assert from 'node:assert/strict';
+import { readFileSync, existsSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+const here = dirname(fileURLToPath(import.meta.url));
+const chrome = process.env.CHROME || [
+  'C:/Program Files/Google/Chrome/Application/chrome.exe',
+  'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe',
+  '/usr/bin/google-chrome', '/usr/bin/chromium',
+].find(existsSync);
+assert.ok(chrome, 'Set CHROME to Chrome/Edge executable');
+const base = process.env.BASE || 'http://127.0.0.1:8798';
+const browser = await puppeteer.launch({ executablePath: chrome, headless: true });
+let steps = 0;
+const step = (s) => console.log(`✔ ${++steps}. ${s}`);
+try {
+  const page = await browser.newPage();
+  await page.setViewport({ width: 1400, height: 1100 });
+  const errors = [];
+  page.on('pageerror', (e) => errors.push(e.message));
+  page.on('dialog', (d) => d.accept());
+  await page.evaluateOnNewDocument(readFileSync(join(here, 'mock-serial.js'), 'utf8'));
+  await page.evaluateOnNewDocument(() => { window.__mock.dev.extended = true; });
+  assert.equal((await page.goto(base, { waitUntil: 'networkidle0' })).status(), 200);
+  const wait = (fn) => page.waitForFunction(fn, { timeout: 5000 });
+  const state = () => page.evaluate(() => window.__gyro.state());
+  const setOutput = async (port, format, mask, persist = true) => {
+    await page.waitForFunction((port) => !document.getElementById('outputPanel' + port).disabled, {}, port);
+    await page.select('#outputFormat' + port, String(format));
+    await page.evaluate((port, mask, persist) => {
+      document.querySelectorAll(`#outputFields${port} input`).forEach((n) => { n.checked = !!(mask & (1 << Number(n.value))); });
+      document.getElementById('outputPersist' + port).checked = persist;
+    }, port, mask, persist);
+    await page.click('#outputApply' + port);
+    await page.waitForFunction((port, format, mask) => {
+      const o = window.__gyro.state().deviceConfig?.outputs[port];
+      return o?.format === format && o.mask === mask && !document.getElementById('outputPanel' + port).disabled;
+    }, {}, port, format, mask);
+  };
+  await page.click('#connectBtn');
+  await wait(() => window.__gyro.state().deviceConfig?.source === 1);
+  assert.match(await page.$eval('#configState', (e) => e.textContent), /USB/);
+  step('设备回读支持新配置，识别当前 USB 接口');
+  await setOutput(1, 0, 65);
+  await wait(() => window.__gyro.state().pose.yaw === 12.5 && window.__gyro.state().imu.gx === .25);
+  assert.equal((await state()).pose.pitch, null);
+  assert.equal((await state()).imu.gz, null);
+  await wait(() => !document.getElementById('yaw').classList.contains('stale'));
+  assert.equal(await page.$eval('#pitch', (e) => e.textContent), '--');
+  step('JustFloat 稀疏组合 Yaw + Gx：仅显示已选通道，Yaw 不误报过期');
+  await setOutput(0, 1, 511);
+  assert.equal((await state()).selectionMask, 65);
+  await setOutput(1, 0, 256);
+  await wait(() => window.__gyro.state().imu.gz === 1.5);
+  assert.equal((await state()).pose.yaw, null);
+  step('UART 自定义全通道与 USB 单通道 JustFloat 独立生效');
+  await setOutput(1, 0, 511);
+  await wait(() => window.__gyro.state().imu.az === 9.75 && window.__gyro.state().pose.roll === 45.5);
+  assert.equal((await state()).justChannels, 9);
+  step('JustFloat 全 9 通道');
+  await setOutput(1, 1, 511);
+  await wait(() => window.__gyro.state().imu.ay === -.25 && window.__gyro.state().pose.pitch === -3.25);
+  assert.equal((await state()).parseMode, 'binary');
+  step('自定义协议全 9 通道，自动切换解析器');
+  if (process.env.SHOT) await page.screenshot({ path: process.env.SHOT, fullPage: true });
+  await setOutput(1, 1, 56, false);
+  await wait(() => window.__gyro.state().pose.yaw === null && window.__gyro.state().imu.ax === .125);
+  await page.click('#disconnectBtn');
+  await wait(() => !window.__gyro.state().running);
+  await page.click('#connectBtn');
+  await wait(() => window.__gyro.state().selectionMask === 56);
+  step('自定义协议只输出三轴加速度，重新连接自动读取当前通道');
+  await page.click('#enterBtn');
+  await wait(() => window.__gyro.state().setting);
+  await page.click('input[name="fusion"][value="0"]');
+  await page.click('#fastStart');
+  await page.click('#applyBtn');
+  await wait(() => window.__gyro.state().deviceConfig?.savedMode === 0 && window.__gyro.state().deviceConfig?.savedFast === 1);
+  let s = await state();
+  assert.equal(s.deviceConfig.activeMode, 1); assert.equal(s.deviceConfig.activeFast, 0);
+  assert.equal(s.fusionPendingRestart, true);
+  assert.equal(await page.$eval('#canIdBtn', (e) => e.disabled), false);
+  step('六轴 + 快速启动保存与当前运行分开展示，CAN 配置不会覆盖待重启启动设置');
+  await page.evaluate(() => window.__mock.dev.reboot());
+  await page.click('#refreshBtn');
+  await wait(() => window.__gyro.state().deviceConfig?.activeMode === 0 && window.__gyro.state().selectionMask === 511);
+  assert.equal((await state()).deviceConfig.activeFast, 1);
+  assert.equal((await state()).deviceConfig.outputs[0].mask, 511);
+  step('模拟重启：启动配置生效，保存输出恢复，临时输出未持久化');
+  await setOutput(1, 1, 0);
+  await wait(() => document.getElementById('dataState').textContent === '输出已关闭');
+  await page.click('#pingBtn');
+  await wait(() => document.getElementById('message').textContent.includes('PONG'));
+  step('关闭 USB 遥测后仍能控制设备，不误报数据超时');
+  await page.evaluate(() => { window.__mock.dev.failSave = true; document.querySelector('#outputFields1 input').checked = true; });
+  await page.click('#outputApply1');
+  await wait(() => document.getElementById('message').textContent.includes('输出配置失败'));
+  assert.equal((await state()).deviceConfig.outputs[1].mask, 0);
+  step('Flash 保存失败不改变实际输出，不显示虚假成功');
+  await page.evaluate(() => { window.__mock.dev.capabilities = 6; });
+  await page.click('#refreshBtn');
+  await wait(() => document.querySelector('input[name="fusion"][value="1"]').disabled);
+  step('六轴专用固件不提供无效的九轴切换');
+  await page.click('#disconnectBtn');
+  assert.deepEqual(errors, []);
+  console.log(`config browser check: ${steps} steps passed against ${base}`);
+} finally { await browser.close(); }

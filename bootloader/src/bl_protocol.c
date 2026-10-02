@@ -7,8 +7,9 @@
 #define BL_HEADER_SIZE 18U
 #define BL_FRAME_SIZE (BL_HEADER_SIZE + BL_MAX_CHUNK)
 
-static uint8_t rx[BL_FRAME_SIZE];
-static uint16_t rxn;
+typedef struct { uint8_t bytes[BL_FRAME_SIZE]; uint16_t length; } bl_parser_t;
+static bl_parser_t parsers[BL_IO_PORT_COUNT];
+static bl_io_port_t reply_port, owner_port;
 static uint32_t image_len, image_crc, image_next;
 static uint8_t active;
 static uint8_t boot_allowed, boot_requested;
@@ -35,7 +36,7 @@ static void reply(uint8_t cmd, uint8_t status, uint32_t value)
   b[8] = (uint8_t)(value >> 16); b[9] = (uint8_t)(value >> 24);
   c = bl_crc32(b, 10U);
   memcpy(&b[10], &c, sizeof(c));
-  (void)bl_io_write(b, sizeof(b));
+  (void)bl_io_write_to(reply_port, b, sizeof(b));
 }
 
 static int valid_app(void)
@@ -79,7 +80,9 @@ static int program_words(uint32_t addr, const uint8_t *p, uint32_t n)
 
 void bl_protocol_reset(void)
 {
-  rxn = 0U;
+  memset(parsers, 0, sizeof(parsers));
+  reply_port = BL_IO_UART;
+  owner_port = BL_IO_PORT_COUNT;
   active = 0U;
   image_len = 0U;
   image_crc = 0U;
@@ -98,13 +101,23 @@ int bl_protocol_boot_requested(void)
   return boot_requested && bl_protocol_can_boot();
 }
 
-static void handle_frame(const uint8_t *p, uint16_t n)
+static void handle_frame(bl_io_port_t source, const uint8_t *p, uint16_t n)
 {
   uint8_t cmd = p[3];
+  reply_port = source;
   uint32_t addr, len, crc;
   memcpy(&addr, p + 6U, sizeof(addr));
   memcpy(&len, p + 10U, sizeof(len));
   memcpy(&crc, p + 14U, sizeof(crc));
+
+  /* HELLO is read-only. A transfer otherwise belongs to its BEGIN port,
+   * including failed writes and the interval between END and BOOT. The
+   * owner can ABORT to release it and restart via the other transport. */
+  if(cmd != BL_CMD_HELLO && owner_port != BL_IO_PORT_COUNT && owner_port != source)
+  {
+    reply(cmd, BL_ST_BUSY, image_next);
+    return;
+  }
 
   if(cmd == BL_CMD_HELLO)
   {
@@ -118,6 +131,7 @@ static void handle_frame(const uint8_t *p, uint16_t n)
     {
       /* Once erase starts, only a successful END may authorize startup. */
       active = 0U; boot_allowed = 0U; boot_requested = 0U;
+      owner_port = source;
       image_len = len; image_crc = crc; image_next = 0U;
       if(!erase_app()) reply(cmd, BL_ST_FLASH, 0U);
       else
@@ -164,6 +178,7 @@ static void handle_frame(const uint8_t *p, uint16_t n)
   {
     /* Do not revalidate just the vectors of a partially written image. */
     active = 0U; boot_requested = 0U;
+    owner_port = BL_IO_PORT_COUNT;
     image_len = image_crc = image_next = 0U;
     reply(cmd, BL_ST_OK, 0U);
   }
@@ -185,7 +200,17 @@ static void handle_frame(const uint8_t *p, uint16_t n)
 
 void bl_protocol_feed(uint8_t b)
 {
+  bl_protocol_feed_from(BL_IO_UART, b);
+}
+
+void bl_protocol_feed_from(bl_io_port_t source, uint8_t b)
+{
+  if((unsigned)source >= BL_IO_PORT_COUNT) return;
+  bl_parser_t *parser = &parsers[source];
+  uint8_t *rx = parser->bytes;
+  uint16_t rxn = parser->length;
   rx[rxn++] = b;
+  parser->length = rxn;
   for(;;)
   {
     uint32_t len;
@@ -194,6 +219,7 @@ void bl_protocol_feed(uint8_t b)
        rx[2] != BL_PROTOCOL_VERSION)
     {
       memmove(rx, rx + 1U, --rxn);
+      parser->length = rxn;
       continue;
     }
     memcpy(&len, rx + 10U, sizeof(len));
@@ -203,6 +229,7 @@ void bl_protocol_feed(uint8_t b)
     if(len > BL_MAX_CHUNK)
     {
       memmove(rx, rx + 1U, --rxn);
+      parser->length = rxn;
       continue;
     }
     if(rxn < BL_HEADER_SIZE + len) return;
@@ -211,13 +238,14 @@ void bl_protocol_feed(uint8_t b)
       /* A valid frame is always consumed first; the remaining bytes are
        * retained so back-to-back USB/UART frames are not discarded. */
       uint16_t frame = (uint16_t)(BL_HEADER_SIZE + len);
-      handle_frame(rx, frame);
+      handle_frame(source, rx, frame);
       memmove(rx, rx + frame, rxn - frame);
       rxn = (uint16_t)(rxn - frame);
+      parser->length = rxn;
       continue;
     }
-    handle_frame(rx, rxn);
-    rxn = 0U;
+    handle_frame(source, rx, rxn);
+    parser->length = 0U;
     return;
   }
 }

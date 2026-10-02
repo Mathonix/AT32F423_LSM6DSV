@@ -2,6 +2,7 @@
 #define CAN_TEST_H
 
 #include <stdint.h>
+#include "can_protocol.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -110,6 +111,11 @@ void can_test_clear_cmd_flag(uint8_t flag);
 /* Set the Damiao node ID used for command matching at runtime. */
 int can_test_set_node_id(uint16_t node_id);
 uint16_t can_test_get_node_id(void);
+void can_test_get_config(can_config_t *config);
+int can_test_set_config(const can_config_t *config);
+int can_test_config_busy(void);
+/* Main application owns flash storage (preserves startup/UART/USB settings). */
+int can_test_save_config(const can_config_t *config);
 
 /* Backward compatibility wrapper */
 static inline void can_test_update_attitude(float roll, float pitch, float yaw, float gz, float az, float temp_c, uint8_t flags)

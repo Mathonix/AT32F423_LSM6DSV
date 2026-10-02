@@ -1,0 +1,209 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>AT32 AHRS Web 上位机</title><link rel="stylesheet" href="/style.css?v=20261001noise1">
+</head>
+<body>
+<header class="tb">
+  <div class="brand"><span class="logo" aria-hidden="true"></span><h1>AT32 AHRS 控制台</h1></div>
+  <div class="tb-conn">
+    <button id="connectBtn" class="primary">连接 USB / UART</button>
+    <button id="disconnectBtn" disabled>断开</button>
+  </div>
+  <div class="tb-opts">
+    <label class="fld">波特率 <select id="baud"><option>2000000</option><option>115200</option><option>921600</option></select></label>
+    <label class="fld">解析 <select id="parseMode"><option value="auto">自动（JustFloat 优先）</option><option value="justfloat">JustFloat</option><option value="binary">二进制 AA55</option></select></label>
+    <label class="fld">JustFloat通道 <select id="justChannels"><option value="3" selected>3（Yaw/Pitch/Roll）</option><option value="6">6（Yaw/Pitch/Roll/Gz/Az/Temp）</option></select></label>
+    <button id="refreshBtn">刷新状态</button>
+  </div>
+  <div class="tb-msg"><span id="message">浏览器需使用 HTTPS 或 localhost，并支持 Web Serial。</span></div>
+  <div class="badges">
+    <span id="dataState" class="badge">无数据</span>
+    <span id="linkState" class="badge off">未连接</span>
+  </div>
+</header>
+
+<main>
+  <section class="metrics">
+    <div class="metric"><small>YAW</small><strong id="yaw">--</strong><em>°</em></div>
+    <div class="metric"><small>PITCH</small><strong id="pitch">--</strong><em>°</em></div>
+    <div class="metric"><small>ROLL</small><strong id="roll">--</strong><em>°</em></div>
+    <div class="metric"><small>温度</small><strong id="temp">--</strong><em>°C</em></div>
+    <div class="metric"><small>数据速率</small><strong id="rate">--</strong><em>帧/s</em></div>
+  </section>
+
+  <div class="layout">
+    <div class="col col-live">
+      <section class="panel attitude">
+        <div class="ph"><h2>姿态显示</h2><span id="modeLabel">融合率：未知 · 输出：未知</span></div>
+        <div class="pb">
+          <div class="stage"><canvas id="attitude" width="720" height="410"></canvas></div>
+          <div class="model-tools"><span id="modelStatus" role="status">板卡模型加载中…</span><button id="modelReset" disabled title="恢复默认查看角度，不改变设备姿态">复位视角</button></div>
+          <div class="readouts">
+            <div class="ro"><span>YAW</span><b id="yaw2">--</b></div>
+            <div class="ro"><span>PITCH</span><b id="pitch2">--</b></div>
+            <div class="ro"><span>ROLL</span><b id="roll2">--</b></div>
+            <div class="ro ro-wide"><span>Gyr dps</span><i><b id="gx">--</b>/<b id="gy">--</b>/<b id="gz">--</b></i></div>
+            <div class="ro ro-wide"><span>Acc m/s²</span><i><b id="ax">--</b>/<b id="ay">--</b>/<b id="az">--</b></i></div>
+            <div class="ro ro-full"><span>四元数</span><b id="quat">--</b></div>
+          </div>
+          <div class="meta"><span id="flagsLabel">状态位：-</span><span id="statsLabel">JustFloat 0 · 失步 0 · 二进制 0 · 长度错误 0</span></div>
+        </div>
+      </section>
+
+      <section class="panel outputs">
+        <div class="ph"><h2>UART / USB 独立输出</h2><span id="configState" class="badge">等待配置查询</span></div>
+        <div class="pb out-pair">
+          <fieldset id="outputPanel0" disabled>
+            <legend>UART</legend>
+            <label class="stk">数据协议 <select id="outputFormat0"><option value="0">JustFloat</option><option value="1">自定义协议（AA55 + CRC）</option></select></label>
+            <div id="outputFields0" class="field-grid"></div>
+            <div class="row"><button id="allFields0" class="sm">全选</button><button id="noFields0" class="sm">全不选 / 关闭</button></div>
+            <label class="check"><input type="checkbox" id="outputPersist0" checked> 保存到设备，断电保留</label>
+            <button id="outputApply0" class="primary wide">应用 UART 输出</button>
+            <small id="outputSummary0"></small>
+          </fieldset>
+          <fieldset id="outputPanel1" disabled>
+            <legend>USB</legend>
+            <label class="stk">数据协议 <select id="outputFormat1"><option value="0">JustFloat</option><option value="1">自定义协议（AA55 + CRC）</option></select></label>
+            <div id="outputFields1" class="field-grid"></div>
+            <div class="row"><button id="allFields1" class="sm">全选</button><button id="noFields1" class="sm">全不选 / 关闭</button></div>
+            <label class="check"><input type="checkbox" id="outputPersist1" checked> 保存到设备，断电保留</label>
+            <button id="outputApply1" class="primary wide">应用 USB 输出</button>
+            <small id="outputSummary1"></small>
+          </fieldset>
+        </div>
+      </section>
+
+    </div>
+
+    <div class="col col-dev">
+      <section class="panel settings">
+        <div class="ph"><h2>设备设置</h2><span id="settingsState" class="badge">未进入设置模式</span></div>
+        <div class="pb">
+          <div class="grp inline">
+            <h3>设置模式</h3>
+            <div class="row"><button id="enterBtn">进入设置模式</button><button id="exitBtn" disabled>退出设置模式</button></div>
+          </div>
+
+          <div class="grp" id="filterControls">
+            <h3>姿态稳定性</h3>
+            <label class="stk">滤波模式 <select id="filterProfile" disabled><option value="0">响应优先</option><option value="1" selected>均衡</option><option value="2">静态稳定</option></select></label>
+            <p id="filterHint" class="hint">均衡：兼顾静态平滑与转动响应。参数为初始方案，需实测确认。</p>
+            <div class="row"><label class="check"><input type="checkbox" id="filterPersist" checked> 重启后保留</label><button id="filterApply" disabled>应用模式</button><button id="filterDiscard" disabled>撤销修改</button><button id="filterRefresh" disabled>读取</button></div>
+            <p id="filterState" class="hint" role="status">等待设备读取；需要配套固件。</p>
+            <details><summary>零偏与噪声诊断</summary><p id="fusionDiag" class="hint">尚未读取</p><div class="row"><button id="diagRead" disabled>读取诊断</button><button id="diagRecord" disabled>开始记录</button><button id="diagExport" disabled>导出 CSV</button></div><p id="diagState" class="hint">记录原始姿态、三轴零偏及残余角速度；显示姿态按主数据流接收，时间另行标注。</p></details>
+          </div>
+
+          <div class="grp" id="startupControls">
+            <fieldset id="modeField" disabled>
+              <legend>融合模式</legend>
+              <div class="radios">
+                <label><input type="radio" name="fusion" value="0"> 六轴（陀螺仪 + 加速度）</label>
+                <label><input type="radio" name="fusion" value="1" checked> 九轴</label>
+                <label><input type="radio" name="fusion" value="2"> 九轴相对角</label>
+              </div>
+            </fieldset>
+            <label class="check"><input type="checkbox" id="fastStart" disabled> 快速启动（复用温度匹配的历史零偏）</label>
+            <div class="gyro-init" id="gyroInitRow">
+              <label class="stk" for="gyroInitSeconds">初始化零偏时长（秒） <input id="gyroInitSeconds" type="number" value="2" min="0.1" max="60" step="0.1" required disabled></label>
+              <p id="gyroInitHint" class="hint">重启后保持设备静止，完成零偏采样后开始输出姿态。</p>
+            </div>
+            <p id="startupState" class="hint">当前启动配置：等待设备读取</p>
+            <label class="stk">陀螺仪量程 dps <select id="gyroRange" disabled><option value="125">±125</option><option value="250">±250</option><option value="500">±500</option><option value="1000" selected>±1000</option><option value="2000">±2000</option><option value="4000">±4000</option></select></label>
+            <p id="gyroRangeHint" class="hint">量程保存后在设备重启时生效。</p>
+            <div class="row"><label class="check"><input type="checkbox" id="restartNow"> 应用后立即重启</label><button id="applyBtn" class="primary push" disabled>保存启动设置</button><button id="startupDiscard" disabled>撤销修改</button></div>
+            <p id="startupDraftHint" class="hint" role="status"></p>
+            <p id="restartHint" class="hint warn-text"></p>
+          </div>
+
+          <div class="grp">
+            <h3>标定</h3>
+            <div class="row"><button id="zeroBtn">Yaw 置零</button><button id="pingBtn">PING</button><button id="calBtn" disabled title="固件 ACK 固定返回执行失败（detail=1）">陀螺重标定（暂未实现）</button></div>
+            <div class="row"><button id="gyro60Btn" disabled title="固件 ACK 固定返回执行失败（0x0601）">运行时陀螺标定 60s（暂未实现）</button></div>
+            <h3>自动六面加速度计校准</h3>
+            <p class="hint">依次让传感器的 X、Y、Z 轴向上或向下，顺序不限。每面摆正并静止约 1.5 秒，识别到的方向会高亮，六面完成后自动保存。</p>
+            <div id="accFaces" class="acc-faces" aria-label="六面完成进度"><span data-face="0">−X</span><span data-face="1">+X</span><span data-face="2">−Y</span><span data-face="3">+Y</span><span data-face="4">−Z</span><span data-face="5">+Z</span></div>
+            <progress id="accFaceProgress" max="1000" value="0" hidden aria-label="当前面稳定或采样进度"></progress>
+            <p id="accStatus" class="hint" role="status" aria-live="polite"></p>
+            <div class="acc-raw-head"><span id="accRawLabel">原始加速度（等待校准采样）</span><span id="accRawNorm"></span></div>
+            <div id="accRaw" class="acc-raw stale" aria-label="校准原始三轴加速度，单位 g"><div><span>X</span><strong id="accRawX">—</strong><small>g</small></div><div><span>Y</span><strong id="accRawY">—</strong><small>g</small></div><div><span>Z</span><strong id="accRawZ">—</strong><small>g</small></div></div>
+            <p id="accPlacement" class="hint acc-placement"></p>
+            <p id="accAdvice" class="hint warn-text" hidden></p>
+            <p id="accParams" class="hint acc-params"></p>
+            <div class="row"><button id="acc6Btn" disabled>开始六面校准</button><button id="accCancelBtn" disabled>取消校准</button><button id="accRefreshBtn" disabled>读取状态</button></div>
+          </div>
+
+          <div class="grp inline">
+            <h3>CAN 节点</h3>
+            <div class="row"><label class="fld">节点 ID <input id="canNodeId" value="1" inputmode="numeric" maxlength="4"></label><button id="canIdBtn">设置 CAN ID</button></div>
+            <p id="canHint" class="hint warn-text"></p>
+          </div>
+
+          <div class="grp">
+            <div class="grp-h"><h3>数据流</h3><p class="hint" id="streamLabel">数据流：未知</p></div>
+            <div class="row"><label class="fld grow">模式 <select id="streamMode"><option value="0">VOFA JustFloat 3通道</option><option value="1">二进制姿态帧</option><option value="2">二进制紧凑帧</option><option value="3">二进制 IMU 帧</option><option value="4">VOFA JustFloat 6通道</option></select></label><button id="streamApplyBtn">切换数据流</button></div>
+            <div class="row"><label class="fld grow">输出频率 Hz <input id="outHz" value="200" inputmode="numeric" maxlength="4"></label><button id="rateApplyBtn">设置输出频率</button></div>
+            <p id="rateState" class="hint">USB / UART 共用输出频率，配套固件支持重启保留。</p>
+          </div>
+          <details id="firmwarePanel" class="firmware-upgrade">
+            <summary>USB / UART 固件升级</summary>
+            <div class="firmware-body">
+              <p class="hint">选择本板的应用 .bin，升级时保持供电并留在此页面。配置和校准区保留；当前 Bootloader 不支持断电自动回滚。</p>
+              <p id="firmwareLink" class="hint">未连接。连接后自动区分 USB 与 UART。</p>
+              <label class="stk">应用固件 <input id="firmwareFile" type="file" accept=".bin,application/octet-stream"></label>
+              <p id="firmwareInfo" class="hint firmware-info">尚未选择固件。</p>
+              <label class="check"><input id="firmwareRecovery" type="checkbox"> 设备已在升级模式（恢复上传）</label>
+              <div class="row"><button id="firmwarePortBtn" hidden>选择恢复端口</button><button id="firmwareStartBtn" class="primary" disabled>开始升级</button><button id="firmwareStopBtn" disabled>停止上传</button></div>
+              <progress id="firmwareProgress" max="100" value="0" aria-label="固件已确认上传进度"></progress>
+              <p id="firmwareStatus" class="hint" role="status" aria-live="polite">先连接设备，再选择固件。已进入 Bootloader 的设备可勾选恢复上传。</p>
+            </div>
+          </details>
+        </div>
+      </section>
+
+      <section class="panel can">
+        <div class="ph"><h2>CAN 输出 · 达妙格式</h2><span id="canConfigState" class="badge">等待设备读取</span></div>
+        <div class="pb">
+          <fieldset id="canPanel" disabled>
+            <legend>CAN 参数（先进入设置模式）</legend>
+            <div class="can-grid">
+              <label class="stk">CAN_ID · 请求 / 主动输出 ID <input id="canRequestId" value="1" maxlength="6" placeholder="1 或 0x001"></label>
+              <label class="stk">MST_ID · 应答 ID <input id="canMasterId" value="0x6FF" maxlength="6" placeholder="1791 或 0x6FF"></label>
+              <label class="stk">CAN 波特率 <select id="canBaud"><option value="0">1 Mbps</option><option value="1">500 Kbps</option><option value="2">400 Kbps（实际约 401.07）</option><option value="3">250 Kbps</option><option value="4">200 Kbps</option><option value="5">100 Kbps</option><option value="6">50 Kbps</option><option value="7">25 Kbps</option></select></label>
+              <label class="stk">发送模式 <select id="canActive"><option value="1">主动周期输出</option><option value="0">请求 / 应答</option></select></label>
+              <label class="stk">每类报文间隔 ms <input id="canPeriod" value="1" type="number" min="1" max="10000" step="1"></label>
+              <label class="stk">每类输出频率 Hz <input id="canFrequency" value="1000" type="number" min="0.1" max="1000" step="any"></label>
+            </div>
+            <p id="canFrequencyHint" class="hint">主动模式下，每类报文按此频率发送。</p>
+            <div id="canOutputs" class="field-grid can-chips">
+              <label><input type="checkbox" value="0"> 三轴加速度 + 温度</label>
+              <label><input type="checkbox" value="1"> 三轴角速度</label>
+              <label><input type="checkbox" value="2" checked> 欧拉角 Pitch / Yaw / Roll</label>
+              <label><input type="checkbox" value="3"> 四元数 W / X / Y / Z</label>
+            </div>
+            <div class="row"><label class="check"><input id="canPersist" type="checkbox" checked> 保存到设备，断电保留</label><span class="push"></span><button id="canApply" class="primary">应用 CAN 配置</button><button id="canRefresh">读取 CAN 配置</button><button id="canDiscard" disabled>撤销修改</button></div>
+            <p id="canDraftHint" class="hint warn-text" role="status"></p>
+          </fieldset>
+          <div class="can-sum">
+            <p id="canConfigSummary" class="hint">尚未读取 CAN 配置；旧固件需升级才能使用。</p>
+            <p id="canSavedSummary" class="hint"></p>
+          </div>
+        </div>
+      </section>
+    </div>
+
+    <div class="col col-log">
+      <section class="panel log-panel">
+        <div class="ph"><h2>通信日志</h2><button id="clearLog" class="sm">清空</button></div>
+        <pre id="log"></pre>
+      </section>
+    </div>
+  </div>
+</main>
+
+<script src="/firmware-upgrade.js?v=20261001noise1"></script>
+<script src="/app.js?v=20261002usb2"></script>
+</body>
+</html>

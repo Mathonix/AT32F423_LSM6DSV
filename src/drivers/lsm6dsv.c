@@ -7,6 +7,7 @@
  */
 
 #include "lsm6dsv.h"
+#include "gyro_range.h"
 #include "bsp.h"
 #include "at32f423_scfg.h"
 
@@ -464,8 +465,10 @@ static int expect_reg(uint8_t reg, uint8_t mask, uint8_t want)
   return ((v & mask) == want) ? 0 : -1;
 }
 
-int lsm6dsv_init_2khz(void)
+int lsm6dsv_init_2khz(uint16_t gyro_range_dps)
 {
+  if(!gyro_range_valid(gyro_range_dps)) return -11;
+  const uint8_t fs_g = gyro_range_register(gyro_range_dps);
   uint32_t guard;
   uint8_t who = 0U;
   uint8_t n;
@@ -515,7 +518,7 @@ int lsm6dsv_init_2khz(void)
   if(write_reg_mask(REG_CTRL3, (uint8_t)(CTRL3_BDU | CTRL3_IF_INC),
                     (uint8_t)(CTRL3_BDU | CTRL3_IF_INC)) != 0) return -9;
   if(write_reg_mask(REG_CTRL4, CTRL4_DRDY_MASK, CTRL4_DRDY_MASK) != 0) return -9;
-  if(write_reg_mask(REG_CTRL6, (uint8_t)(0x0FU | CTRL6_XL_HM_MODE), FS_G_1000DPS) != 0) return -9;
+  if(write_reg_mask(REG_CTRL6, (uint8_t)(0x0FU | CTRL6_XL_HM_MODE), fs_g) != 0) return -9;
   /* Explicitly force accelerometer high-performance mode. */
   if(write_reg_mask(REG_CTRL7, (uint8_t)(LPF1_G_EN | CTRL7_G_HM_MODE), 0x00U) != 0) return -9;
   /* Explicitly force gyroscope high-performance mode and keep LPF1 off. */
@@ -536,7 +539,7 @@ int lsm6dsv_init_2khz(void)
   if(expect_reg(REG_CTRL3, (uint8_t)(CTRL3_BDU | CTRL3_IF_INC),
                 (uint8_t)(CTRL3_BDU | CTRL3_IF_INC)) != 0) return -10;
   if(expect_reg(REG_CTRL4, CTRL4_DRDY_MASK, CTRL4_DRDY_MASK) != 0) return -10;
-  if(expect_reg(REG_CTRL6, (uint8_t)(0x0FU | CTRL6_XL_HM_MODE), FS_G_1000DPS) != 0) return -10;
+  if(expect_reg(REG_CTRL6, (uint8_t)(0x0FU | CTRL6_XL_HM_MODE), fs_g) != 0) return -10;
   if(expect_reg(REG_CTRL7, (uint8_t)(LPF1_G_EN | CTRL7_G_HM_MODE), 0x00U) != 0) return -8;
   if(expect_reg(REG_CTRL8, 0x03U, FS_XL_4G) != 0) return -10;
   if(expect_reg(REG_INT1_CTRL, 0xFFU, INT1_DRDY_G) != 0) return -10;

@@ -35,6 +35,26 @@ void protocol_parser_init(protocol_parser_t *parser, protocol_frame_cb_t cb, voi
   parser->user_data = user_data;
 }
 
+void protocol_parser_set_vofa_callback(protocol_parser_t *parser, protocol_vofa_cb_t cb)
+{
+  if(parser == NULL) return;
+  parser->vofa_cb = cb;
+  parser->vofa_match = 0U;
+}
+
+static void protocol_feed_text(protocol_parser_t *parser, uint8_t byte)
+{
+  static const uint8_t command[] = "vofa";
+  if(parser->vofa_cb == NULL) return;
+  if(byte >= 'A' && byte <= 'Z') byte = (uint8_t)(byte + ('a' - 'A'));
+  if(byte == command[parser->vofa_match]) ++parser->vofa_match;
+  else parser->vofa_match = byte == command[0] ? 1U : 0U;
+  if(parser->vofa_match == sizeof(command) - 1U) {
+    parser->vofa_match = 0U;
+    parser->vofa_cb(parser->user_data);
+  }
+}
+
 void protocol_parser_feed_byte(protocol_parser_t *parser, uint8_t byte)
 {
   if(parser == NULL)
@@ -47,8 +67,10 @@ void protocol_parser_feed_byte(protocol_parser_t *parser, uint8_t byte)
     case PARSE_STATE_SYNC1:
       if(byte == AHRS_SYNC1)
       {
+        parser->vofa_match = 0U;
         parser->state = PARSE_STATE_SYNC2;
       }
+      else protocol_feed_text(parser, byte);
       break;
 
     case PARSE_STATE_SYNC2:
@@ -63,6 +85,7 @@ void protocol_parser_feed_byte(protocol_parser_t *parser, uint8_t byte)
       else
       {
         parser->state = PARSE_STATE_SYNC1;
+        protocol_feed_text(parser, byte);
       }
       break;
 
@@ -249,4 +272,67 @@ uint16_t protocol_pack_ack(uint8_t *buf, uint16_t capacity, uint8_t seq, uint8_t
   payload.status = status;
   payload.detail = detail;
   return protocol_pack_frame(buf, capacity, AHRS_MSG_ACK, seq, &payload, (uint8_t)sizeof(payload));
+}
+
+int protocol_output_config_valid(const output_config_t *config)
+{
+  return config != NULL && config->format <= OUTPUT_FORMAT_LEGACY &&
+         config->legacy_mode <= STREAM_MODE_VOFA_6CH &&
+         (config->field_mask & ~AHRS_FIELDS_ALL) == 0U;
+}
+
+uint16_t protocol_pack_output(uint8_t *buf, uint16_t capacity, uint8_t seq,
+                              const output_config_t *config, const float fields[AHRS_FIELD_COUNT],
+                              float temperature, uint8_t flags, uint16_t timestamp_ms)
+{
+  uint8_t payload[4U + 4U * AHRS_FIELD_COUNT];
+  uint16_t used = 0U, i;
+  static const uint8_t tail[4] = {0U, 0U, 0x80U, 0x7FU};
+  if(buf == NULL || fields == NULL || !protocol_output_config_valid(config)) return 0U;
+  if(config->format == OUTPUT_FORMAT_LEGACY)
+  {
+    switch(config->legacy_mode)
+    {
+      case STREAM_MODE_BIN_ATT:
+        return protocol_pack_attitude(buf, capacity, seq, fields[2], fields[1], fields[0], flags, timestamp_ms);
+      case STREAM_MODE_BIN_COMPACT:
+        return protocol_pack_compact(buf, capacity, seq, fields[2], fields[1], fields[0], fields[8], flags, timestamp_ms);
+      case STREAM_MODE_BIN_IMU:
+        return protocol_pack_imu(buf, capacity, seq, fields[6], fields[7], fields[8], fields[3], fields[4], fields[5], temperature, timestamp_ms);
+      default:
+        memcpy(payload, fields, 12U);
+        used = 12U;
+        if(config->legacy_mode == STREAM_MODE_VOFA_6CH)
+        {
+          memcpy(payload + used, &fields[8], 4U); used += 4U;
+          memcpy(payload + used, &fields[5], 4U); used += 4U;
+          memcpy(payload + used, &temperature, 4U); used += 4U;
+        }
+        break;
+    }
+  }
+  else
+  {
+    if(config->field_mask == 0U) return 0U;
+    if(config->format == OUTPUT_FORMAT_CUSTOM)
+    {
+      payload[0] = (uint8_t)config->field_mask;
+      payload[1] = (uint8_t)(config->field_mask >> 8);
+      payload[2] = (uint8_t)timestamp_ms;
+      payload[3] = (uint8_t)(timestamp_ms >> 8);
+      used = 4U;
+    }
+    for(i = 0U; i < AHRS_FIELD_COUNT; ++i)
+      if((config->field_mask & (1U << i)) != 0U)
+      {
+        memcpy(payload + used, &fields[i], 4U);
+        used += 4U;
+      }
+    if(config->format == OUTPUT_FORMAT_CUSTOM)
+      return protocol_pack_frame(buf, capacity, AHRS_MSG_SELECTED_DATA, seq, payload, (uint8_t)used);
+  }
+  if(capacity < used + 4U) return 0U;
+  memcpy(buf, payload, used);
+  memcpy(buf + used, tail, 4U);
+  return used + 4U;
 }

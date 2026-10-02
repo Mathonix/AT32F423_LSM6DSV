@@ -1,0 +1,39 @@
+--- a/src/app/main.c
++++ b/src/app/main.c
+@@ -160,6 +160,10 @@
+ static protocol_parser_t usb_protocol_parser;
+ static stream_mode_t app_stream_mode = STREAM_MODE_VOFA_3CH;
+ static fusion_mode_t app_fusion_mode = FUSION_MODE_9AXIS;
++/* Mode currently stored in flash. After SET_FUSION_MODE without apply_now it
++ * differs from the running app_fusion_mode until reboot; any other rewrite of
++ * the settings record (CAN node ID) must preserve it. */
++static fusion_mode_t app_saved_fusion_mode = FUSION_MODE_9AXIS;
+ static uint8_t app_relative_yaw_enabled;
+ /* Runtime stream rate. It is intentionally volatile only in RAM for now;
+  * persistent output-rate settings need a versioned flash-record extension. */
+@@ -358,6 +362,7 @@
+       }
+       else
+       {
++        app_saved_fusion_mode = (fusion_mode_t)payload[0];
+         app_settings_dirty = 1U;
+       }
+       /* Do not reboot if the success reply could not enter the TX queue. */
+@@ -375,7 +380,7 @@
+       {
+         uint16_t node_id = (uint16_t)payload[0] | ((uint16_t)payload[1] << 8);
+         if((node_id > 0x7FFU) ||
+-           (app_save_settings(app_fusion_mode, node_id) != 0) ||
++           (app_save_settings(app_saved_fusion_mode, node_id) != 0) ||
+            (can_test_set_node_id(node_id) != 0))
+         {
+           status = (node_id > 0x7FFU) ? AHRS_ACK_INVALID_PARAM : AHRS_ACK_EXEC_FAILED;
+@@ -1167,6 +1172,8 @@
+   {
+     uint16_t stored_can_id = APP_CAN_DEFAULT_CAN_ID;
+     (void)fusion_settings_load_ex(&app_fusion_mode, &stored_can_id);
++    /* Record the stored mode before the six-axis-image override below. */
++    app_saved_fusion_mode = app_fusion_mode;
+ #if !APP_MAG_FUSION_ENABLE
+     /* A six-axis image must not inherit a previously stored nine-axis mode. */
+     app_fusion_mode = FUSION_MODE_6AXIS;

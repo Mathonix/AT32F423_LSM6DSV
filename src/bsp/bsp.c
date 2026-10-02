@@ -93,6 +93,10 @@ uint32_t millis(void)
 {
   return (uint32_t)(dwt_cycles64() / (uint64_t)(system_core_clock / 1000U));
 }
+uint32_t micros(void)
+{
+  return (uint32_t)(dwt_cycles64() / (uint64_t)(system_core_clock / 1000000U));
+}
 
 void bsp_systick_tick(void)
 {

@@ -1,0 +1,180 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>固件升级 · 交互设计样稿</title>
+<style>
+:root{color-scheme:dark;--bg:#0b1018;--panel:#121a26;--line:#253244;--text:#eaf0fa;--muted:#92a2b8;--blue:#78a7ff;--green:#5bdbb0;--amber:#f5c47a;--red:#ff969f;--radius:16px}
+*{box-sizing:border-box}body{margin:0;background:radial-gradient(ellipse at 15% 0%,#16263e 0,transparent 45%),var(--bg);color:var(--text);font:14px/1.6 "Segoe UI","Microsoft YaHei",sans-serif;min-height:100vh}button,select{font:inherit}button{cursor:pointer;min-height:42px;border-radius:9px;border:1px solid var(--line);background:#1b283b;color:var(--text);padding:8px 16px;transition:background .15s}button:hover:not(:disabled){background:#2a3c56}button:focus-visible,select:focus-visible,summary:focus-visible{outline:2px solid var(--blue);outline-offset:3px}button:disabled{opacity:.4;cursor:default}.primary{background:var(--blue);color:#0b172c;border-color:var(--blue);font-weight:650}.primary:hover:not(:disabled){background:#a3c3ff}.secondary{background:transparent}.danger{color:var(--red)}select{background:#101927;border:1px solid var(--line);border-radius:8px;padding:8px 10px;color:var(--text);width:100%;min-height:42px}a{color:var(--blue)}
+.shell{max-width:1200px;padding:24px 30px 36px;margin:auto}.topbar{display:flex;align-items:center;gap:14px;border-bottom:1px solid var(--line);padding-bottom:18px;flex-wrap:wrap}.brand{font-size:18px;font-weight:750;letter-spacing:2px}.brand span{font-weight:400;font-size:12px;color:var(--muted);letter-spacing:0;margin-left:10px}.nav{display:flex;gap:22px;color:var(--muted);margin-left:28px;font-size:13px}.nav .selected{color:var(--blue)}.demo{margin-left:auto;color:var(--amber);background:#392b1b;border:1px solid #5c452b;border-radius:20px;padding:4px 12px;font-size:12px}
+.hero{display:flex;align-items:flex-start;justify-content:space-between;gap:20px;padding:30px 0 24px}.eyebrow{color:var(--blue);font-size:12px;letter-spacing:2px}h1{font-size:28px;letter-spacing:1px;margin:4px 0 7px;line-height:1.35}h2{font-size:16px;margin:0 0 16px}p{margin:0}.muted{color:var(--muted)}.hero p{max-width:690px;color:var(--muted)}.safe-pill{padding:7px 13px;border:1px solid #2b594e;border-radius:8px;background:#132f2b;color:var(--green);white-space:nowrap;margin-top:26px;font-size:12px}
+.cards{display:grid;grid-template-columns:.94fr 1.06fr;gap:18px}.card{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);padding:22px}.card-head{display:flex;justify-content:space-between;align-items:center;gap:10px}.pill{font-size:11px;background:#15342e;color:var(--green);padding:3px 9px;border-radius:12px;white-space:nowrap}.pill.amber{background:#392b1b;color:var(--amber)}.pill.red{background:#3b2330;color:var(--red)}.device-row{display:flex;gap:16px;align-items:center;margin:2px 0 20px}.board-icon{flex:0 0 64px;height:64px;border:1px solid #43715c;border-radius:10px;background:#173929;position:relative;box-shadow:inset 0 0 0 6px #12261e}.chip{position:absolute;inset:17px;border:4px solid #7a9490;background:#172324;border-radius:3px}.chip:after{content:"";position:absolute;width:5px;height:5px;right:1px;top:1px;border-radius:50%;background:var(--green)}.board-icon:before,.board-icon:after{content:"";position:absolute;top:8px;left:8px;width:5px;height:5px;border-radius:50%;border:1px solid #c2cfc5}.board-icon:after{left:auto;right:8px;top:auto;bottom:8px}.device-name{font-size:17px;font-weight:650}.device-sub{font-size:12px;color:var(--muted);margin-top:4px}.tabs{display:flex;border:1px solid var(--line);padding:3px;border-radius:10px;gap:4px;margin-bottom:15px}.tabs button{flex:1;border-color:transparent;background:transparent;min-height:35px;padding:5px 10px;font-size:12px;color:var(--muted)}.tabs button.active{background:#263954;color:#b7d1ff}.facts{display:grid;grid-template-columns:1fr 1fr;gap:12px 16px}.fact-label{font-size:11px;color:var(--muted)}.fact-value{font-size:14px;font-weight:600;margin-top:3px}.mono{font-family:Consolas,monospace}.identity{font-size:11px;color:var(--muted);padding-top:14px;margin-top:14px;border-top:1px solid var(--line);overflow-wrap:anywhere}
+.package-zone{border:1px dashed #405371;border-radius:12px;padding:17px;background:#101927;min-height:155px;display:flex;align-items:center;justify-content:center;flex-direction:column;gap:8px;text-align:center}.package-zone.loaded{border-style:solid;border-color:#315647;align-items:flex-start;justify-content:flex-start;text-align:left}.file-name{font-size:14px;font-weight:600;overflow-wrap:anywhere}.file-badge{font-size:11px;padding:2px 7px;border:1px solid #345c4e;border-radius:5px;color:var(--green);margin-left:6px;white-space:nowrap}.file-detail{font-size:12px;color:var(--muted);margin-top:4px}.version-row{display:flex;align-items:center;gap:16px;margin-top:11px}.version{font-size:23px;font-weight:650;line-height:1.3}.arrow{color:var(--muted);font-size:20px}.version-target{color:var(--green)}.preserve{display:flex;gap:9px;color:#b5c9be;background:#142820;border:1px solid #244539;border-radius:9px;padding:10px 12px;margin-top:13px;font-size:12px}.preserve b{color:var(--green)}.notice{font-size:11px;color:var(--muted);margin-top:12px}
+.workflow{margin-top:18px}.workflow-top{display:flex;justify-content:space-between;gap:16px;align-items:center}.workflow h2{margin:0}.phase{font-size:12px;color:var(--blue)}.steps{display:grid;grid-template-columns:repeat(7,1fr);gap:8px;margin:20px 0 22px}.step{position:relative;color:var(--muted);font-size:11px;text-align:center}.step:before{content:"";height:1px;background:var(--line);position:absolute;top:13px;left:-50%;width:100%;z-index:0}.step:first-child:before{display:none}.step-number{position:relative;z-index:1;display:block;width:27px;height:27px;border-radius:50%;border:1px solid #38465a;background:var(--panel);line-height:25px;margin:0 auto 8px;color:var(--muted)}.step.active{color:#c6d9ff}.step.active .step-number{border-color:var(--blue);background:#243a5c;color:#d8e5ff;box-shadow:0 0 0 4px #1a2b43}.step.done{color:#b2cabc}.step.done .step-number{border-color:#427660;background:#1d3f31;color:var(--green)}.step.failed .step-number{border-color:var(--amber);color:var(--amber);background:#3a2d20}
+.status-box{padding:17px;border:1px solid #304463;background:#142134;border-radius:11px;display:flex;gap:12px;align-items:flex-start}.status-box.success{border-color:#31674f;background:#122b22}.status-box.warning{border-color:#6a5031;background:#2e2419}.status-box.error{border-color:#73404b;background:#321f28}.status-icon{flex:0 0 25px;height:25px;text-align:center;border-radius:50%;background:#2b405f;color:#bed4ff;font-weight:700}.success .status-icon{background:#214c38;color:var(--green)}.warning .status-icon{background:#533e23;color:var(--amber)}.error .status-icon{background:#56303c;color:var(--red)}.status-title{font-size:15px;font-weight:650}.status-detail{font-size:12px;color:var(--muted);margin-top:4px}.status-box.warning .status-detail{color:#cdbda3}.status-box.success .status-detail{color:#a5c5b5}.status-box.error .status-detail{color:#d8aeb6}
+.progress-caption{display:flex;justify-content:space-between;gap:12px;font-size:12px;margin:16px 0 8px}.progress-track{height:7px;border-radius:8px;overflow:hidden;background:#253244}.progress-fill{height:100%;background:var(--blue);width:0;transition:width .18s;border-radius:8px}.progress-fill.done{background:var(--green)}.progress-bottom{display:flex;justify-content:space-between;gap:10px;font-size:11px;color:var(--muted);margin-top:7px}.actions{display:flex;flex-wrap:wrap;gap:9px;margin-top:18px}.actions-note{font-size:11px;color:var(--muted);margin:9px 0 0}.hidden{display:none!important}
+.bottom{display:grid;grid-template-columns:1.2fr 1fr;gap:18px;margin-top:18px}.mini-card{background:#0f1723;border:1px solid var(--line);border-radius:12px;padding:17px}.mini-card h2{font-size:13px;margin-bottom:9px}.config-tags{display:flex;flex-wrap:wrap;gap:7px}.tag{font-size:11px;border:1px solid #2d3b4e;border-radius:6px;padding:4px 8px;color:#afbdd0}.sim-control{display:grid;grid-template-columns:1fr auto;gap:9px;align-items:center}.sim-control button{font-size:12px}.sim-help{font-size:11px;color:var(--muted);margin-top:8px}.footer{font-size:11px;color:var(--muted);margin-top:20px;display:flex;justify-content:space-between;gap:15px;flex-wrap:wrap}.footer a{text-decoration:none}details{margin-top:16px;padding:12px 16px;border:1px solid var(--line);border-radius:10px;font-size:12px;color:var(--muted)}summary{cursor:pointer;color:#b6c7dc}details p{margin-top:8px;max-width:940px}.sr-only{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0,0,0,0)}
+@media(max-width:850px){.shell{padding:20px}.nav{margin-left:0}.cards{grid-template-columns:1fr 1fr}.card{padding:17px}.steps{gap:3px}.step{font-size:10px}.bottom{grid-template-columns:1fr}.hero{padding-top:23px}}
+@media(max-width:620px){.shell{padding:16px}.topbar{gap:10px}.brand{font-size:16px}.brand span{display:none}.demo{margin-left:auto;font-size:10px;padding:4px 8px}.nav{order:3;width:100%;gap:24px}.hero{display:block;padding-bottom:18px}h1{font-size:24px}.hero p{font-size:12px}.safe-pill{display:inline-block;margin-top:13px}.cards{grid-template-columns:1fr}.steps{grid-template-columns:repeat(4,1fr);row-gap:16px}.step:nth-child(5):before{display:none}.workflow-top{align-items:flex-start}.workflow h2{font-size:15px}.phase{font-size:11px}.progress-bottom{font-size:10px}.actions button{flex:1 1 auto}.sim-control{grid-template-columns:1fr}.sim-control button{min-height:36px}.footer{font-size:10px}}
+@media(prefers-reduced-motion:reduce){*{transition:none!important}}
+.progress-fill.instant{transition:none}
+</style>
+</head>
+<body>
+<main class="shell">
+  <header class="topbar">
+    <div class="brand">GYRO<span>上位机控制台</span></div>
+    <div class="nav" aria-label="页面位置"><span>姿态预览</span><span>设备设置</span><span class="selected">固件升级</span></div>
+    <span class="demo">交互样稿 · 模拟设备</span>
+  </header>
+  <section class="hero">
+    <div><div class="eyebrow">USB / UART</div><h1>固件升级</h1><p>选择适配的固件，升级后自动重新连接设备，并核对原来的设置。</p></div>
+    <div class="safe-pill">✓ 保留配置与校准数据</div>
+  </section>
+  <section class="cards" aria-label="设备与固件">
+    <article class="card">
+      <div class="card-head"><h2>当前设备</h2><span class="pill" id="deviceStatus">模拟在线</span></div>
+      <div class="device-row"><div class="board-icon" aria-hidden="true"><div class="chip"></div></div><div><div class="device-name">AT32F423 · 九轴姿态模块</div><div class="device-sub">LSM6DSV + IST8310 · 演示设备</div></div></div>
+      <div class="tabs" role="group" aria-label="模拟连接方式"><button id="usbBtn" class="active" aria-pressed="true">USB CDC</button><button id="uartBtn" aria-pressed="false">UART</button></div>
+      <div class="facts"><div><div class="fact-label">当前固件</div><div class="fact-value" id="currentVersion">v1.0.0（演示）</div></div><div><div class="fact-label">连接端口</div><div class="fact-value mono" id="portLabel">COM6（演示）</div></div><div><div class="fact-label">升级能力</div><div class="fact-value" id="bootLabel">支持可恢复升级（演示）</div></div><div><div class="fact-label">连接状态</div><div class="fact-value" id="connectionLabel">姿态采集就绪</div></div></div>
+      <div class="identity">设备标识（演示）：<span class="mono">4230 A1B2 · C3D4 E5F6 · 0123 4567</span></div>
+    </article>
+    <article class="card">
+      <div class="card-head"><h2>目标固件</h2><span class="muted" style="font-size:11px">.atfw 固件包</span></div>
+      <div class="package-zone" id="packageZone">
+        <span class="muted" style="font-size:25px" aria-hidden="true">↥</span>
+        <p class="muted" style="font-size:12px">模拟选择一个适配当前模块的固件包</p>
+        <button id="loadBtn" class="secondary">选择固件（演示）</button>
+      </div>
+      <div class="preserve"><b>✓</b><span>保留融合模式、陀螺量程、输出频率、CAN 设置和传感器校准。</span></div>
+      <div class="notice">升级开始后请保持供电。中断时设备等待重新上传，完成前暂不能采集姿态。</div>
+    </article>
+  </section>
+  <section class="card workflow" aria-labelledby="workflowTitle">
+    <div class="workflow-top"><h2 id="workflowTitle">升级流程</h2><span class="phase" id="phaseLabel">等待选择固件</span></div>
+    <div class="steps" id="steps"></div>
+    <div id="statusBox" class="status-box" role="status" aria-live="polite" aria-atomic="true"><span class="status-icon" id="statusIcon" aria-hidden="true">i</span><div><div class="status-title" id="statusTitle">先选择固件</div><div class="status-detail" id="statusDetail">这是交互样稿。按钮只模拟升级流程，不会连接或修改实际设备。</div></div></div>
+    <div class="progress-caption"><span id="progressCaption">固件传输</span><span id="percent">0%</span></div>
+    <div class="progress-track" id="progressTrack" role="progressbar" aria-label="模拟固件传输" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><div class="progress-fill" id="progressFill"></div></div>
+    <div class="progress-bottom"><span id="byteLabel">0 / 72.3 KiB · 按设备确认的字节计数</span><span id="postLabel">验证和重连后确认完成</span></div>
+    <div class="actions"><button id="startBtn" class="primary" disabled>开始升级</button><button id="stopBtn" class="secondary danger hidden">停止传输</button><button id="retryBtn" class="primary hidden">重新连接并重传</button><button id="reselectBtn" class="primary hidden">重新选择设备（演示）</button><button id="wrongBtn" class="secondary hidden">模拟选错设备</button></div>
+    <p class="actions-note" id="actionsNote">选择固件后，会先检查型号与配置兼容性。</p>
+  </section>
+  <section class="bottom">
+    <article class="mini-card"><h2>升级后核对这些设置</h2><div class="config-tags"><span class="tag">九轴相对角</span><span class="tag">2000 dps</span><span class="tag">USB / UART 1000 Hz</span><span class="tag">CAN 50 Hz</span><span class="tag">初始化零偏 2 秒</span><span class="tag">加速度与零偏校准</span></div></article>
+    <article class="mini-card"><h2><label for="scenario">体验正常升级与异常恢复</label></h2><div class="sim-control"><select id="scenario"><option value="normal">正常完成</option><option value="port_changed">USB 端口变化，需要重新选择</option><option value="disconnect">传输中断</option><option value="power_loss">升级过程中断电</option><option value="crc_fail">固件验证失败</option><option value="incompatible">固件与配置不兼容</option><option value="old_boot">设备升级程序版本过旧</option><option value="config_mismatch">升级成功，配置核对异常</option></select><button id="resetBtn" class="secondary">重置演示</button></div><p class="sim-help">演示约 7 秒完成。可切换 USB / UART，或在传输途中停止。</p></article>
+  </section>
+  <details><summary>设计说明：升级中断后如何恢复？</summary><p>擦除应用前，设备先保存「升级未完成」状态。中断或掉电后保留升级程序及配置，等待重传整个固件；完整验证后才允许启动应用。第一版保留 208 KiB 应用空间，不提供旧固件自动回滚。</p><p>USB 端口变化时，会先尝试已授权端口；需要重新授权则提供选择按钮。写入前核对同一块板子的唯一标识，选错设备不会继续写入。当前旧升级程序需要先通过 SWD 安装兼容版本。</p></details>
+  <footer class="footer"><span>设计样稿 · 2026-10-01 · 所有版本、端口、配置和进度均为模拟数据</span><a href="usb-uart-firmware-upgrade-design.md">查看完整工程设计 →</a></footer>
+</main>
+<script>
+(()=>{
+  'use strict';
+  const $=id=>document.getElementById(id);
+  const names=['检查固件','进入升级','连接设备','写入固件','验证固件','重启重连','核对配置'];
+  const s={loaded:false,busy:false,mode:'usb',scenario:'normal',phase:'idle',step:-1,amount:0,finished:false,port:6,run:0};
+  let timer;
+  $('steps').innerHTML=names.map((name,i)=>`<div class="step" id="step${i}"><span class="step-number">${i+1}</span>${name}</div>`).join('');
+  function defer(fn,ms=560){const run=s.run;clearTimeout(timer);timer=setTimeout(()=>{if(s.run===run)fn();},ms);}
+  function status(title,detail,tone='info'){$('statusBox').className='status-box'+(tone==='info'?'':' '+tone);$('statusTitle').textContent=title;$('statusDetail').textContent=detail;$('statusIcon').textContent=tone==='success'?'✓':tone==='warning'||tone==='error'?'!':'i';}
+  function controls(){
+    const blocked=s.scenario==='incompatible'||s.scenario==='old_boot';
+    $('startBtn').disabled=!s.loaded||s.busy||blocked||s.phase==='recovery'||s.phase==='choose_port'||s.finished;
+    $('startBtn').classList.toggle('hidden',s.phase==='recovery'||s.phase==='choose_port');
+    $('stopBtn').classList.toggle('hidden',!s.busy||s.step<3||s.step>3);
+    $('retryBtn').classList.toggle('hidden',s.phase!=='recovery');
+    $('reselectBtn').classList.toggle('hidden',s.phase!=='choose_port');
+    $('wrongBtn').classList.toggle('hidden',s.phase!=='choose_port');
+    $('scenario').disabled=s.busy;
+    $('usbBtn').disabled=s.busy||s.phase==='recovery';$('uartBtn').disabled=s.busy||s.phase==='recovery';
+    const load=$('loadBtn');if(load)load.disabled=s.busy;
+  }
+  function renderSteps(){
+    for(let i=0;i<names.length;i++){
+      const done=s.finished||i<s.step,active=i===s.step&&!s.finished,failed=active&&(s.phase==='recovery'||s.phase==='choose_port');
+      $('step'+i).className='step'+(done?' done':active?' active':'')+(failed?' failed':'');
+      $('step'+i).querySelector('.step-number').textContent=done?'✓':String(i+1);
+    }
+  }
+  function progress(){
+    $('progressFill').classList.toggle('instant',s.amount===0);$('progressFill').style.width=s.amount+'%';$('progressFill').classList.toggle('done',s.finished);
+    $('percent').textContent=s.amount+'%';$('progressTrack').setAttribute('aria-valuenow',String(s.amount));
+    $('byteLabel').textContent=(s.amount*72.3125/100).toFixed(1)+' / 72.3 KiB · 按设备确认的字节计数';
+    $('progressCaption').textContent=s.amount===100&&!s.finished?'固件传输已完成':'固件传输';
+    $('postLabel').textContent=s.finished?'版本已确认':s.amount===100?'仍需验证、重连与核对':'验证和重连后确认完成';
+  }
+  function step(index,title,detail,fn){s.step=index;s.phase='running';$('phaseLabel').textContent=names[index];status(title,detail);renderSteps();controls();defer(fn);}
+  function packageView(){
+    if(!s.loaded)return;
+    const incompatible=s.scenario==='incompatible';
+    $('packageZone').className='package-zone loaded';
+    $('packageZone').innerHTML=`<div class="file-name">gyro-9axis-v1.1.0.atfw<span class="file-badge">${incompatible?'配置不兼容':'模拟检查通过'}</span></div><div class="file-detail">AT32F423 九轴模块 · 72.3 KiB / 208 KiB</div><div class="version-row"><div><div class="fact-label">当前版本</div><div class="version">v1.0.0</div></div><span class="arrow" aria-hidden="true">→</span><div><div class="fact-label">升级到</div><div class="version version-target">v1.1.0</div></div></div><div class="file-detail">演示包 · 型号、完整性与配置兼容性检查</div>`;
+  }
+  function ready(){
+    s.step=-1;s.phase=s.loaded?'ready':'idle';s.amount=0;s.finished=false;packageView();progress();renderSteps();
+    $('bootLabel').textContent=s.scenario==='old_boot'?'需要更新升级程序':'支持可恢复升级（演示）';
+    $('phaseLabel').textContent=s.loaded?'检查完成，等待开始':'等待选择固件';
+    if(!s.loaded)status('先选择固件','这是交互样稿。按钮只模拟升级流程，不会连接或修改实际设备。');
+    else if(s.scenario==='incompatible'){status('固件与现存配置不兼容','已在写入前拦截。选择能读取当前配置的固件包，原应用继续运行。','warning');$('phaseLabel').textContent='升级已拦截';}
+    else if(s.scenario==='old_boot'){status('需要先安装新版升级程序','当前升级程序不支持可靠恢复。先通过 SWD 完成一次安装，之后即可使用 USB / UART。','warning');$('phaseLabel').textContent='需要首次安装';}
+    else status('固件适配，可以开始升级','升级会暂停姿态采集；完成后自动重连并核对原来的配置。');
+    $('actionsNote').textContent='开始后请保持供电。停止或中断时，需要重新上传完整固件。';controls();
+  }
+  function reset(){clearTimeout(timer);s.run++;Object.assign(s,{loaded:false,busy:false,phase:'idle',step:-1,amount:0,finished:false,port:6});
+    $('packageZone').className='package-zone';$('packageZone').innerHTML='<span class="muted" style="font-size:25px" aria-hidden="true">↥</span><p class="muted" style="font-size:12px">模拟选择一个适配当前模块的固件包</p><button id="loadBtn" class="secondary">选择固件（演示）</button>';
+    $('currentVersion').textContent='v1.0.0（演示）';$('deviceStatus').className='pill';$('deviceStatus').textContent='模拟在线';$('connectionLabel').textContent='姿态采集就绪';$('portLabel').textContent=(s.mode==='usb'?'COM6':'COM8')+'（演示）';ready();}
+  function start(recovery=false){
+    if(!s.loaded||s.busy||s.scenario==='incompatible'||s.scenario==='old_boot')return;
+    clearTimeout(timer);s.run++;s.busy=true;s.amount=0;s.finished=false;s.phase='running';
+    s.injectFault=!recovery;
+    $('connectionLabel').textContent='升级独占，采集已暂停';$('deviceStatus').className='pill amber';$('deviceStatus').textContent='模拟升级中';
+    $('actionsNote').textContent='固件验证完成并重连后，才会恢复姿态采集。';progress();controls();
+    step(0,'正在检查固件','核对完整性、设备型号及当前配置格式。',()=>step(1,'正在进入升级模式','设备即将重启，原端口可能短暂消失。',()=>step(2,'正在连接升级设备',s.mode==='usb'?'等待 USB 设备重新出现，并核对同一块板子的标识。':'重新打开 UART 端口，并核对同一块板子的标识。',bootConnected)));
+  }
+  function bootConnected(){
+    if(s.injectFault&&s.scenario==='port_changed'&&s.mode==='usb'){
+      s.phase='choose_port';$('phaseLabel').textContent='等待重新授权';status('设备端口已变化','原端口已消失，新端口需要浏览器授权。重新选择同一块板子后会继续升级。','warning');$('actionsNote').textContent='写入前核对设备标识。选错设备不会继续写入。';renderSteps();controls();return;
+    }
+    writing();
+  }
+  function writing(){s.step=3;s.phase='running';$('phaseLabel').textContent='写入固件';status('正在写入固件','设备已保存未完成升级状态。正在准备应用空间并传输固件。');renderSteps();controls();defer(tick,320);}
+  function tick(){
+    s.amount=Math.min(s.amount+10,100);progress();status('正在写入固件','仅按设备已确认的字节更新进度。配置与校准区域保持原值。');
+    if(s.injectFault&&s.scenario==='disconnect'&&s.amount===40){recovery('连接中断，升级尚未完成','设备保留升级程序和配置。重新连接后，从头上传同一固件即可恢复。');return;}
+    if(s.injectFault&&s.scenario==='power_loss'&&s.amount===60){recovery('设备断电，等待恢复','重新供电后设备停留在升级模式。已写入的半个应用不会启动，需要重传整个固件。');return;}
+    if(s.amount<100){defer(tick,230);return;}
+    step(4,'传输完成，正在验证固件','100% 仅表示传输完成。设备正在检查整个镜像，并保存有效状态。',()=>{
+      if(s.injectFault&&s.scenario==='crc_fail'){recovery('固件验证失败','设备仍停留在升级模式。请检查固件来源和连接，再完整重新上传。','error');return;}
+      step(5,'正在重启并重新连接','固件已验证。等待应用启动和初始化，自动重新打开已授权设备。',()=>{
+        $('connectionLabel').textContent='应用已连接，核对中';
+        step(6,'正在核对新版本与配置','确认目标固件已运行，并读取量程、频率、CAN 与校准设置。',finish);
+      });
+    });
+  }
+  function recovery(title,detail,tone='warning'){
+    clearTimeout(timer);s.busy=false;s.phase='recovery';$('phaseLabel').textContent='等待完整重传';$('connectionLabel').textContent='升级未完成，暂不能采集';$('deviceStatus').className='pill amber';$('deviceStatus').textContent='模拟等待恢复';
+    status(title,detail,tone);$('actionsNote').textContent='重传会从 0% 开始；原配置和校准数据仍保留。';renderSteps();controls();
+  }
+  function finish(){
+    s.busy=false;s.finished=true;s.phase='done';s.step=7;$('currentVersion').textContent='v1.1.0（演示）';$('deviceStatus').className='pill';$('deviceStatus').textContent='模拟在线';$('phaseLabel').textContent='新版本已运行';$('connectionLabel').textContent='姿态采集已恢复';
+    if(s.scenario==='config_mismatch'){
+      s.phase='config_warning';$('deviceStatus').className='pill amber';$('deviceStatus').textContent='模拟待核对';$('connectionLabel').textContent='配置待核对，采集暂停';status('固件更新成功，配置核对异常','新版本已运行。演示差异：输出频率 1000 Hz → 500 Hz。请检查设置，系统不会自动覆盖配置。','warning');$('actionsNote').textContent='真实界面会显示具体差异并提供设备设置入口。';
+    }else{status('升级完成，配置已保留','已连接同一块设备，并确认 v1.1.0 运行。量程、输出频率、CAN 与传感器校准已核对。','success');$('actionsNote').textContent='演示完成。可重置后体验端口变化、断电和失败恢复。';}
+    renderSteps();progress();controls();
+  }
+  $('packageZone').addEventListener('click',e=>{if(e.target.id==='loadBtn'&&!s.busy){s.loaded=true;ready();}});
+  $('startBtn').addEventListener('click',()=>start());
+  $('stopBtn').addEventListener('click',()=>{s.run++;recovery('传输已停止，设备等待恢复','设备已开始写入，不能直接恢复原应用。请完整重新上传固件后启动。');});
+  $('retryBtn').addEventListener('click',()=>start(true));
+  $('reselectBtn').addEventListener('click',()=>{s.port=7;$('portLabel').textContent='COM7（演示）';status('已确认同一设备，继续升级','演示：新端口 COM7 的设备标识与原板一致，允许继续写入。');s.phase='running';controls();defer(writing,500);});
+  $('wrongBtn').addEventListener('click',()=>status('所选设备与原设备不同','设备标识不匹配，已拒绝写入。请重新选择刚才的板子。','error'));
+  $('scenario').addEventListener('change',()=>{s.scenario=$('scenario').value;s.run++;clearTimeout(timer);s.busy=false;s.finished=false;s.port=6;$('currentVersion').textContent='v1.0.0（演示）';$('deviceStatus').className='pill';$('deviceStatus').textContent='模拟在线';$('connectionLabel').textContent='姿态采集就绪';$('portLabel').textContent=(s.mode==='usb'?'COM6':'COM8')+'（演示）';ready();});
+  $('resetBtn').addEventListener('click',reset);
+  for(const mode of ['usb','uart'])$(mode+'Btn').addEventListener('click',()=>{s.mode=mode;for(const t of ['usb','uart']){$(t+'Btn').classList.toggle('active',t===mode);$(t+'Btn').setAttribute('aria-pressed',String(t===mode));}$('portLabel').textContent=(mode==='usb'?'COM6':'COM8')+'（演示）';});
+  Object.defineProperty(window,'upgradeDesign',{value:Object.freeze({state:()=>({...s})})});
+  controls();
+})();
+</script>
+</body>
+</html>

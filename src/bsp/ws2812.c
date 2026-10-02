@@ -12,6 +12,7 @@
 
 static uint32_t ws_last_ms;
 static uint8_t ws_phase;
+static uint8_t ws_rgb_valid, ws_red, ws_green, ws_blue;
 
 static inline void wait_until(uint32_t deadline)
 {
@@ -39,6 +40,9 @@ static void send_byte(uint8_t value, uint32_t t0h, uint32_t t1h, uint32_t period
 
 void ws2812_set_rgb(uint8_t red, uint8_t green, uint8_t blue)
 {
+  /* A repeated setting-mode colour needs no new WS2812 waveform. Each
+   * waveform masks IRQs for ~30 us, enough to lose several 2-Mbaud RX bytes. */
+  if(ws_rgb_valid && red == ws_red && green == ws_green && blue == ws_blue) return;
   /* Use deliberately well-separated pulse widths. This gives substantially
    * more decoding margin than placing both symbols near their nominal limits:
    * T0H=0.30 us, T1H=0.80 us, bit period=1.25 us. */
@@ -62,11 +66,13 @@ void ws2812_set_rgb(uint8_t red, uint8_t green, uint8_t blue)
   {
     __enable_irq();
   }
+  ws_red = red; ws_green = green; ws_blue = blue; ws_rgb_valid = 1;
 }
 
 void ws2812_init(void)
 {
   gpio_init_type gpio_init_struct;
+  ws_rgb_valid = 0;
 
   crm_periph_clock_enable(CRM_GPIOA_PERIPH_CLOCK, TRUE);
   gpio_default_para_init(&gpio_init_struct);

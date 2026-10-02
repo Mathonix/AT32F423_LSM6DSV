@@ -1,0 +1,53 @@
+{
+  "source": "3D_PCB1_2026-10-01.step",
+  "sourceSha256": "45e42efcdf91d0b2acac6e9da7fd98c993d364612016424bc087079ef340aad0",
+  "sourceBytes": 25285957,
+  "converter": "occt-import-js 0.0.23",
+  "tessellation": {
+    "linearUnit": "millimeter",
+    "linearDeflectionType": "absolute_value",
+    "linearDeflection": 0.08,
+    "angularDeflection": 0.35
+  },
+  "componentMeshes": 210,
+  "triangles": 142832,
+  "vertices": 171513,
+  "materialCount": 5,
+  "boardDimensionsMm": [
+    24.9682499365,
+    19.96443992888,
+    1.586156972314
+  ],
+  "bodyAxes": "STEP X / Y / Z preserved; PCB center is rotation origin",
+  "centerMm": [
+    0,
+    0,
+    0.793078486157
+  ],
+  "displayScale": 0.10413224821973498,
+  "bounds": {
+    "min": [
+      -1.2999999523162842,
+      -1.0394710302352905,
+      -0.08258504420518875
+    ],
+    "max": [
+      1.405266284942627,
+      1.0394710302352905,
+      0.4221602976322174
+    ]
+  },
+  "componentNames": [
+    "Board~u2nG",
+    "C0402~C0402_L1.0-W0.5-H0.5~jxe0",
+    "C0805~C0805_L2.0-W1.3-H1.3~qDnO",
+    "LED-SMD_WS2812B-4020~LED-SMD_WS2812B-4020~U5SV",
+    "SOD-323_L1.7-W1.3-LS2.6-RD-1~SOD-323_L1.7-W1.3-LS2.6-RD-1~dby0",
+    "SC-70-6_L2.0-W1.3-P0.65-LS2.1-BL~SC-70-6_L2.0-W1.3-P0.65-LS2.1-BL~pNID",
+    "SOLID",
+    "CONN-SMD_4P-P1.00_MEGASTAR_ZX-SH1.0-4PWT~CONN-SMD_4P-P1.00_MEGASTAR_ZX-SH1.0-4PWT~FUlN",
+    "QFN-32_L4.0-W4.0-P0.40-TL-EP2.7~QFN-32_L4.0-W4.0-P0.40-TL-EP2.7~YauK"
+  ],
+  "glbBytes": 5834148,
+  "glbSha256": "82fc5936be00b227d7e1ff4469198295689ef07332732970a25dafef4f3c8285"
+}

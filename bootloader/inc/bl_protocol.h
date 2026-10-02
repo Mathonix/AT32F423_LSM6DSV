@@ -1,6 +1,7 @@
 #ifndef BL_PROTOCOL_H
 #define BL_PROTOCOL_H
 #include <stdint.h>
+#include "bl_io.h"
 #define BL_CMD_HELLO 0x01U
 #define BL_CMD_BEGIN 0x02U
 #define BL_CMD_DATA 0x03U
@@ -18,6 +19,7 @@
 uint32_t bl_crc32(const uint8_t *p, uint32_t n);
 void bl_protocol_reset(void);
 void bl_protocol_feed(uint8_t b);
+void bl_protocol_feed_from(bl_io_port_t source, uint8_t b);
 int bl_protocol_can_boot(void);
 int bl_protocol_boot_requested(void);
 #endif

@@ -42,10 +42,14 @@ SRCS := \
   $(SRC_DIR)/drivers/lsm6dsv.c \
   $(SRC_DIR)/drivers/ist8310.c \
   $(SRC_DIR)/calibration/gyro_bias_history.c \
+  $(SRC_DIR)/calibration/gyro_startup_calibration.c \
   $(SRC_DIR)/calibration/acc_calibration.c \
+  $(SRC_DIR)/calibration/acc_six_face.c \
   $(SRC_DIR)/calibration/fusion_settings.c \
+  $(SRC_DIR)/fusion/attitude_output.c \
   $(SRC_DIR)/bsp/ws2812.c \
   $(SRC_DIR)/drivers/can_test.c \
+  $(SRC_DIR)/drivers/can_protocol.c \
   $(SRC_DIR)/drivers/usb_cdc.c \
   middleware/usb_drivers/src/usb_core.c \
   middleware/usb_drivers/src/usbd_core.c \
@@ -89,8 +93,8 @@ INCLUDES := \
   -Imiddleware/usb_drivers/inc \
   -Imiddleware/usbd_class/cdc
 
-# Debug/bench builds keep fast startup enabled for validation. Set DEBUG_BUILD=0
-# for the normal production image (fast startup disabled by default).
+# Debug/production selects only the factory fast-start default. Both startup
+# paths are compiled; saved host settings override this default after reboot.
 DEBUG_BUILD ?= 0
 SIX_AXIS ?= 0
 FAST_START_CFLAG := -DAPP_GYR_FAST_START_ENABLE=$(DEBUG_BUILD)

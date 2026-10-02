@@ -15,8 +15,8 @@
 /* Fast startup: use a valid temperature-matched history record, then refine
  * it only after confirmed rest. A save is attempted at most once per boot. */
 #ifndef APP_GYR_FAST_START_ENABLE
-/* Normal/production builds keep the legacy startup calibration path.
- * The debug Makefile enables fast start explicitly for bench testing. */
+/* Default for erased/legacy settings only. A saved host startup setting
+ * overrides this value; both startup paths are present in the firmware. */
 #define APP_GYR_FAST_START_ENABLE      0U
 #endif
 #define APP_GYR_FAST_START_REST_MS     1000U
@@ -29,8 +29,11 @@
 #define APP_GYR_TEMP_COEFF_Y_DPS_PER_C 0.0f
 #define APP_GYR_TEMP_COEFF_Z_DPS_PER_C 0.0f
 
-/* At boot discard the first second, then average 3 seconds of rest data. */
-#define APP_CAL_REST_SECONDS      3.0f
+/* Normal boot averages a configurable stationary window (default 2 seconds). */
+#define APP_GYR_INIT_DEFAULT_MS   2000U
+#define APP_GYR_INIT_MIN_MS       100U
+#define APP_GYR_INIT_MAX_MS       60000U
+#define APP_CAL_REST_SECONDS      2.0f
 #define APP_CAL_DROP_MS           1000U
 #define APP_CAL_BLOCK_SAMPLES     32U
 #define APP_CAL_BLOCK_MAX         256U
@@ -124,19 +127,31 @@
 #define APP_UART_ENABLE           1U
 #define APP_STREAM_DEFAULT_MODE   0U
 
-/* Six-face accelerometer calibration is compiled in but disabled by default. */
-#define APP_ACC_CAL_ENABLE          0U
+/* Non-blocking six-face calibration; saved parameters apply before fusion. */
+#ifndef APP_ACC_CAL_ENABLE
+#define APP_ACC_CAL_ENABLE          1U
+#endif
 
 /* Reserved calibration sector immediately after the application image. */
 #define APP_ACC_CAL_FLASH_ADDR       0x0803C000U
 #define APP_ACC_CAL_FACE_SECONDS     1.0f
-#define APP_ACC_CAL_FACE_TIMEOUT_S   20.0f
+#define APP_ACC_CAL_FACE_TIMEOUT_S   60.0f
 #define APP_ACC_CAL_GYR_REST_DPS     2.0f
 #define APP_ACC_CAL_NORM_TOL_G       0.15f
 #define APP_ACC_CAL_DOMINANT_MIN_G   0.75f
-#define APP_ACC_CAL_OTHER_MAX_G      0.35f
+#define APP_ACC_CAL_OTHER_MAX_G      0.20f
 #define APP_ACC_CAL_STABLE_MS        500U
 #define APP_ACC_CAL_SAMPLE_MS        500U
+#define APP_ACC_CAL_MAX_SAMPLE_GAP_MS 20U
+#define APP_ACC_CAL_MAX_STDDEV_G     0.015f
+#define APP_ACC_CAL_MAX_STEP_G       0.025f
+#define APP_ACC_CAL_MAX_BIAS_G       0.15f
+#define APP_ACC_CAL_MIN_SCALE        0.85f
+#define APP_ACC_CAL_MAX_SCALE        1.15f
+/* Fit tolerates placement tilt (folded into the unit-norm model); the tilt
+ * limit is only a numerical guard, the norm error is a convergence check. */
+#define APP_ACC_CAL_MAX_TILT_G       0.50f
+#define APP_ACC_CAL_MAX_NORM_ERR_G   0.001f
 
 
 #endif

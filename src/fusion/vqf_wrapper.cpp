@@ -80,8 +80,22 @@ extern "C" void vqf_set_tau_mag(float tau)
 
 extern "C" void vqf_set_gyr_bias(const float gyr_bias[3])
 {
+    vqf_seed_gyr_bias(gyr_bias, APP_VQF_BIAS_SIGMA_REST_DPS);
+}
+
+extern "C" void vqf_seed_gyr_bias(const float gyr_bias[3], float sigma_dps)
+{
     vqf_real_t b[3] = {gyr_bias[0], gyr_bias[1], gyr_bias[2]};
-    if (g_vqf) filter().setBiasEstimate(b, 0.05f);
+    if (!std::isfinite(sigma_dps) || sigma_dps <= 0 || sigma_dps > 10) return;
+    for (unsigned i=0; i<3; ++i) if (!std::isfinite(b[i])) return;
+    if (g_vqf) filter().setBiasEstimate(b, sigma_dps * static_cast<float>(M_PI/180.0));
+}
+
+extern "C" float vqf_get_bias_sigma_dps(void)
+{
+    if (!g_vqf) return 0;
+    vqf_real_t b[3];
+    return filter().getBiasEstimate(b) * static_cast<float>(180.0/M_PI);
 }
 
 extern "C" void vqf_prime_rest(const float acc_ms2[3], const float gyr_bias[3])
@@ -171,6 +185,10 @@ extern "C" int vqf_get_rest_detected(void)
 extern "C" float vqf_get_tau_acc(void) { return g_tau_acc; }
 extern "C" float vqf_get_tau_mag(void) { return g_tau_mag; }
 extern "C" int vqf_get_mag_ready(void) { return g_mag_ready ? 1 : 0; }
+extern "C" float vqf_get_mag_delta_deg(void)
+{
+    return g_vqf && g_mag_ready ? static_cast<float>(filter().getDelta() * (180.0 / M_PI)) : 0.0f;
+}
 extern "C" int vqf_get_mag_dist_detected(void)
 {
     return g_vqf && filter().getMagDistDetected() ? 1 : 0;

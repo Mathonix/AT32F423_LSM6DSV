@@ -10,6 +10,7 @@ AT32F423KCU7 + LSM6DSV 姿态传感器固件、Bootloader、USB/UART/CAN 输出�
 - 六轴 / 九轴 VQF 模式；九轴使用 IST8310 磁力计；
 - 启动静止陀螺仪零偏校准；可选历史零偏快速启动；
 - USB FS CDC 与 USART4 数据输出；
+- 任一串口发送 ASCII `vofa`，立即将 USB/UART 两路协议切换为 JustFloat，保留所选通道；无需换行，不写入 Flash；
 - VOFA+ JustFloat 三通道/六通道输出；
 - 二进制姿态、紧凑姿态和 IMU 帧协议；
 - CAN2 输出与节点 ID 配置；

@@ -50,7 +50,51 @@ void bl_io_deinit(void)
 void OTGFS1_IRQHandler(void){usbd_irq_handler(&core);}
 int bl_usb_ready(void){return core.dev.dev_config!=0;}
 static void usb_poll_rx(void){uint16_t n,i; if(!bl_usb_ready())return; n=usb_vcp_get_rxdata(&core.dev,usb_packet);for(i=0;i<n;i++){uint16_t next=(uint16_t)((usb_fifo_w+1U)&511U);if(next!=usb_fifo_r){usb_fifo[usb_fifo_w]=usb_packet[i];usb_fifo_w=next;}}}
-int bl_io_read(uint8_t *b){usb_poll_rx();if(usart_flag_get(USART4,USART_RDBF_FLAG)!=RESET){*b=(uint8_t)usart_data_receive(USART4);return 1;}if(usb_fifo_r!=usb_fifo_w){*b=usb_fifo[usb_fifo_r];usb_fifo_r=(uint16_t)((usb_fifo_r+1U)&511U);return 1;}return 0;}
-int bl_io_write(const uint8_t *p,uint16_t n){uint16_t i,off=0;for(i=0;i<n;i++){while(usart_flag_get(USART4,USART_TDBE_FLAG)==RESET){}usart_data_transmit(USART4,p[i]);}while(off<n && bl_usb_ready()){uint16_t k=(uint16_t)((n-off)>64U?64U:(n-off));if(!usb_wait_tx())break;for(i=0;i<k;i++)usb_tx[i]=p[off+i];if(usb_vcp_send_data(&core.dev,usb_tx,k)!=SUCCESS)break;off=(uint16_t)(off+k);}return 0;}
+int bl_io_read(bl_io_port_t *source, uint8_t *b)
+{
+  usb_poll_rx();
+  if(usart_flag_get(USART4, USART_ROERR_FLAG) != RESET)
+    usart_flag_clear(USART4, USART_ROERR_FLAG);
+  if(usart_flag_get(USART4, USART_RDBF_FLAG) != RESET)
+  {
+    *source = BL_IO_UART;
+    *b = (uint8_t)usart_data_receive(USART4);
+    return 1;
+  }
+  if(usb_fifo_r != usb_fifo_w)
+  {
+    *source = BL_IO_USB;
+    *b = usb_fifo[usb_fifo_r];
+    usb_fifo_r = (uint16_t)((usb_fifo_r+1U)&511U);
+    return 1;
+  }
+  return 0;
+}
+
+int bl_io_write_to(bl_io_port_t destination, const uint8_t *p, uint16_t n)
+{
+  if(destination == BL_IO_UART)
+  {
+    for(uint16_t i = 0U; i < n; ++i)
+    {
+      while(usart_flag_get(USART4, USART_TDBE_FLAG) == RESET) {}
+      usart_data_transmit(USART4, p[i]);
+    }
+    /* The host can send its next DATA as soon as this ACK finishes. Do not
+     * wait on the USB endpoint here: an unopened CDC port can stall it. */
+    return 0;
+  }
+  if(destination != BL_IO_USB) return -1;
+  uint16_t off = 0U;
+  while(off < n && bl_usb_ready())
+  {
+    uint16_t count = (uint16_t)((n-off)>64U ? 64U : (n-off));
+    if(!usb_wait_tx()) break;
+    for(uint16_t i = 0U; i < count; ++i) usb_tx[i] = p[off+i];
+    if(usb_vcp_send_data(&core.dev, usb_tx, count) != SUCCESS) break;
+    off = (uint16_t)(off+count);
+  }
+  return off == n ? 0 : -1;
+}
 void bl_io_task(void){usb_poll_rx();}
 
