@@ -6,7 +6,7 @@
 #include <string.h>
 
 #define SETTINGS_MAGIC 0x4655534EU
-#define SETTINGS_VERSION 7U
+#define SETTINGS_VERSION 8U
 #define SETTINGS_SECTOR_SIZE 0x800U
 #define SETTINGS_SLOT0 (APP_FUSION_SETTINGS_ADDR - SETTINGS_SECTOR_SIZE)
 #define SETTINGS_SLOT1 APP_FUSION_SETTINGS_ADDR
@@ -24,8 +24,22 @@ typedef struct {
   uint16_t gyro_init_ms;
   uint16_t gyro_range_dps, output_hz;
   uint32_t filter_profile;
+  float zaru_enter_dps, zaru_exit_dps, zaru_acc_dev_ms2;
+  uint16_t zaru_enter_filter_ms, zaru_enter_confirm_ms, zaru_exit_confirm_ms, zaru_reserved;
   uint32_t crc;
 } settings_record_t;
+
+typedef struct {
+  uint32_t magic, version, sequence;
+  uint8_t mode, fast_start;
+  uint16_t can_node_id;
+  output_config_t outputs[2];
+  can_config_t can;
+  uint16_t gyro_init_ms;
+  uint16_t gyro_range_dps, output_hz;
+  uint32_t filter_profile;
+  uint32_t crc;
+} v7_record_t;
 
 typedef struct {
   uint32_t magic, version, sequence;
@@ -58,7 +72,8 @@ typedef struct {
   uint16_t can_node_id;
   uint32_t crc;
 } legacy_record_t;
-_Static_assert(sizeof(settings_record_t) == 48U, "Settings wire layout changed");
+_Static_assert(sizeof(settings_record_t) == 68U, "Settings wire layout changed");
+_Static_assert(sizeof(v7_record_t) == 48U, "V7 migration layout changed");
 _Static_assert(sizeof(v6_record_t) == 44U, "V6 migration layout changed");
 _Static_assert(sizeof(v5_record_t) == 40U, "V4/V5 migration layout changed");
 _Static_assert(sizeof(v3_record_t) == 28U, "V3 migration layout changed");
@@ -91,7 +106,7 @@ static int valid(const settings_record_t *r)
     return (r->version == 4U || (r->gyro_init_ms >= APP_GYR_INIT_MIN_MS && r->gyro_init_ms <= APP_GYR_INIT_MAX_MS)) &&
            old->crc == crc32(old, sizeof(*old) - 4U);
   }
-  if(r->version != 6U && r->version != SETTINGS_VERSION) return 0;
+  if(r->version != 6U && r->version != 7U && r->version != SETTINGS_VERSION) return 0;
   if(!gyro_range_valid(r->gyro_range_dps) || !r->output_hz || r->output_hz > APP_FUSION_HZ ||
      APP_FUSION_HZ % r->output_hz || r->gyro_init_ms < APP_GYR_INIT_MIN_MS ||
      r->gyro_init_ms > APP_GYR_INIT_MAX_MS) return 0;
@@ -99,10 +114,17 @@ static int valid(const settings_record_t *r)
     const v6_record_t *old = (const v6_record_t *)r;
     return old->crc == crc32(old, sizeof(*old)-4U);
   }
-  return r->filter_profile < FUSION_PROFILE_COUNT && gyro_range_valid(r->gyro_range_dps) &&
-         r->output_hz && r->output_hz <= APP_FUSION_HZ && APP_FUSION_HZ % r->output_hz == 0U &&
-         r->gyro_init_ms >= APP_GYR_INIT_MIN_MS && r->gyro_init_ms <= APP_GYR_INIT_MAX_MS &&
-         r->crc == crc32(r, sizeof(*r) - 4U);
+  if(r->filter_profile >= FUSION_PROFILE_COUNT) return 0;
+  if(r->version == 7U) {
+    const v7_record_t *old = (const v7_record_t *)r;
+    return old->crc == crc32(old, sizeof(*old) - 4U);
+  }
+  {
+    zaru_limits_t zaru = {r->zaru_enter_dps, r->zaru_exit_dps, r->zaru_acc_dev_ms2,
+      r->zaru_enter_filter_ms, r->zaru_enter_confirm_ms, r->zaru_exit_confirm_ms,
+      r->zaru_reserved};
+    return zaru_limits_valid(&zaru) && r->crc == crc32(r, sizeof(*r) - 4U);
+  }
 }
 static const settings_record_t *latest_record(uint32_t *address)
 {
@@ -127,6 +149,7 @@ void device_settings_defaults(device_settings_t *s)
   s->gyro_range_dps = GYRO_RANGE_DEFAULT_DPS;
   s->output_hz = APP_VOFA_OUTPUT_HZ;
   s->filter_profile = FUSION_PROFILE_DEFAULT;
+  zaru_limits_default(&s->zaru);
   can_config_defaults(&s->can);
   for(unsigned i = 0; i < 2; ++i) {
     s->outputs[i].format = OUTPUT_FORMAT_LEGACY;
@@ -147,7 +170,16 @@ static void decode_record(const settings_record_t *r, device_settings_t *s)
   if(r->version >= 4U) s->can = r->can;
   if(r->version >= 5U) s->gyro_init_ms = r->gyro_init_ms;
   if(r->version >= 6U) { s->gyro_range_dps = r->gyro_range_dps; s->output_hz = r->output_hz; }
-  if(r->version == SETTINGS_VERSION) s->filter_profile = (uint8_t)r->filter_profile;
+  if(r->version >= 7U) s->filter_profile = (uint8_t)r->filter_profile;
+  if(r->version >= 8U) {
+    s->zaru.enter_dps = r->zaru_enter_dps;
+    s->zaru.exit_dps = r->zaru_exit_dps;
+    s->zaru.acc_dev_ms2 = r->zaru_acc_dev_ms2;
+    s->zaru.enter_filter_ms = r->zaru_enter_filter_ms;
+    s->zaru.enter_confirm_ms = r->zaru_enter_confirm_ms;
+    s->zaru.exit_confirm_ms = r->zaru_exit_confirm_ms;
+    s->zaru.reserved = r->zaru_reserved;
+  }
 }
 int device_settings_load(device_settings_t *s)
 {
@@ -168,13 +200,20 @@ int device_settings_save(const device_settings_t *s)
      s->gyro_init_ms < APP_GYR_INIT_MIN_MS || s->gyro_init_ms > APP_GYR_INIT_MAX_MS ||
      !gyro_range_valid(s->gyro_range_dps) || !s->output_hz || s->output_hz > APP_FUSION_HZ || APP_FUSION_HZ % s->output_hz != 0U ||
      !protocol_output_config_valid(&s->outputs[0]) || !protocol_output_config_valid(&s->outputs[1]) ||
-     !can_config_valid(&s->can) || s->can.node_id != s->can_node_id) return -1;
+     !can_config_valid(&s->can) || s->can.node_id != s->can_node_id ||
+     !zaru_limits_valid(&s->zaru)) return -1;
   old = latest_record(&old_addr);
   if(old) {
     decode_record(old, &previous);
     if(old->version == SETTINGS_VERSION && previous.mode == s->mode && previous.can_node_id == s->can_node_id && previous.fast_start == s->fast_start && previous.gyro_init_ms == s->gyro_init_ms &&
        previous.gyro_range_dps == s->gyro_range_dps && previous.output_hz == s->output_hz &&
        previous.filter_profile == s->filter_profile &&
+       previous.zaru.enter_dps == s->zaru.enter_dps && previous.zaru.exit_dps == s->zaru.exit_dps &&
+       previous.zaru.acc_dev_ms2 == s->zaru.acc_dev_ms2 &&
+       previous.zaru.enter_filter_ms == s->zaru.enter_filter_ms &&
+       previous.zaru.enter_confirm_ms == s->zaru.enter_confirm_ms &&
+       previous.zaru.exit_confirm_ms == s->zaru.exit_confirm_ms &&
+       previous.zaru.reserved == s->zaru.reserved &&
        memcmp(previous.outputs, s->outputs, sizeof(s->outputs)) == 0 &&
        memcmp(&previous.can, &s->can, sizeof(s->can)) == 0) return 0;
   }
@@ -188,6 +227,13 @@ int device_settings_save(const device_settings_t *s)
   r.gyro_init_ms = s->gyro_init_ms;
   r.gyro_range_dps = s->gyro_range_dps; r.output_hz = s->output_hz;
   r.filter_profile = s->filter_profile;
+  r.zaru_enter_dps = s->zaru.enter_dps;
+  r.zaru_exit_dps = s->zaru.exit_dps;
+  r.zaru_acc_dev_ms2 = s->zaru.acc_dev_ms2;
+  r.zaru_enter_filter_ms = s->zaru.enter_filter_ms;
+  r.zaru_enter_confirm_ms = s->zaru.enter_confirm_ms;
+  r.zaru_exit_confirm_ms = s->zaru.exit_confirm_ms;
+  r.zaru_reserved = s->zaru.reserved;
   r.crc = crc32(&r, sizeof(r) - 4U);
   flash_unlock();
   st = flash_sector_erase(new_addr);

@@ -327,11 +327,36 @@ int main(void)
   uint32_t v6_crc=~bl_crc32(v6,40);memcpy(v6+40,&v6_crc,4);
   memset((void *)(uintptr_t)0x0803D000U,0xFF,0x1000);memcpy((void *)(uintptr_t)0x0803D800U,v6,44);
   assert(device_settings_load(&saved)==0 && saved.filter_profile==1 && saved.output_hz==250 && saved.gyro_range_dps==4000);
+  assert(saved.zaru.enter_dps==APP_ZARU_ENTER_DPS && saved.zaru.exit_dps==APP_ZARU_EXIT_DPS);
+  assert(saved.zaru.acc_dev_ms2==APP_ZARU_ACC_DEV_MS2 && saved.zaru.enter_filter_ms==APP_ZARU_ENTER_FILTER_MS);
+  assert(saved.zaru.enter_confirm_ms==APP_ZARU_ENTER_CONFIRM_MS && saved.zaru.exit_confirm_ms==APP_ZARU_EXIT_CONFIRM_MS);
+  {
+    uint8_t v7[48]={0}; uint32_t v7_header[3]={0x4655534E,7,401}; uint32_t v7_profile=1;
+    memcpy(v7,v7_header,12); v7[12]=saved.mode; v7[13]=saved.fast_start;
+    memcpy(v7+14,&saved.can_node_id,2); memcpy(v7+16,saved.outputs,8); memcpy(v7+24,&saved.can,10);
+    memcpy(v7+34,&saved.gyro_init_ms,2); memcpy(v7+36,&saved.gyro_range_dps,2); memcpy(v7+38,&saved.output_hz,2);
+    memcpy(v7+40,&v7_profile,4);
+    uint32_t v7_crc=~bl_crc32(v7,44); memcpy(v7+44,&v7_crc,4);
+    memset((void *)(uintptr_t)0x0803D000U,0xFF,0x1000); memcpy((void *)(uintptr_t)0x0803D800U,v7,48);
+  }
+  assert(device_settings_load(&saved)==0 && saved.filter_profile==1 && saved.gyro_range_dps==4000 && saved.output_hz==250);
+  assert(saved.zaru.enter_dps==APP_ZARU_ENTER_DPS && saved.zaru.exit_confirm_ms==APP_ZARU_EXIT_CONFIRM_MS);
   saved.filter_profile=2;fail_program_after=11;
   assert(device_settings_save(&saved)!=0 && device_settings_load(&loaded)==0 && loaded.filter_profile==1);
   fail_program_after=-1;assert(device_settings_save(&saved)==0 && device_settings_load(&loaded)==0 && loaded.filter_profile==2);
   before=erase_count;assert(device_settings_save(&saved)==0 && erase_count==before);
-  saved.filter_profile=3;assert(device_settings_save(&saved)!=0 && erase_count==before);
+  saved.filter_profile=3;assert(device_settings_save(&saved)==0 && device_settings_load(&loaded)==0 && loaded.filter_profile==3);
+  before=erase_count;saved.filter_profile=4;assert(device_settings_save(&saved)!=0 && erase_count==before);
+  assert(device_settings_load(&loaded)==0 && loaded.filter_profile==3);
+  loaded.zaru.enter_dps=0.25f; loaded.zaru.exit_dps=0.90f; loaded.zaru.acc_dev_ms2=0.20f;
+  loaded.zaru.enter_filter_ms=20; loaded.zaru.enter_confirm_ms=80; loaded.zaru.exit_confirm_ms=5;
+  assert(device_settings_save(&loaded)==0 && device_settings_load(&saved)==0);
+  assert(saved.filter_profile==3 && saved.gyro_range_dps==4000 && saved.output_hz==250);
+  assert(saved.zaru.enter_dps==0.25f && saved.zaru.exit_dps==0.90f && saved.zaru.acc_dev_ms2==0.20f);
+  assert(saved.zaru.enter_filter_ms==20 && saved.zaru.enter_confirm_ms==80 && saved.zaru.exit_confirm_ms==5);
+  before=erase_count; assert(device_settings_save(&saved)==0 && erase_count==before);
+  saved.zaru.exit_dps=0.20f; assert(device_settings_save(&saved)!=0 && erase_count==before);
+  assert(device_settings_load(&loaded)==0 && loaded.zaru.enter_dps==0.25f && loaded.zaru.exit_dps==0.90f);
   test_unmap_memory(flash, 0x40000U);
   puts("boot vectors, upgrade framing/state, per-port ACK/parser/owner, flash idempotence/power-loss fallback: OK");
   return 0;

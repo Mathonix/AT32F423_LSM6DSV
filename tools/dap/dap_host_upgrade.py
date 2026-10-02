@@ -35,7 +35,7 @@ def main():
     session = ConnectHelper.session_with_chosen_probe(unique_id=PROBE, target_override='cortex_m', options={
         # The firmware uses DWT as its timer. pyOCD's normal disconnect clears
         # DEMCR/TRCENA and freezes that timer; resume manually without disabling it.
-        'connect_mode': 'attach', 'frequency': 1000000, 'resume_on_disconnect': False, 'vector_catch': '',
+        'connect_mode': 'attach', 'frequency': 4000000, 'resume_on_disconnect': False, 'vector_catch': '',
     })
     if session is None:
         raise RuntimeError('Expected WCH-Link probe not found')
@@ -44,6 +44,7 @@ def main():
         ident = t.read32(0xE0042000)
         if ident != 0x700A3253:
             raise RuntimeError(f'Unexpected device ID 0x{ident:08X}; refusing upgrade')
+        print(f'SWD {session.options.get("frequency")} Hz')
         print(f'Device ID 0x{ident:08X}, CPUID 0x{t.read32(0xE000ED00):08X}, state {t.get_state().name}')
         before = bytes(t.read_memory_block8(0x08000000, 0x40000))
         sp = int.from_bytes(before[:4], 'little'); reset = int.from_bytes(before[4:8], 'little')

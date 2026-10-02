@@ -89,7 +89,7 @@
 
           <div class="grp" id="filterControls">
             <h3>姿态稳定性</h3>
-            <label class="stk">滤波模式 <select id="filterProfile" disabled><option value="0">响应优先</option><option value="1" selected>均衡</option><option value="2">静态稳定</option></select></label>
+            <label class="stk">滤波模式 <select id="filterProfile" disabled><option value="0">响应优先</option><option value="1" selected>均衡</option><option value="2">静态稳定</option><option value="3">零角速保持</option></select></label>
             <p id="filterHint" class="hint">均衡：兼顾静态平滑与转动响应。参数为初始方案，需实测确认。</p>
             <div class="row"><label class="check"><input type="checkbox" id="filterPersist" checked> 重启后保留</label><button id="filterApply" disabled>应用模式</button><button id="filterDiscard" disabled>撤销修改</button><button id="filterRefresh" disabled>读取</button></div>
             <p id="filterState" class="hint" role="status">等待设备读取；需要配套固件。</p>
@@ -204,6 +204,6 @@
 </main>
 
 <script src="/firmware-upgrade.js?v=20261001noise1"></script>
-<script src="/app.js?v=20261002usb2"></script>
+<script src="/app.js?v=20261002zaru1"></script>
 </body>
 </html>

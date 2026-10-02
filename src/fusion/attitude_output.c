@@ -49,17 +49,25 @@ int attitude_output_update(attitude_output_t *s, const float q6[4],
   }
   /* VQF rest detection can accept uniform slow rotation. The independent
    * residual-rate guard keeps detectable slow movement responsive. */
+  fusion_profile_t p=fusion_profile_get(mode);
   uint8_t moving = !rest || rate > .15f;
+  if(moving) s->rest_hold_s = 0;
+  else if(s->rest_hold_s < p.hold_s) {
+    /* After a stop, keep the last output until this gear's hold elapses.
+     * Tracking last_q6 avoids a jump when motion resumes. */
+    s->rest_hold_s += dt;
+    memcpy(s->last_q6, six, sizeof(six));
+    return 1;
+  }
   if(moving) {
     float inverse[4]={s->last_q6[0],-s->last_q6[1],-s->last_q6[2],-s->last_q6[3]}, delta[4];
     multiply(inverse,six,delta); multiply(s->q,delta,s->q);
     normalize(s->q);
   }
-  fusion_profile_t p=fusion_profile_get(mode);
   float alpha=1-expf(-dt/(moving?p.motion_tau_s:p.rest_tau_s)), dot=0;
   for(unsigned i=0;i<4;i++) dot += s->q[i]*target[i];
   /* Shortest-arc normalized interpolation avoids Euler wrap/singularity
-   * and quaternion-sign discontinuities. No output freeze at rest. */
+   * and quaternion-sign discontinuities. Rest blending starts after hold_s. */
   for(unsigned i=0;i<4;i++) s->q[i] += alpha*((dot<0?-target[i]:target[i])-s->q[i]);
   normalize(s->q); memcpy(s->last_q6,six,sizeof(six));
   return 1;

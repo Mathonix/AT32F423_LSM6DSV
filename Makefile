@@ -46,7 +46,9 @@ SRCS := \
   $(SRC_DIR)/calibration/acc_calibration.c \
   $(SRC_DIR)/calibration/acc_six_face.c \
   $(SRC_DIR)/calibration/fusion_settings.c \
+  $(SRC_DIR)/calibration/vqf_static_cal.c \
   $(SRC_DIR)/fusion/attitude_output.c \
+  $(SRC_DIR)/fusion/zaru_heading_hold.c \
   $(SRC_DIR)/bsp/ws2812.c \
   $(SRC_DIR)/drivers/can_test.c \
   $(SRC_DIR)/drivers/can_protocol.c \

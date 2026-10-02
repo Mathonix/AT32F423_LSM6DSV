@@ -2,6 +2,11 @@
 #define APP_CONFIG_H
 
 /* Central application configuration. Keep all board-level tuning here. */
+
+/* Application label: YYYYMMDD and one letter. The first build of a day is
+ * "a". Each later build on that same day uses the next letter. */
+#define APP_FIRMWARE_VERSION "20261002c"
+
 #define APP_FUSION_HZ             2000U
 #define APP_GYR_LPF_CUTOFF_HZ    30.0f
 
@@ -43,8 +48,8 @@
 #define APP_SFLP_BIAS_MAX_DPS     5.0f
 #define APP_CAL_GYR_REST_DPS      1.0f
 #define APP_CAL_ACC_REST_MS2      0.8f
-/* Persistent gyro-bias history. The final two 2-KB sectors are reserved for
- * calibration data and are outside the application image. */
+/* Persistent gyro-bias history, up to 50 samples per 2 KB slot. The slots
+ * sit outside the application image. Version 2 records remain readable. */
 #define APP_GYR_BIAS_FLASH_SLOT0_ADDR 0x0803E800U
 #define APP_GYR_BIAS_FLASH_SLOT1_ADDR 0x0803F800U
 #define APP_FUSION_SETTINGS_ADDR       0x0803D800U
@@ -52,10 +57,12 @@
 #define APP_GYR_DEFAULT_BIAS_Y_DPS     0.0f
 #define APP_GYR_DEFAULT_BIAS_Z_DPS     0.0f
 
-/* Full VQF parameters */
-#define APP_VQF_MOTION_BIAS_ENABLE 0U
-#define APP_VQF_TAU_ACC           3.0f
-#define APP_VQF_TAU_MAG           2.0f
+/* Full VQF parameters. Motion bias is enabled. Every other estimator
+ * number below stays at the value already running on this firmware. */
+#define APP_VQF_MOTION_BIAS_ENABLE 1U
+/* Balanced-gear fallback used only before a profile is applied. */
+#define APP_VQF_TAU_ACC           2.5f
+#define APP_VQF_TAU_MAG           4.0f
 
 /* Enable calibrated IST8310 updates in Full VQF for 9-axis yaw stabilization. */
 #ifndef APP_MAG_FUSION_ENABLE
@@ -70,12 +77,66 @@
 #define APP_WS2812_MAG_REJECT_BASE_MS   750U
 #define APP_WS2812_MAG_REJECT_GREEN_MS  250U
 
-/* Full VQF stationary gyro-bias estimator tuning. */
-#define APP_VQF_BIAS_SIGMA_REST_DPS       0.05f
-#define APP_VQF_BIAS_FORGETTING_TIME_S  200.0f
-#define APP_VQF_REST_GYR_DPS      1.2f
-#define APP_VQF_REST_ACC_MS2      0.4f
-#define APP_VQF_REST_MIN_SECONDS   1.5f
+/* Full VQF bias estimator shared by every gear. Motion bias uses the
+ * 0.1 °/s sigma below; vertical forgetting stays at the VQF default.
+ * Rest trial: 0.6 °/s, 0.15 m/s², confirm 1.0 s, sigma 0.035 °/s.
+ * Every profile row copies the same two gates; apply_profile overwrites them. */
+#define APP_VQF_BIAS_SIGMA_REST_DPS       0.035f
+/* Constructor value already used when vqf_init does not assign it. */
+#define APP_VQF_BIAS_SIGMA_INIT_DPS       0.5f
+#define APP_VQF_BIAS_SIGMA_MOTION_DPS     0.1f
+#define APP_VQF_BIAS_CLIP_DPS             2.0f
+#define APP_VQF_BIAS_FORGETTING_TIME_S  100.0f
+#define APP_VQF_REST_FILTER_TAU_S   0.5f
+#define APP_VQF_REST_GYR_DPS      0.6f
+#define APP_VQF_REST_ACC_MS2      0.15f
+#define APP_VQF_REST_MIN_SECONDS   1.0f
+/* Static initialization may only raise rest gates and rest sigma up to these
+ * ceilings. The floors are the current firmware values, so a quiet capture
+ * cannot replace the running tune with a smaller number. */
+#define APP_VQF_CAL_MIN_REST_GYR_DPS      APP_VQF_REST_GYR_DPS
+#define APP_VQF_CAL_MAX_REST_GYR_DPS      1.20f
+#define APP_VQF_CAL_MIN_REST_ACC_MS2      APP_VQF_REST_ACC_MS2
+#define APP_VQF_CAL_MAX_REST_ACC_MS2      0.40f
+#define APP_VQF_CAL_MIN_BIAS_SIGMA_INIT   0.10f
+#define APP_VQF_CAL_MAX_BIAS_SIGMA_INIT   1.00f
+#define APP_VQF_CAL_MIN_BIAS_SIGMA_REST   APP_VQF_BIAS_SIGMA_REST_DPS
+#define APP_VQF_CAL_MAX_BIAS_SIGMA_REST   0.06f
+#define APP_VQF_CAL_MAX_GYRO_STD_DPS      0.15f
+#define APP_VQF_CAL_MAX_ACC_STD_MS2       0.10f
+#define APP_VQF_CAL_MAX_TEMP_SPAN_C       2.0f
+#define APP_VQF_CAL_MAX_BIAS_DPS          2.0f
+#define APP_VQF_CAL_MAX_BIAS_DRIFT_DPS    0.05f
+#define APP_VQF_CAL_REST_GYR_SCALE        1.5f
+#define APP_VQF_CAL_REST_ACC_SCALE        2.0f
+#define APP_VQF_CAL_SIGMA_INIT_SCALE      3.0f
+#define APP_VQF_STATIC_CAL_PREPARE_MS     5000U
+#define APP_VQF_STATIC_CAL_COLLECT_MS     60000U
+#define APP_VQF_STATIC_CAL_PREPARE_CAP_MS 120000U
+#define APP_VQF_STATIC_CAL_MOVE_GYR_DPS   2.0f
+#define APP_VQF_STATIC_CAL_MOVE_ACC_MS2   0.8f
+#define APP_VQF_STATIC_GRAVITY_MS2        9.80665f
+#define APP_VQF_STATIC_FLASH_SLOT0        0x0803E000U
+#define APP_VQF_STATIC_FLASH_SLOT1        0x0803F000U
+/* 60 s at 2 kHz, with a 10 percent drop budget. */
+#define APP_VQF_STATIC_CAL_MIN_SAMPLES \
+  ((APP_VQF_STATIC_CAL_COLLECT_MS * APP_FUSION_HZ * 9U) / 10000U)
+/* Output heading hold for FUSION_PROFILE_ZARU. Degrees/s are bias-corrected
+ * gyro residual, not raw gyro and not the VQF rest gate. Enter is the 10 ms
+ * RMS; exit is the unfiltered norm. These macros are the compiled defaults;
+ * a saved host setting overrides them at boot. 0.30–0.70 °/s is hysteresis.
+ * Enter 0.20 strict / 0.30 default / 0.40 locks sooner and swallows slow turns.
+ * Exit 0.50 tight / 0.70 default / 1.00 very quiet but swallows more.
+ * Enter filter 5 ms fast, 10 ms default, 50 ms starts to lag.
+ * Enter confirm 20 ms eager, 50 ms default, 100 ms slow.
+ * Exit confirm 1 ms sharp, 3 ms default, 10 ms still acceptable. */
+#define APP_ZARU_ENABLE               1U
+#define APP_ZARU_ENTER_DPS            0.30f
+#define APP_ZARU_EXIT_DPS             0.70f
+#define APP_ZARU_ENTER_FILTER_MS      10U
+#define APP_ZARU_ENTER_CONFIRM_MS     50U
+#define APP_ZARU_EXIT_CONFIRM_MS      3U
+#define APP_ZARU_ACC_DEV_MS2          0.15f
 #define APP_VQF_PRIME_MAX_SAMPLES 1000U
 #define APP_VOFA_OUTPUT_HZ        1000U
 

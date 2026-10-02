@@ -16,9 +16,9 @@
     canExtended: false,
     filterExtended:false, filterProfile:1, savedFilterProfile:1,
     filterConfig() { return frame(11,this.seq++,le(16,v=>{
-      [1,this.filterProfile,this.savedFilterProfile,3].forEach((x,i)=>v.setUint8(i,x));
-      v.setUint16(4,1000,true);v.setFloat32(8,[2,4,6][this.filterProfile],true);
-      v.setFloat32(12,[.15,.5,1.5][this.filterProfile],true);
+      [1,this.filterProfile,this.savedFilterProfile,4].forEach((x,i)=>v.setUint8(i,x));
+      v.setUint16(4,1000,true);v.setFloat32(8,[2,4,6,4][this.filterProfile],true);
+      v.setFloat32(12,[.15,.5,1.5,.5][this.filterProfile],true);
     })); },
     diagnostic() {return frame(12,this.seq++,le(60,v=>{
       [1,this.filterProfile,1,1].forEach((x,i)=>v.setUint8(i,x));v.setUint32(4,123456,true);
@@ -72,7 +72,7 @@
         case 0x27: {
           if(!this.filterExtended) return this.ack(id,1,0);
           if(!this.settings || (pl[1] && this.failSave)) return this.ack(id,FAIL,this.filterProfile);
-          if(pl.length!==2 || pl[0]>2 || pl[1]>1) return this.ack(id,BAD,this.filterProfile);
+          if(pl.length!==2 || pl[0]>3 || pl[1]>1) return this.ack(id,BAD,this.filterProfile);
           this.filterProfile=pl[0];if(pl[1]) this.savedFilterProfile=pl[0];
           return Uint8Array.from([...this.ack(id,S,this.filterProfile),...this.filterConfig()]);
         }

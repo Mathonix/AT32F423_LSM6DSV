@@ -107,7 +107,7 @@ def main():
             initial=l.query(0x26,11);report['initial_filter_hex']=initial.hex()
             if len(initial)!=16 or initial[0]!=1:raise RuntimeError('Unsupported filter response')
             l.query(0x17,0x90)
-            seq=l.send(0x27,bytes([3,0]));deadline=time.monotonic()+2;rejected=False
+            seq=l.send(0x27,bytes([4,0]));deadline=time.monotonic()+2;rejected=False
             while time.monotonic()<deadline:
                 for id,s,payload in l.read():
                     if id==0x90 and s==seq and payload[0]==0x27:

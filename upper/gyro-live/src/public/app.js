@@ -198,14 +198,14 @@ function decodePayload(id, payload) {
     }
     case MSG.FILTER_CONFIG: {
       const tauMag=view.getFloat32(8,true), restTau=view.getFloat32(12,true), estimatorHz=view.getUint16(4,true);
-      if(payload[0]!==1 || payload[1]>2 || payload[2]>2 || payload[3]!==3 || view.getUint16(6,true) ||
+      if(payload[0]!==1 || payload[1]>3 || payload[2]>3 || (payload[3]!==3 && payload[3]!==4) || view.getUint16(6,true) ||
          estimatorHz!==1000 || !Number.isFinite(tauMag) || tauMag<.2 || tauMag>60 ||
          !Number.isFinite(restTau) || restTau<.01 || restTau>10) return {type:'unknown',id,length:payload.length};
       return {type:'filterConfig',active:payload[1],saved:payload[2],estimatorHz,tauMag,restTau};
     }
     case MSG.FUSION_DIAGNOSTIC: {
       const values=Array.from({length:13},(_,i)=>view.getFloat32(8+4*i,true));
-      if(payload[0]!==1 || payload[1]>2 || payload[2]>1 || payload[3]>3 ||
+      if(payload[0]!==1 || payload[1]>3 || payload[2]>1 || payload[3]>3 ||
          !values.every(Number.isFinite) || values[12]<0 || values[12]>10)
         return {type:'unknown',id,length:payload.length};
       return {type:'fusionDiagnostic',profile:payload[1],rest:!!payload[2],magFlags:payload[3],
@@ -597,7 +597,7 @@ let badLengthLogged = 0;
 let deviceConfig = null;
 let filterConfig=null, filterDirty=false, filterRevision=0, pendingFilter=null, filterAckTimer=null;
 let fusionDiagnostic=null, diagRecording=false, diagRows=[], diagInFlight=false, diagLastQuery=0;
-const FILTER_NAMES=['响应优先','均衡','静态稳定'];
+const FILTER_NAMES=['响应优先','均衡','静态稳定','零角速保持'];
 
 let canConfig = null, pendingCan = null, canAckTimer = null;
 let canFormDirty = false;
@@ -1717,9 +1717,11 @@ function updateFilterUI() {
   $('diagRecord').disabled=!allowed;
   $('diagExport').disabled=!diagRows.length;
   $('diagRecord').textContent=diagRecording?'停止记录':'开始记录';
-  const hints=['响应优先：较少静态平滑，优先转动响应。',
-    '均衡：兼顾静态平滑与转动响应。','静态稳定：更强静态平滑，停转后的修正会更慢。'];
-  $('filterHint').textContent=hints[Number($('filterProfile').value)]+' 参数为初始方案，需实测确认。';
+  const hints=['响应优先：加速度 1.0 s，静止门限 0.6 °/s、0.15 m/s²，停稳后保持 1.5 s。',
+    '均衡：加速度 2.5 s，静止门限 1.0 °/s、0.25 m/s²，停稳后保持 0.8 s。',
+    '静态稳定：加速度 4.0 s，静止门限 1.5 °/s、0.40 m/s²，停稳后保持 0.4 s。',
+    '零角速保持（ZARU / Stationary Heading Hold）：静止时锁定航向，检测到运动后立即恢复更新。滤波参数与均衡相同。'];
+  $('filterHint').textContent=hints[Number($('filterProfile').value)];
 }
 function configureFilter(message) {
   filterConfig=message;
@@ -1736,7 +1738,7 @@ function configureFilter(message) {
 async function applyFilter() {
   if(!running || !setting || !filterConfig || pendingFilter || firmwareBusy) return;
   const profile=Number($('filterProfile').value),persist=$('filterPersist').checked;
-  if(!Number.isInteger(profile) || profile<0 || profile>2) return;
+  if(!Number.isInteger(profile) || profile<0 || profile>3) return;
   pendingFilter={profile,persist,revision:filterRevision,acked:false};updateFilterUI();updateFirmwareUI();
   filterAckTimer=setTimeout(()=>{pendingFilter=null;updateFilterUI();updateFirmwareUI();say('未确认滤波模式回读，请重新读取；修改已保留');},3000);
   if(!await send(CMD.SET_FILTER,[profile,persist?1:0])) {

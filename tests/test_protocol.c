@@ -8,6 +8,31 @@
 _Static_assert(sizeof(ahrs_payload_imu_t) == 28, "Unexpected IMU wire layout");
 _Static_assert(sizeof(ahrs_payload_filter_config_t) == 16, "Filter config wire layout");
 _Static_assert(sizeof(ahrs_payload_fusion_diagnostic_t) == 60, "Fusion diagnostic wire layout");
+_Static_assert(sizeof(ahrs_payload_zaru_config_t) == 40, "ZARU config wire layout");
+_Static_assert(sizeof(ahrs_zaru_restore_t) == 2, "ZARU restore wire layout");
+_Static_assert(sizeof(ahrs_payload_vqf_cal_status_t) == 28, "VQF static cal status");
+_Static_assert(sizeof(ahrs_payload_vqf_settings_t) == 52, "VQF static settings");
+_Static_assert(AHRS_CMD_QUERY_VQF_CAL == 0x29, "static cal query");
+_Static_assert(AHRS_CMD_START_VQF_CAL == 0x2A, "static cal start");
+_Static_assert(AHRS_CMD_CANCEL_VQF_CAL == 0x2B, "static cal cancel");
+_Static_assert(AHRS_CMD_QUERY_VQF_SETTINGS == 0x2C, "static cal settings query");
+_Static_assert(AHRS_CMD_RESTORE_VQF_DEFAULTS == 0x2D, "static cal restore");
+_Static_assert(AHRS_MSG_VQF_CAL_STATUS == 0x0D, "static cal status message");
+_Static_assert(AHRS_MSG_VQF_SETTINGS == 0x0E, "static cal settings message");
+_Static_assert(sizeof(ahrs_payload_firmware_info_t) == 16, "firmware info payload");
+_Static_assert(AHRS_CMD_QUERY_FIRMWARE_INFO == 0x23, "firmware info query");
+_Static_assert(AHRS_MSG_FIRMWARE_INFO == 0x32, "firmware info message");
+_Static_assert(AHRS_MSG_FIRMWARE_INFO != AHRS_MSG_MOTION_BIAS, "firmware info is not motion bias");
+_Static_assert(sizeof(ahrs_payload_bias_history_t) == 60, "bias history page");
+_Static_assert(sizeof(ahrs_bias_history_entry_t) == 16, "bias history entry");
+_Static_assert(AHRS_BIAS_HISTORY_PAGE == 3, "bias history page length");
+_Static_assert(AHRS_CMD_QUERY_BIAS_HISTORY == 0x33, "bias history query");
+_Static_assert(AHRS_MSG_BIAS_HISTORY == 0x34, "bias history message");
+_Static_assert(AHRS_MSG_BIAS_HISTORY != AHRS_MSG_MOTION_BIAS, "bias history is not motion bias");
+_Static_assert(AHRS_MSG_BIAS_HISTORY != AHRS_MSG_FIRMWARE_INFO, "bias history is not firmware info");
+_Static_assert(AHRS_CMD_QUERY_BIAS_HISTORY != AHRS_CMD_QUERY_MOTION_BIAS, "bias history query is not motion bias");
+_Static_assert(AHRS_CMD_RESTORE_ZARU == 0x31, "ZARU restore command");
+_Static_assert(AHRS_CMD_RESTORE_ZARU > AHRS_CMD_RESTORE_VQF_DEFAULTS, "ZARU restore stays distinct");
 _Static_assert(AHRS_MAX_FRAME_LEN >= AHRS_FRAME_OVERHEAD + sizeof(ahrs_payload_imu_t),
                "IMU frame will not fit the DMA buffer");
 

@@ -30,6 +30,12 @@ extern "C" {
 #define AHRS_MSG_ACC_CAL_STATUS    0x0AU /* versioned six-face progress and persisted parameters */
 #define AHRS_MSG_FILTER_CONFIG     0x0BU /* active/saved profile and effective filter constants */
 #define AHRS_MSG_FUSION_DIAGNOSTIC 0x0CU /* timestamp, raw gyro, bias, residual, raw pose, sigma */
+#define AHRS_MSG_VQF_CAL_STATUS    0x0DU /* static VQF initialization progress */
+#define AHRS_MSG_VQF_SETTINGS      0x0EU /* applied VQF static parameters and compiled defaults */
+#define AHRS_MSG_MOTION_BIAS       0x09U /* live motion-bias enable and estimator numbers */
+#define AHRS_MSG_ZARU_CONFIG       0x0FU /* active and saved zero-rate-hold limits */
+#define AHRS_MSG_FIRMWARE_INFO     0x32U /* compiled application version text */
+#define AHRS_MSG_BIAS_HISTORY      0x34U /* one page of startup gyro-bias history */
 #define AHRS_MSG_ACK               0x90U /* Command Acknowledge */
 
 /* Uplink Command IDs (Host -> MCU) */
@@ -52,11 +58,22 @@ extern "C" {
 #define AHRS_CMD_SET_OUTPUT_CONFIG  0x20U /* port, format, mask:u16 LE, persist */
 #define AHRS_CMD_QUERY_CAN_CONFIG   0x21U /* empty; reply CAN_CONFIG */
 #define AHRS_CMD_SET_CAN_CONFIG     0x22U /* can_config_t (10 bytes), persist; settings mode */
-#define AHRS_CMD_QUERY_ACC_CAL      0x24U /* empty; reply ACC_CAL_STATUS (0x23 reserved for firmware info) */
+#define AHRS_CMD_QUERY_FIRMWARE_INFO 0x23U /* empty; reply FIRMWARE_INFO, no ACK */
+#define AHRS_CMD_QUERY_ACC_CAL      0x24U /* empty; reply ACC_CAL_STATUS */
 #define AHRS_CMD_CANCEL_ACC_CAL     0x25U /* empty; cancel pending six-face observations */
 #define AHRS_CMD_QUERY_FILTER       0x26U /* empty; reply FILTER_CONFIG; capability discovery */
 #define AHRS_CMD_SET_FILTER         0x27U /* profile:u8, persist:u8; settings mode, apply live */
 #define AHRS_CMD_QUERY_FUSION_DIAGNOSTIC 0x28U /* empty; one diagnostic snapshot */
+#define AHRS_CMD_QUERY_VQF_CAL     0x29U /* empty; reply VQF_CAL_STATUS, no ACK */
+#define AHRS_CMD_START_VQF_CAL     0x2AU /* empty; settings mode; ACK then VQF_CAL_STATUS */
+#define AHRS_CMD_CANCEL_VQF_CAL    0x2BU /* empty; ACK then VQF_CAL_STATUS; no flash write */
+#define AHRS_CMD_QUERY_VQF_SETTINGS 0x2CU /* empty; reply VQF_SETTINGS, no ACK */
+#define AHRS_CMD_RESTORE_VQF_DEFAULTS 0x2DU /* empty; settings mode; invalidate static cal */
+#define AHRS_CMD_QUERY_ZARU        0x2EU /* empty; reply ZARU_CONFIG */
+#define AHRS_CMD_QUERY_MOTION_BIAS 0x30U /* empty; reply MOTION_BIAS */
+#define AHRS_CMD_SET_ZARU          0x2FU /* limits + persist; settings mode, apply live */
+#define AHRS_CMD_RESTORE_ZARU      0x31U /* persist + reserved; settings mode, compiled defaults */
+#define AHRS_CMD_QUERY_BIAS_HISTORY 0x33U /* empty or offset:u16; reply BIAS_HISTORY, no ACK */
 
 #define AHRS_CONFIG_VERSION        3U
 #define AHRS_FIELD_COUNT           9U
@@ -100,6 +117,10 @@ typedef enum
 #define AHRS_ACK_UNKNOWN_CMD       0x01U
 #define AHRS_ACK_INVALID_PARAM     0x02U
 #define AHRS_ACK_EXEC_FAILED       0x03U
+/* EXEC_FAILED detail while a static VQF initialization is in progress. */
+#define AHRS_VQF_CAL_BUSY          0x0701U
+#define AHRS_VQF_CAL_NOT_READY     0x0702U
+#define AHRS_VQF_CAL_ACTIVE        0x0703U
 
 #pragma pack(push, 1)
 
@@ -109,11 +130,73 @@ typedef struct {
   float tau_mag_s, rest_tau_s;
 } ahrs_payload_filter_config_t;
 typedef struct {
+  uint8_t version, supported;
+  uint16_t reserved;
+  float active_enter_dps, active_exit_dps, active_acc_dev_ms2;
+  uint16_t active_enter_filter_ms, active_enter_confirm_ms, active_exit_confirm_ms;
+  float saved_enter_dps, saved_exit_dps, saved_acc_dev_ms2;
+  uint16_t saved_enter_filter_ms, saved_enter_confirm_ms, saved_exit_confirm_ms;
+} ahrs_payload_zaru_config_t;
+typedef struct {
+  float enter_dps, exit_dps, acc_dev_ms2;
+  uint16_t enter_filter_ms, enter_confirm_ms, exit_confirm_ms;
+  uint8_t persist, reserved;
+} ahrs_zaru_set_t;
+typedef struct {
+  uint8_t persist, reserved;
+} ahrs_zaru_restore_t;
+typedef struct {
+  uint8_t version; /* 1 */
+  uint8_t state;
+  uint8_t error;
+  uint8_t source; /* 0 compiled default, 1 static calibration */
+  uint32_t elapsed_ms, remaining_ms, sample_count;
+  float gyro_rate_dps, acc_deviation_ms2, temperature_c;
+} ahrs_payload_vqf_cal_status_t; /* 28 bytes */
+typedef struct {
+  uint8_t version; /* 1 */
+  uint8_t source; /* 0 compiled default, 1 static calibration */
+  uint8_t cal_valid;
+  uint8_t reserved;
+  float bias_dps[3];
+  float bias_sigma_init_dps, bias_sigma_rest_dps, rest_th_gyr_dps, rest_th_acc_ms2;
+  float default_sigma_init_dps, default_sigma_rest_dps, default_rest_gyr_dps, default_rest_acc_ms2;
+  float calibration_temp_c;
+} ahrs_payload_vqf_settings_t; /* 52 bytes */
+typedef struct {
+  uint8_t format; /* 1 */
+  uint8_t text_len;
+  char text[14]; /* NUL-terminated ASCII, for example 20261002a */
+} ahrs_payload_firmware_info_t; /* 16 bytes */
+typedef struct {
+  float bias_dps[3];
+  float temperature_c;
+} ahrs_bias_history_entry_t; /* 16 bytes */
+#define AHRS_BIAS_HISTORY_PAGE 3U
+typedef struct {
+  uint8_t version; /* 1 */
+  uint8_t record_version; /* 0 none, 2 legacy 15-entry slot, 3 current slot */
+  uint8_t corrupt; /* 1 when a slot was present but unreadable */
+  uint8_t count; /* valid samples, 0..50. Index 0 is the oldest */
+  uint16_t offset;
+  uint8_t entry_count; /* 0..3 samples in entry[] */
+  uint8_t reserved; /* 0 */
+  uint32_t sequence;
+  ahrs_bias_history_entry_t entry[AHRS_BIAS_HISTORY_PAGE];
+} ahrs_payload_bias_history_t; /* 60 bytes */
+typedef struct {
   uint8_t version, profile, rest, mag_flags;
   uint32_t timestamp_ms;
   float raw_gyro_dps[3], bias_dps[3], residual_dps[3], raw_euler_deg[3];
   float bias_sigma_dps;
 } ahrs_payload_fusion_diagnostic_t;
+typedef struct {
+  uint8_t version, motion_bias_enabled, rest_bias_enabled, rest_detected;
+  float bias_sigma_motion_dps, bias_vertical_forgetting, bias_forgetting_time_s;
+  float bias_clip_dps, bias_sigma_rest_dps, tau_acc_s, bias_dps[3], residual_norm_dps;
+  uint8_t zaru_hold, zaru_enabled;
+  uint16_t reserved;
+} ahrs_payload_motion_bias_t;
 
 typedef struct {
   uint8_t version, source, active_mode, saved_mode;

@@ -620,6 +620,16 @@ void VQF::setRestDetectionThresholds(vqf_real_t thGyr, vqf_real_t thAcc)
     params.restThAcc = thAcc;
 }
 
+void VQF::setBiasSigmas(vqf_real_t sigmaInit, vqf_real_t sigmaRest)
+{
+    params.biasSigmaInit = sigmaInit;
+    params.biasSigmaRest = sigmaRest;
+    coeffs.biasP0 = square(params.biasSigmaInit * vqf_real_t(100.0));
+    vqf_real_t pRest = square(params.biasSigmaRest * vqf_real_t(100.0));
+    if (coeffs.biasV > vqf_real_t(0.0))
+        coeffs.biasRestW = square(pRest) / coeffs.biasV + pRest;
+}
+
 const VQFParams& VQF::getParams() const
 {
     return params;

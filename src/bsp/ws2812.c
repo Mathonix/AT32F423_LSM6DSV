@@ -4,14 +4,15 @@
 
 #define WS_GPIO       GPIOA
 #define WS_PIN        GPIO_PINS_8
-#define WS_PERIOD_MS  20U
+#define WS_PERIOD_MS  5U
 #define WS_MIN_LEVEL 1U
 #define WS_MAX_LEVEL  45U
-#define WS_PHASE_STEPS 150U /* 150 x 20 ms = 3.0 s */
-#define WS_HALF_STEPS  75U
+#define WS_PHASE_STEPS 600U /* 600 x 5 ms = 3.0 s */
+#define WS_HALF_STEPS  300U
 
 static uint32_t ws_last_ms;
-static uint8_t ws_phase;
+static uint16_t ws_phase;
+static uint16_t ws_dither;
 static uint8_t ws_rgb_valid, ws_red, ws_green, ws_blue;
 
 static inline void wait_until(uint32_t deadline)
@@ -91,24 +92,31 @@ void ws2812_init(void)
   ws_phase = 0U;
 }
 
-static uint8_t breathing_level(uint8_t phase)
+static uint8_t breathing_level(uint16_t phase)
 {
   uint32_t half;
   uint32_t x;
   uint32_t x2;
   uint32_t eased;
-  uint32_t perceived;
+  uint32_t magnitude;
+  uint8_t level;
 
-  /* phase 0..149: 0..75 fades up, 76..149 fades down. Smoothstep makes
-   * the slope zero at both ends. Keep the direct smoothstep result here;
-   * a second gamma square leaves too few distinct levels in the 10..50 range. */
+  /* One breath is still 3.0 s. The 5 ms tick is fast enough that error
+   * diffusion between two adjacent codes flickers above 100 Hz. Peak
+   * brightness stays at WS_MAX_LEVEL. */
   half = (phase <= WS_HALF_STEPS) ? phase : (WS_PHASE_STEPS - phase);
   x = (half * 32768U + (WS_HALF_STEPS / 2U)) / WS_HALF_STEPS;                /* Q15, 0..1 */
   x2 = (uint32_t)(((uint64_t)x * x) >> 15);
   eased = (uint32_t)(((uint64_t)x2 * (98304U - 2U * x)) >> 15);
-  perceived = eased;
-  return (uint8_t)(WS_MIN_LEVEL +
-                   (((WS_MAX_LEVEL - WS_MIN_LEVEL) * perceived + 16384U) >> 15));
+  magnitude = (uint32_t)(WS_MAX_LEVEL - WS_MIN_LEVEL) * eased;
+  level = (uint8_t)(WS_MIN_LEVEL + (magnitude >> 15));
+  ws_dither = (uint16_t)(ws_dither + (magnitude & 0x7FFFU));
+  if(ws_dither >= 32768U)
+  {
+    ws_dither = (uint16_t)(ws_dither - 32768U);
+    if(level < WS_MAX_LEVEL) level++;
+  }
+  return level;
 }
 
 void ws2812_normal_task(uint32_t now_ms, ws2812_mode_t mode, uint8_t calibration_failed, uint8_t mag_rejected, uint8_t settings_pending_reboot, uint8_t history_error)

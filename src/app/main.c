@@ -10,6 +10,7 @@
 #include "ws2812.h"
 #include "vqf.h"
 #include "attitude_output.h"
+#include "zaru_heading_hold.h"
 #include "yaw_reference.h"
 #include "app_config.h"
 #include "vqf_live.h"
@@ -18,6 +19,7 @@
 #include "acc_six_face.h"
 #include "gyro_bias_history.h"
 #include "gyro_startup_calibration.h"
+#include "vqf_static_cal.h"
 #include "can_test.h"
 #include "usb_cdc.h"
 #include "protocol.h"
@@ -123,6 +125,7 @@ static float wrap_deg(float angle)
 }
 
 static float app_yaw_offset = 0.0f;
+static zaru_heading_hold_t app_zaru;
 static void app_zero_yaw(float current_yaw)
 {
   app_yaw_offset = wrap_deg(app_yaw_offset + current_yaw);
@@ -160,6 +163,14 @@ static uint8_t app_filter_profile = FUSION_PROFILE_DEFAULT;
 static attitude_output_t app_attitude;
 static float app_output_q[4] = {1,0,0,0};
 static float app_residual_dps[3];
+static float app_zaru_rate_fast_dps;
+static float app_zaru_acc_dev_ms2;
+static zaru_limits_t app_zaru_limits;
+static uint8_t app_fusion_ready;
+static protocol_source_t app_vqf_cal_port;
+static uint32_t app_vqf_cal_report_ms;
+static float app_vqf_pre_cal_bias_rad[3];
+static uint8_t app_vqf_pre_cal_bias_valid;
 static uint16_t app_gyro_init_ms;
 static uint16_t app_gyro_range_dps = GYRO_RANGE_DEFAULT_DPS;
 static uint8_t app_relative_yaw_enabled;
@@ -235,6 +246,41 @@ static int app_save_gyro_bias(const float bias[3], float temp_c)
   return result;
 }
 
+/* Same bias fast start would seed. Returns 1 when at least one history entry
+ * is inside the temperature window; nearest is their mean, in rad/s. With no
+ * match, copies the compiled 0 °/s default and returns 0. */
+static int app_select_temp_matched_bias(float bias_rad[3], float *matched_temp_c,
+                                        float temp_c)
+{
+  float latest[3];
+  float average[3];
+  float nearest[3];
+  float nearest_temp_c = 0.0f;
+  uint32_t count = 0U;
+  uint8_t nearest_valid = 0U;
+  uint8_t corrupt = 0U;
+  unsigned axis;
+  int valid = gyro_bias_history_load_for_temp(
+      latest, average, nearest, temp_c, CAL_BIAS_TEMP_WINDOW_C,
+      &nearest_temp_c, &nearest_valid, &count, &corrupt);
+
+  (void)latest;
+  (void)average;
+  (void)count;
+  (void)corrupt;
+  if((valid != 0) && (nearest_valid != 0U))
+  {
+    for(axis = 0U; axis < 3U; ++axis) bias_rad[axis] = nearest[axis];
+    if(matched_temp_c != NULL) *matched_temp_c = nearest_temp_c;
+    return 1;
+  }
+  bias_rad[0] = APP_GYR_DEFAULT_BIAS_X_DPS * DEG2RAD;
+  bias_rad[1] = APP_GYR_DEFAULT_BIAS_Y_DPS * DEG2RAD;
+  bias_rad[2] = APP_GYR_DEFAULT_BIAS_Z_DPS * DEG2RAD;
+  if(matched_temp_c != NULL) *matched_temp_c = temp_c;
+  return 0;
+}
+
 volatile uint32_t protocol_reply_drops_uart, protocol_reply_drops_usb;
 
 static int protocol_send_frame(protocol_source_t source, const uint8_t *frame, uint16_t len)
@@ -255,6 +301,53 @@ static int protocol_reply_ack(protocol_source_t source, uint8_t seq,
   uint8_t frame[AHRS_MAX_FRAME_LEN];
   uint16_t len = protocol_pack_ack(frame, sizeof(frame), seq, cmd_id, status, detail);
   return (len != 0U) ? protocol_send_frame(source, frame, len) : -1;
+}
+
+static void protocol_reply_firmware_info(protocol_source_t source, uint8_t seq)
+{
+  ahrs_payload_firmware_info_t info;
+  uint8_t frame[AHRS_MAX_FRAME_LEN];
+  _Static_assert(sizeof(info) == 16U, "firmware info payload");
+  _Static_assert(sizeof(APP_FIRMWARE_VERSION) == 10, "firmware version is YYYYMMDD and one letter");
+  memset(&info, 0, sizeof(info));
+  info.format = 1U;
+  info.text_len = (uint8_t)(sizeof(APP_FIRMWARE_VERSION) - 1U);
+  memcpy(info.text, APP_FIRMWARE_VERSION, sizeof(APP_FIRMWARE_VERSION));
+  uint16_t n = protocol_pack_frame(frame, sizeof(frame), AHRS_MSG_FIRMWARE_INFO,
+                                  seq, &info, sizeof(info));
+  if(n) (void)protocol_send_frame(source, frame, n);
+}
+
+static void protocol_reply_bias_history(protocol_source_t source, uint8_t seq, uint16_t offset)
+{
+  ahrs_payload_bias_history_t page;
+  uint8_t frame[AHRS_MAX_FRAME_LEN];
+  float bias[AHRS_BIAS_HISTORY_PAGE][3];
+  float temperature_c[AHRS_BIAS_HISTORY_PAGE];
+  uint32_t copied = 0U, count = 0U, sequence = 0U;
+  uint8_t record_version = 0U, corrupt = 0U;
+  uint32_t i;
+  _Static_assert(sizeof(page) == 60U, "bias history page");
+  _Static_assert(AHRS_BIAS_HISTORY_PAGE == 3U, "bias history page length");
+  _Static_assert(GYRO_BIAS_HISTORY_MAX <= 255U, "bias history count fits in one byte");
+  memset(&page, 0, sizeof(page));
+  (void)gyro_bias_history_read(offset, AHRS_BIAS_HISTORY_PAGE, bias, temperature_c,
+                               &copied, &count, &sequence, &record_version, &corrupt);
+  page.version = 1U;
+  page.record_version = record_version;
+  page.corrupt = corrupt;
+  page.count = (uint8_t)count;
+  page.offset = offset;
+  page.entry_count = (uint8_t)copied;
+  page.sequence = sequence;
+  for(i = 0U; i < copied && i < AHRS_BIAS_HISTORY_PAGE; ++i)
+  {
+    memcpy(page.entry[i].bias_dps, bias[i], sizeof(bias[i]));
+    page.entry[i].temperature_c = temperature_c[i];
+  }
+  uint16_t n = protocol_pack_frame(frame, sizeof(frame), AHRS_MSG_BIAS_HISTORY,
+                                  seq, &page, sizeof(page));
+  if(n) (void)protocol_send_frame(source, frame, n);
 }
 
 static void protocol_reply_config(protocol_source_t source, uint8_t seq)
@@ -292,14 +385,173 @@ static void protocol_reply_can_config(protocol_source_t source, uint8_t seq)
   if(n) (void)protocol_send_frame(source, frame, n);
 }
 
+static void protocol_reply_zaru(protocol_source_t source, uint8_t seq)
+{
+  ahrs_payload_zaru_config_t c;
+  uint8_t frame[AHRS_MAX_FRAME_LEN];
+  _Static_assert(sizeof(c) == 40U, "zaru config payload");
+  _Static_assert(sizeof(ahrs_zaru_set_t) == 20U, "zaru set payload");
+  _Static_assert(sizeof(ahrs_zaru_restore_t) == 2U, "zaru restore payload");
+  memset(&c, 0, sizeof(c));
+  c.version = 1U;
+  c.supported = APP_ZARU_ENABLE ? 1U : 0U;
+  c.active_enter_dps = app_zaru_limits.enter_dps;
+  c.active_exit_dps = app_zaru_limits.exit_dps;
+  c.active_acc_dev_ms2 = app_zaru_limits.acc_dev_ms2;
+  c.active_enter_filter_ms = app_zaru_limits.enter_filter_ms;
+  c.active_enter_confirm_ms = app_zaru_limits.enter_confirm_ms;
+  c.active_exit_confirm_ms = app_zaru_limits.exit_confirm_ms;
+  c.saved_enter_dps = app_saved_settings.zaru.enter_dps;
+  c.saved_exit_dps = app_saved_settings.zaru.exit_dps;
+  c.saved_acc_dev_ms2 = app_saved_settings.zaru.acc_dev_ms2;
+  c.saved_enter_filter_ms = app_saved_settings.zaru.enter_filter_ms;
+  c.saved_enter_confirm_ms = app_saved_settings.zaru.enter_confirm_ms;
+  c.saved_exit_confirm_ms = app_saved_settings.zaru.exit_confirm_ms;
+  uint16_t n = protocol_pack_frame(frame, sizeof(frame), AHRS_MSG_ZARU_CONFIG, seq, &c, sizeof(c));
+  if(n) (void)protocol_send_frame(source, frame, n);
+}
+
+static void protocol_reply_vqf_cal(protocol_source_t source, uint8_t seq)
+{
+  ahrs_payload_vqf_cal_status_t status;
+  vqf_static_cal_status_t live;
+  uint8_t frame[AHRS_MAX_FRAME_LEN];
+  _Static_assert(sizeof(status) == 28U, "vqf cal status payload");
+  vqf_static_cal_get_status(&live);
+  memset(&status, 0, sizeof(status));
+  status.version = 1U;
+  status.state = live.state;
+  status.error = live.error;
+  status.source = live.source;
+  status.elapsed_ms = live.elapsed_ms;
+  status.remaining_ms = live.remaining_ms;
+  status.sample_count = live.sample_count;
+  status.gyro_rate_dps = live.gyro_rate_dps;
+  status.acc_deviation_ms2 = live.acc_deviation_ms2;
+  status.temperature_c = live.temperature_c;
+  {
+    uint16_t n = protocol_pack_frame(frame, sizeof(frame), AHRS_MSG_VQF_CAL_STATUS,
+                                    seq, &status, sizeof(status));
+    if(n) (void)protocol_send_frame(source, frame, n);
+  }
+}
+
+static void protocol_reply_vqf_settings(protocol_source_t source, uint8_t seq)
+{
+  ahrs_payload_vqf_settings_t payload;
+  vqf_static_params_t applied, defaults;
+  uint8_t frame[AHRS_MAX_FRAME_LEN];
+  _Static_assert(sizeof(payload) == 52U, "vqf settings payload");
+  vqf_static_cal_get_applied(&applied);
+  vqf_static_cal_defaults(&defaults);
+  memset(&payload, 0, sizeof(payload));
+  payload.version = 1U;
+  payload.source = vqf_static_cal_source();
+  payload.cal_valid = payload.source;
+  if(payload.source == VQF_STATIC_CAL_SOURCE_CAL) {
+    memcpy(payload.bias_dps, applied.gyro_bias_dps, sizeof(payload.bias_dps));
+    payload.bias_sigma_init_dps = applied.bias_sigma_init_dps;
+    payload.bias_sigma_rest_dps = applied.bias_sigma_rest_dps;
+    payload.rest_th_gyr_dps = applied.rest_th_gyr_dps;
+    payload.rest_th_acc_ms2 = applied.rest_th_acc_ms2;
+    payload.calibration_temp_c = applied.calibration_temp_c;
+  } else {
+    float bias_rad[3];
+    unsigned axis;
+    vqf_get_gyr_bias(bias_rad);
+    for(axis = 0U; axis < 3U; ++axis) payload.bias_dps[axis] = bias_rad[axis] / DEG2RAD;
+    payload.bias_sigma_init_dps = defaults.bias_sigma_init_dps;
+    payload.bias_sigma_rest_dps = defaults.bias_sigma_rest_dps;
+    payload.rest_th_gyr_dps = defaults.rest_th_gyr_dps;
+    payload.rest_th_acc_ms2 = defaults.rest_th_acc_ms2;
+  }
+  payload.default_sigma_init_dps = defaults.bias_sigma_init_dps;
+  payload.default_sigma_rest_dps = defaults.bias_sigma_rest_dps;
+  payload.default_rest_gyr_dps = defaults.rest_th_gyr_dps;
+  payload.default_rest_acc_ms2 = defaults.rest_th_acc_ms2;
+  {
+    uint16_t n = protocol_pack_frame(frame, sizeof(frame), AHRS_MSG_VQF_SETTINGS,
+                                    seq, &payload, sizeof(payload));
+    if(n) (void)protocol_send_frame(source, frame, n);
+  }
+}
+
+static void app_vqf_cal_service(uint32_t now_ms)
+{
+  vqf_static_cal_status_t st;
+  vqf_static_params_t params;
+  uint32_t start = dwt_cycles();
+  int flashed = 0;
+  vqf_static_cal_tick(now_ms);
+  if(!vqf_static_cal_poll(&st, &params)) {
+    if(vqf_static_cal_active() && (uint32_t)(now_ms - app_vqf_cal_report_ms) >= 200U) {
+      protocol_reply_vqf_cal(app_vqf_cal_port, 0U);
+      app_vqf_cal_report_ms = now_ms;
+    }
+    return;
+  }
+  if(st.state == VQF_STATIC_CAL_DONE && st.error == VQF_STATIC_CAL_OK) {
+    float bias_rad[3];
+    unsigned axis;
+    vqf_set_rest_thresholds(params.rest_th_gyr_dps, params.rest_th_acc_ms2);
+    vqf_set_bias_sigmas(params.bias_sigma_init_dps, params.bias_sigma_rest_dps);
+    for(axis = 0U; axis < 3U; ++axis) bias_rad[axis] = params.gyro_bias_dps[axis] * DEG2RAD;
+    vqf_seed_gyr_bias(bias_rad, params.bias_sigma_init_dps);
+    flashed = 1;
+    protocol_reply_vqf_cal(app_vqf_cal_port, 0U);
+    protocol_reply_vqf_settings(app_vqf_cal_port, 0U);
+  } else {
+    if(st.error == VQF_STATIC_CAL_ERR_FLASH_WRITE) flashed = 1;
+    protocol_reply_vqf_cal(app_vqf_cal_port, 0U);
+  }
+  if(flashed) app_flash_pause_end(start);
+  app_vqf_cal_report_ms = now_ms;
+}
+
 static void protocol_reply_filter(protocol_source_t source, uint8_t seq)
 {
   fusion_profile_t p=fusion_profile_get(app_filter_profile);
-  ahrs_payload_filter_config_t c={1,app_filter_profile,app_saved_settings.filter_profile,3,
+  ahrs_payload_filter_config_t c={1,app_filter_profile,app_saved_settings.filter_profile,
+                                (uint8_t)FUSION_PROFILE_COUNT,
                                 ATTITUDE_FILTER_HZ,0,p.tau_mag_s,p.rest_tau_s};
   uint8_t frame[AHRS_MAX_FRAME_LEN];
   uint16_t n=protocol_pack_frame(frame,sizeof(frame),AHRS_MSG_FILTER_CONFIG,seq,&c,sizeof(c));
   if(n) protocol_send_frame(source,frame,n);
+}
+
+static void protocol_reply_motion_bias(protocol_source_t source, uint8_t seq)
+{
+  ahrs_payload_motion_bias_t d;
+  vqf_bias_estimator_config_t config;
+  uint8_t frame[AHRS_MAX_FRAME_LEN];
+  float norm = 0.0f;
+  unsigned axis;
+  _Static_assert(sizeof(d) == 48U, "motion bias payload");
+  memset(&d, 0, sizeof(d));
+  vqf_get_bias_estimator_config(&config);
+  d.version = 1U;
+  d.motion_bias_enabled = config.motion_bias_enabled;
+  d.rest_bias_enabled = config.rest_bias_enabled;
+  d.rest_detected = (uint8_t)vqf_get_rest_detected();
+  d.bias_sigma_motion_dps = config.bias_sigma_motion_dps;
+  d.bias_vertical_forgetting = config.bias_vertical_forgetting;
+  d.bias_forgetting_time_s = config.bias_forgetting_time_s;
+  d.bias_clip_dps = config.bias_clip_dps;
+  d.bias_sigma_rest_dps = config.bias_sigma_rest_dps;
+  d.tau_acc_s = config.tau_acc_s;
+  d.bias_dps[0] = vqf_live.bias_x;
+  d.bias_dps[1] = vqf_live.bias_y;
+  d.bias_dps[2] = vqf_live.bias_z;
+  for(axis = 0U; axis < 3U; ++axis) norm += app_residual_dps[axis] * app_residual_dps[axis];
+  d.residual_norm_dps = sqrtf(norm);
+  d.zaru_hold = app_zaru.hold_active;
+  d.zaru_enabled = (uint8_t)(APP_ZARU_ENABLE &&
+      app_filter_profile == FUSION_PROFILE_ZARU &&
+      app_fusion_mode == FUSION_MODE_6AXIS);
+  {
+    uint16_t n = protocol_pack_frame(frame, sizeof(frame), AHRS_MSG_MOTION_BIAS, seq, &d, sizeof(d));
+    if(n) (void)protocol_send_frame(source, frame, n);
+  }
 }
 
 static void protocol_reply_fusion_diagnostic(protocol_source_t source, uint8_t seq)
@@ -389,6 +641,15 @@ static void protocol_frame_received(uint8_t msg_id, uint8_t seq,
   uint8_t frame[AHRS_MAX_FRAME_LEN];
   uint16_t frame_len;
   uint8_t status = AHRS_ACK_SUCCESS;
+
+  if(vqf_static_cal_active() &&
+     (msg_id == AHRS_CMD_SET_FUSION_MODE || msg_id == AHRS_CMD_SET_OUTPUT_HZ ||
+      msg_id == AHRS_CMD_SET_STARTUP_CONFIG || msg_id == AHRS_CMD_SET_FILTER ||
+      msg_id == AHRS_CMD_SET_ZARU || msg_id == AHRS_CMD_RESTORE_ZARU ||
+      msg_id == AHRS_CMD_RESTORE_VQF_DEFAULTS || msg_id == AHRS_CMD_START_ACC_6FACE_CAL)) {
+    protocol_reply_ack(source, seq, msg_id, AHRS_ACK_EXEC_FAILED, AHRS_VQF_CAL_ACTIVE);
+    return;
+  }
 
   switch(msg_id)
   {
@@ -521,6 +782,34 @@ static void protocol_frame_received(uint8_t msg_id, uint8_t seq,
       if(len != 0U) protocol_reply_ack(source, seq, msg_id, AHRS_ACK_INVALID_PARAM, 0U);
       else protocol_reply_config(source, seq);
       break;
+    case AHRS_CMD_QUERY_FIRMWARE_INFO:
+      if(len != 0U) protocol_reply_ack(source, seq, msg_id, AHRS_ACK_INVALID_PARAM, 0U);
+      else protocol_reply_firmware_info(source, seq);
+      break;
+    case AHRS_CMD_QUERY_BIAS_HISTORY: {
+      uint16_t offset = 0U;
+      if(len == 2U)
+      {
+        if(payload == NULL)
+        {
+          protocol_reply_ack(source, seq, msg_id, AHRS_ACK_INVALID_PARAM, 0U);
+          break;
+        }
+        offset = (uint16_t)payload[0] | ((uint16_t)payload[1] << 8);
+      }
+      else if(len != 0U)
+      {
+        protocol_reply_ack(source, seq, msg_id, AHRS_ACK_INVALID_PARAM, 0U);
+        break;
+      }
+      if(offset > GYRO_BIAS_HISTORY_MAX)
+      {
+        protocol_reply_ack(source, seq, msg_id, AHRS_ACK_INVALID_PARAM, 0U);
+        break;
+      }
+      protocol_reply_bias_history(source, seq, offset);
+      break;
+    }
     case AHRS_CMD_QUERY_FILTER:
       if(len) protocol_reply_ack(source,seq,msg_id,AHRS_ACK_INVALID_PARAM,0);
       else protocol_reply_filter(source,seq);
@@ -535,7 +824,12 @@ static void protocol_frame_received(uint8_t msg_id, uint8_t seq,
         if(payload[1] && app_save_device_settings(&saved)) status=AHRS_ACK_EXEC_FAILED;
         else {
           app_filter_profile=payload[0];
-          vqf_set_tau_mag(fusion_profile_get(app_filter_profile).tau_mag_s);
+          vqf_apply_profile(app_filter_profile);
+          if(vqf_static_cal_source() == VQF_STATIC_CAL_SOURCE_CAL) {
+            vqf_static_params_t cal;
+            vqf_static_cal_get_applied(&cal);
+            vqf_set_rest_thresholds(cal.rest_th_gyr_dps, cal.rest_th_acc_ms2);
+          }
         }
       }
       protocol_reply_ack(source,seq,msg_id,status,app_filter_profile);
@@ -544,6 +838,59 @@ static void protocol_frame_received(uint8_t msg_id, uint8_t seq,
     case AHRS_CMD_QUERY_FUSION_DIAGNOSTIC:
       if(len) protocol_reply_ack(source,seq,msg_id,AHRS_ACK_INVALID_PARAM,0);
       else protocol_reply_fusion_diagnostic(source,seq);
+      break;
+    case AHRS_CMD_QUERY_MOTION_BIAS:
+      if(len) protocol_reply_ack(source, seq, msg_id, AHRS_ACK_INVALID_PARAM, 0);
+      else protocol_reply_motion_bias(source, seq);
+      break;
+    case AHRS_CMD_QUERY_ZARU:
+      if(len) protocol_reply_ack(source, seq, msg_id, AHRS_ACK_INVALID_PARAM, 0);
+      else protocol_reply_zaru(source, seq);
+      break;
+    case AHRS_CMD_SET_ZARU:
+      if(!APP_ZARU_ENABLE) status = AHRS_ACK_EXEC_FAILED;
+      else if(!app_settings_mode) status = AHRS_ACK_EXEC_FAILED;
+      else if(!payload || len != sizeof(ahrs_zaru_set_t)) status = AHRS_ACK_INVALID_PARAM;
+      else {
+        ahrs_zaru_set_t req;
+        zaru_limits_t next;
+        memcpy(&req, payload, sizeof(req));
+        next.enter_dps = req.enter_dps;
+        next.exit_dps = req.exit_dps;
+        next.acc_dev_ms2 = req.acc_dev_ms2;
+        next.enter_filter_ms = req.enter_filter_ms;
+        next.enter_confirm_ms = req.enter_confirm_ms;
+        next.exit_confirm_ms = req.exit_confirm_ms;
+        next.reserved = 0U;
+        if(req.persist > 1U || req.reserved != 0U || !zaru_limits_valid(&next))
+          status = AHRS_ACK_INVALID_PARAM;
+        else if(req.persist) {
+          device_settings_t saved = app_saved_settings;
+          saved.zaru = next;
+          if(app_save_device_settings(&saved) != 0) status = AHRS_ACK_EXEC_FAILED;
+          else app_zaru_limits = next;
+        } else app_zaru_limits = next;
+      }
+      protocol_reply_ack(source, seq, msg_id, status, 0);
+      protocol_reply_zaru(source, seq);
+      break;
+    case AHRS_CMD_RESTORE_ZARU:
+      if(!APP_ZARU_ENABLE) status = AHRS_ACK_EXEC_FAILED;
+      else if(!app_settings_mode) status = AHRS_ACK_EXEC_FAILED;
+      else if(!payload || len != sizeof(ahrs_zaru_restore_t)) status = AHRS_ACK_INVALID_PARAM;
+      else if(payload[0] > 1U || payload[1] != 0U) status = AHRS_ACK_INVALID_PARAM;
+      else {
+        zaru_limits_t next;
+        zaru_limits_default(&next);
+        if(payload[0]) {
+          device_settings_t saved = app_saved_settings;
+          saved.zaru = next;
+          if(app_save_device_settings(&saved) != 0) status = AHRS_ACK_EXEC_FAILED;
+          else app_zaru_limits = next;
+        } else app_zaru_limits = next;
+      }
+      protocol_reply_ack(source, seq, msg_id, status, 0);
+      protocol_reply_zaru(source, seq);
       break;
     case AHRS_CMD_QUERY_CAN_CONFIG:
       if(len) protocol_reply_ack(source, seq, msg_id, AHRS_ACK_INVALID_PARAM, 0);
@@ -666,6 +1013,66 @@ static void protocol_frame_received(uint8_t msg_id, uint8_t seq,
           app_request_reset((msg_id == AHRS_CMD_ENTER_BOOTLOADER) ?
                              RESET_BOOTLOADER : RESET_APPLICATION);
       }
+      break;
+    case AHRS_CMD_QUERY_VQF_CAL:
+      if(len) protocol_reply_ack(source, seq, msg_id, AHRS_ACK_INVALID_PARAM, 0);
+      else protocol_reply_vqf_cal(source, seq);
+      break;
+    case AHRS_CMD_QUERY_VQF_SETTINGS:
+      if(len) protocol_reply_ack(source, seq, msg_id, AHRS_ACK_INVALID_PARAM, 0);
+      else protocol_reply_vqf_settings(source, seq);
+      break;
+    case AHRS_CMD_START_VQF_CAL: {
+      uint16_t detail = 0U;
+      int busy = vqf_static_cal_active();
+#if APP_ACC_CAL_ENABLE
+      busy = busy || acc_cal_rt.active;
+#endif
+      if(len != 0U) status = AHRS_ACK_INVALID_PARAM;
+      else if(!app_settings_mode) status = AHRS_ACK_EXEC_FAILED;
+      else if(!app_fusion_ready) {
+        status = AHRS_ACK_EXEC_FAILED;
+        detail = AHRS_VQF_CAL_NOT_READY;
+      } else if(busy || vqf_static_cal_start(millis()) != 0) {
+        status = AHRS_ACK_EXEC_FAILED;
+        detail = AHRS_VQF_CAL_BUSY;
+      } else {
+        if(!app_vqf_pre_cal_bias_valid) {
+          vqf_get_gyr_bias(app_vqf_pre_cal_bias_rad);
+          app_vqf_pre_cal_bias_valid = 1U;
+        }
+        app_vqf_cal_port = source;
+        app_vqf_cal_report_ms = millis();
+      }
+      protocol_reply_ack(source, seq, msg_id, status, detail);
+      if(status == AHRS_ACK_SUCCESS) protocol_reply_vqf_cal(source, seq);
+      break;
+    }
+    case AHRS_CMD_CANCEL_VQF_CAL:
+      if(len) status = AHRS_ACK_INVALID_PARAM;
+      else vqf_static_cal_cancel();
+      protocol_reply_ack(source, seq, msg_id, status, 0);
+      if(status == AHRS_ACK_SUCCESS) protocol_reply_vqf_cal(source, seq);
+      break;
+    case AHRS_CMD_RESTORE_VQF_DEFAULTS:
+      if(len) status = AHRS_ACK_INVALID_PARAM;
+      else if(!app_settings_mode) status = AHRS_ACK_EXEC_FAILED;
+      else {
+        uint32_t start = dwt_cycles();
+        int restored = vqf_static_cal_restore_defaults();
+        if(restored == 0 || restored == -2) app_flash_pause_end(start);
+        if(restored != 0) status = AHRS_ACK_EXEC_FAILED;
+        else {
+          vqf_static_params_t defaults;
+          vqf_static_cal_defaults(&defaults);
+          vqf_set_rest_thresholds(defaults.rest_th_gyr_dps, defaults.rest_th_acc_ms2);
+          vqf_set_bias_sigmas(defaults.bias_sigma_init_dps, defaults.bias_sigma_rest_dps);
+          if(app_vqf_pre_cal_bias_valid)
+            vqf_seed_gyr_bias(app_vqf_pre_cal_bias_rad, defaults.bias_sigma_init_dps);
+        }
+      }
+      protocol_reply_ack(source, seq, msg_id, status, 0);
+      protocol_reply_vqf_settings(source, seq);
       break;
     default:
       protocol_reply_ack(source, seq, msg_id, AHRS_ACK_UNKNOWN_CMD, 0U);
@@ -798,8 +1205,18 @@ static void app_update_attitude(void)
                          rate,app_filter_profile,dt);
   float output_roll, output_pitch, output_yaw;
   attitude_to_euler(app_attitude.q,&output_roll,&output_pitch,&output_yaw);
-  /* Manual Yaw zero remains independent of the automatic boot reference. */
-  output_yaw = wrap_deg(output_yaw - app_yaw_offset);
+  /* ZARU locks published yaw only. Roll, pitch, and vqf_live.yaw stay raw.
+   * Manual zero is applied to the corrected heading so a zero during hold
+   * remains zero until the device actually rotates. VQF rest is not a gate. */
+  {
+    float raw_output_yaw = output_yaw;
+    uint8_t zaru_on = (uint8_t)(APP_ZARU_ENABLE &&
+        app_filter_profile == FUSION_PROFILE_ZARU &&
+        app_fusion_mode == FUSION_MODE_6AXIS);
+    float corrected_yaw = zaru_heading_hold_update(&app_zaru, raw_output_yaw,
+        app_zaru_rate_fast_dps, app_zaru_acc_dev_ms2, dt, zaru_on, &app_zaru_limits);
+    output_yaw = wrap_deg(corrected_yaw - app_yaw_offset);
+  }
 
   vofa_pose_live.seq++;
   __DMB();
@@ -1096,6 +1513,7 @@ int main(void)
     app_fusion_mode = app_saved_settings.mode;
     app_fast_start = app_saved_settings.fast_start;
     app_filter_profile = app_saved_settings.filter_profile;
+    app_zaru_limits = app_saved_settings.zaru;
     app_gyro_init_ms = app_saved_settings.gyro_init_ms;
     app_gyro_range_dps = app_saved_settings.gyro_range_dps;
     app_output_hz = app_saved_settings.output_hz;
@@ -1134,21 +1552,22 @@ int main(void)
   vqf_live.mag_err = mag_err;
   vqf_live.mag_addr = ist8310_get_addr();
 
-  vqf_set_tau_mag(fusion_profile_get(app_filter_profile).tau_mag_s);
+  vqf_apply_profile(app_filter_profile);
   vqf_init(1.0f / FUSION_HZ, 1.0f / FUSION_HZ);
+  zaru_heading_hold_reset(&app_zaru);
   {
     float startup_acc[3] = {0.0f, 0.0f, G_TO_MS2};
-    float history_latest[3] = {0.0f, 0.0f, 0.0f};
-    float history_average[3] = {0.0f, 0.0f, 0.0f};
-    float history_nearest[3] = {0.0f, 0.0f, 0.0f};
-    float nearest_temp_c = 0.0f;
-    uint32_t history_count = 0U;
-    uint8_t nearest_valid = 0U;
-    uint8_t history_corrupt = 0U;
     float gyr_bias[3] = {0.0f, 0.0f, 0.0f};
     float acc_avg[3] = {0.0f, 0.0f, G_TO_MS2};
     lsm6dsv_raw_t startup_raw;
-    int history_valid;
+    uint8_t seed_history_sigma = 0U;
+    uint8_t seed_cal_sigma = 0U;
+    vqf_static_params_t boot_cal;
+
+    if(vqf_static_cal_load(&boot_cal) == 0) {
+      vqf_set_rest_thresholds(boot_cal.rest_th_gyr_dps, boot_cal.rest_th_acc_ms2);
+      vqf_set_bias_sigmas(boot_cal.bias_sigma_init_dps, boot_cal.bias_sigma_rest_dps);
+    }
 
     /* Fast start uses this sample immediately; normal start then averages
      * the full configured stationary window before publishing attitude. */
@@ -1165,25 +1584,18 @@ int main(void)
 #endif
       }
     }
-    if(app_fast_start) {
-    history_valid = gyro_bias_history_load_for_temp(
-        history_latest, history_average, history_nearest, temp_c,
-        CAL_BIAS_TEMP_WINDOW_C, &nearest_temp_c, &nearest_valid,
-        &history_count, &history_corrupt);
-
-    if((history_valid != 0) && (nearest_valid != 0U))
+    if(vqf_static_cal_source() == VQF_STATIC_CAL_SOURCE_CAL) {
+      for(i = 0U; i < 3U; ++i) {
+        gyr_bias[i] = boot_cal.gyro_bias_dps[i] * DEG2RAD;
+        acc_avg[i] = boot_cal.acc_mean_ms2[i];
+      }
+      quick_bias_active = 0U;
+      seed_cal_sigma = 1U;
+    } else if(app_fast_start) {
+    if(app_select_temp_matched_bias(quick_bias, &quick_bias_temp_c, temp_c) == 0)
     {
-      for(i = 0U; i < 3U; ++i) quick_bias[i] = history_nearest[i];
-      quick_bias_temp_c = nearest_temp_c;
-    }
-    else
-    {
-      /* No temperature-matched history: use the configured fixed defaults.
-       * This is also the explicit missing-history indication for the LED. */
-      quick_bias[0] = APP_GYR_DEFAULT_BIAS_X_DPS * DEG2RAD;
-      quick_bias[1] = APP_GYR_DEFAULT_BIAS_Y_DPS * DEG2RAD;
-      quick_bias[2] = APP_GYR_DEFAULT_BIAS_Z_DPS * DEG2RAD;
-      quick_bias_temp_c = temp_c;
+      /* No temperature-matched history: compiled defaults, and the LED
+       * missing-history indication. */
       bias_no_history = 1U;
       bias_fallback = 1U;
     }
@@ -1194,12 +1606,11 @@ int main(void)
       acc_avg[i] = startup_acc[i];
     }
     quick_bias_active = 1U;
-    (void)history_average;
-    (void)history_count;
-    (void)history_corrupt;
+    seed_history_sigma = 1U;
     } else {
-    /* Normal startup measures fresh bias; history reuse remains exclusive
-     * to fast start. Motion restarts the stationary sampling window. */
+    /* Normal startup measures a fresh bias. Motion restarts the window.
+     * A failed window takes the fast-start selection for this temperature
+     * and does not append that fallback into the history. */
     quick_bias[0] = APP_GYR_DEFAULT_BIAS_X_DPS * DEG2RAD;
     quick_bias[1] = APP_GYR_DEFAULT_BIAS_Y_DPS * DEG2RAD;
     quick_bias[2] = APP_GYR_DEFAULT_BIAS_Z_DPS * DEG2RAD;
@@ -1212,14 +1623,18 @@ int main(void)
     if(app_collect_startup_bias(gyr_bias, acc_avg, &temp_c)) {
       if(app_save_gyro_bias(gyr_bias, temp_c) != 0) bias_history_write_error = 1U;
     } else {
-      bias_fallback = 1U;
+      if(app_select_temp_matched_bias(quick_bias, &quick_bias_temp_c, temp_c) == 0)
+      {
+        bias_no_history = 1U;
+        bias_fallback = 1U;
+      }
+      for(i = 0U; i < 3U; ++i) gyr_bias[i] = quick_bias[i];
+      seed_history_sigma = 1U;
     }
-    (void)history_average;
-    (void)history_count;
-    (void)history_corrupt;
     }
     vqf_prime_rest(acc_avg, gyr_bias);
-    if(app_fast_start) vqf_seed_gyr_bias(gyr_bias,bias_fallback ? .50f : .25f);
+    if(seed_cal_sigma) vqf_seed_gyr_bias(gyr_bias, boot_cal.bias_sigma_init_dps);
+    else if(seed_history_sigma) vqf_seed_gyr_bias(gyr_bias, bias_fallback ? .50f : .25f);
   }
   vqf_live.seq = 2;
   last_ms = millis();
@@ -1232,6 +1647,7 @@ int main(void)
     uint32_t last_sample_cy = dwt_cycles();
     uint32_t err_streak = 0U;
 
+    app_fusion_ready = 1U;
   while(1)
   {
     uint32_t now_cy;
@@ -1297,6 +1713,11 @@ int main(void)
       }
     }
 
+    {
+      float gyr_dps_lpf[3];
+      for(i = 0U; i < 3U; ++i) gyr_dps_lpf[i] = gyr_lpf[i] / DEG2RAD;
+      vqf_static_cal_feed(millis(), 1.0f / FUSION_HZ, gyr_dps_lpf, acc, temp_c);
+    }
     t0 = dwt_cycles();
     vqf_update(gyr_lpf, acc);
 
@@ -1419,6 +1840,19 @@ int main(void)
         vqf_live.bias_y = live_bias[1] / DEG2RAD;
         vqf_live.bias_z = live_bias[2] / DEG2RAD;
         for(i=0;i<3;i++) app_residual_dps[i]=(gyr_lpf[i]-live_bias[i])/DEG2RAD;
+        /* ZARU exit uses this sample's compensated gyro minus the VQF bias.
+         * Both are rad/s; the norm below is deg/s. The 30 Hz gyro LPF is not
+         * used here, so a real turn is not delayed by that filter. */
+        {
+          float fast2 = 0.0f;
+          float acc2 = acc[0] * acc[0] + acc[1] * acc[1] + acc[2] * acc[2];
+          for(i = 0; i < 3U; i++) {
+            float dps = (gyr[i] - live_bias[i]) / DEG2RAD;
+            fast2 += dps * dps;
+          }
+          app_zaru_rate_fast_dps = sqrtf(fast2);
+          app_zaru_acc_dev_ms2 = fabsf(sqrtf(acc2) - G_TO_MS2);
+        }
       }
       /* gyr_lpf_z is the (temperature-compensated) signal actually supplied
        * to VQF. corrected_z is its residual after VQF's current bias estimate;
@@ -1512,6 +1946,7 @@ int main(void)
 
 service_tasks:
     app_service_commands();
+    app_vqf_cal_service(millis());
 #if APP_ACC_CAL_ENABLE
     acc_calibration_service_task(millis());
 #endif

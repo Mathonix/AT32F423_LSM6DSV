@@ -1,14 +1,18 @@
 # AT32F423 LSM6DSV固件
 
-AT32F423KCU7 + LSM6DSV 姿态传感器固件、Bootloader、USB/UART/CAN 输出和状态指示灯功能。
+AT32F423KCU7-4 + LSM6DSV 姿态传感器固件、Bootloader、USB/UART/CAN 输出和状态指示灯。
 
-> 当前主线测试固件：**六轴模式、快速启动关闭、JustFloat 1000 Hz**。
+当前应用版本是 `20261002c`。版本号是日期加一个小写字母：同一天第一版是 `a`，当天再出一版用下一个字母。空命令 `0x23` 回复消息 `0x32`。
+
+平时烧录九轴构建（`SIX_AXIS=0`）。设备按已保存的设置运行六轴或九轴。快速启动的编译默认是关闭的，设备里还可以单独保存这个开关。
 
 ## 功能概览
 
 - LSM6DSV SPI 读取与 2 kHz 姿态融合；
 - 六轴 / 九轴 VQF 模式；九轴使用 IST8310 磁力计；
-- 启动静止陀螺仪零偏校准；可选历史零偏快速启动；
+- 启动静止陀螺仪零偏校准；最多 50 条温度关联历史，命令 `0x33` 分页列出；
+- 四档滤波：响应优先、均衡、静态稳定、零角速保持（ZARU）；
+- 运动中零偏估计，以及静置 VQF 初始化；
 - USB FS CDC 与 USART4 数据输出；
 - 任一串口发送 ASCII `vofa`，立即将 USB/UART 两路协议切换为 JustFloat，保留所选通道；无需换行，不写入 Flash；
 - VOFA+ JustFloat 三通道/六通道输出；
@@ -24,7 +28,7 @@ AT32F423KCU7 + LSM6DSV 姿态传感器固件、Bootloader、USB/UART/CAN 输出�
 |---|---|---|
 | LSM6DSV | SPI（见 `src/drivers/lsm6dsv.c`） | `WHO_AM_I = 0x70` |
 | USART4 | PA0 TX / PA1 RX | 2,000,000 baud |
-| USB CDC | PA11 DP / PA12 DM | 虚拟串口，Windows 通常显示为 USB Serial Device |
+| USB CDC | PA12 D+ / PA11 D- | 虚拟串口，VID:PID `2E3C:F401` |
 | CAN2 | PA2 RX / PA3 TX | 默认 1 Mbit/s |
 | WS2812 | PA8 | 工作状态灯 |
 
@@ -66,13 +70,15 @@ make -B DEBUG_BUILD=1 SIX_AXIS=1 all
 - `SIX_AXIS=1`：强制六轴运行并关闭磁力计融合；
 - `SIX_AXIS=0`：保留九轴磁力计融合能力。
 
-生成文件：
+生成文件在模式目录下，例如九轴发布版：
 
 ```text
-build/lsm6dsv_spi_test.elf
-build/lsm6dsv_spi_test.hex
-build/lsm6dsv_spi_test.bin
+build/lsm6dsv_spi_test/release-9axis/lsm6dsv_spi_test.elf
+build/lsm6dsv_spi_test/release-9axis/lsm6dsv_spi_test.hex
+build/lsm6dsv_spi_test/release-9axis/lsm6dsv_spi_test.bin
 ```
+
+六轴发布版在 `build/lsm6dsv_spi_test/release-6axis/`。网页和串口升级使用对应的 `.bin`。SWD 使用九轴 `.hex`。Windows 上如果没有 `make`，用 `mingw32-make`。本机测试是 `python tests/run_native.py`。
 
 ## SWD 烧录
 
@@ -82,24 +88,14 @@ build/lsm6dsv_spi_test.bin
 py -3 -m pip install pyocd
 ```
 
-连接 DAPLink/SWD 后执行：
+日常应用升级在 `tools\dap` 里执行。脚本使用 4 MHz SWD，备份整片 256 KiB，只擦写应用区 `0x08008000`–`0x0803C000`，并核对 Bootloader 与配置校准区：
 
 ```powershell
-python tools\dap\dap_flash_and_log.py `
-  --hex build\lsm6dsv_spi_test.hex `
-  --swd-frequency 1000000
+Set-Location tools\dap
+python -u dap_host_upgrade.py --flash
 ```
 
-确认输出包含：
-
-```text
-program done
-spot verify OK
-automatic reset OK
-target running
-```
-
-该脚本默认只烧录应用区。烧录 Bootloader 使用 Bootloader 目录中的专用构建配置，烧录前必须确认地址和目标镜像。
+默认镜像是 `build/lsm6dsv_spi_test/release-9axis/lsm6dsv_spi_test.hex`。确认输出包含 `bootloader_preserved`、`config_calibration_preserved` 和 `automatic reset OK; target running`。不要整片擦除。Bootloader 只用 Bootloader 目录里的镜像，经 SWD 单独维修。
 
 ## 陀螺仪启动与零偏校准
 
@@ -162,6 +158,7 @@ WS2812 连接在 PA8，用于提示当前传感器、融合和校准状态。灯
 | 设置/校准闪烁 | 正在执行设置、零偏校准或六面加速度计校准流程 |
 
 启动后如果看到正常呼吸灯夹杂两次红灯闪烁，表示设备仍可正常工作，但本次没有找到可用的历史零偏。保持设备静止一段时间，后台校准完成后会更新零偏历史。
+
 ## 输出协议
 
 默认输出为 VOFA+ JustFloat little-endian `float32`：
@@ -182,7 +179,7 @@ AA 55 | msg_id | len | seq | payload | CRC16-CCITT
 - `src/drivers/protocol.c`；
 - `docs/`。
 
-已支持的主机命令包括 Ping、查询状态、流模式切换、融合模式设置、CAN 节点 ID 设置和运行时输出频率设置。部分设置需要先进入 Settings 模式并复位后生效。
+已支持的主机命令包括 Ping、查询状态、流模式切换、融合模式、滤波档、ZARU、运动零偏、静置初始化、启动零偏历史、固件版本、CAN 和输出频率。部分设置需要先进入 Settings 模式。上位机交接在 `docs/host-agent-*.md`，命令号以 `inc/telemetry/protocol.h` 为准。
 
 ## 运行检查
 
@@ -200,6 +197,7 @@ AA 55 | msg_id | len | seq | payload | CRC16-CCITT
 
 主要配置位于 `inc/app/app_config.h`：
 
+- `APP_FIRMWARE_VERSION`：应用版本，形如 `20261002c`；
 - `APP_FUSION_HZ`：融合循环频率；
 - `APP_VOFA_OUTPUT_HZ`：默认输出频率；
 - `APP_GYR_FAST_START_ENABLE`：快速启动默认值；

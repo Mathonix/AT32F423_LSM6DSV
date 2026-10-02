@@ -51,13 +51,25 @@ int main(void)
   attitude_output_update(&s,q,q,0,1,2,.001f);assert(angular_error(s.q,q)<.1f);
   float invalid[4]={0};float before[4];memcpy(before,s.q,sizeof(before));
   assert(!attitude_output_update(&s,invalid,q,0,1,1,.001f));assert(!memcmp(before,s.q,sizeof(before)));
-  /* Mode change preserves state; a different heading reference cannot jump
-   * directly to a new target. Very slow detectable motion still propagates. */
+  /* Mode change preserves state. Rest blending waits out that gear's hold,
+   * so one sample cannot jump to a new heading. Very slow detectable motion
+   * still propagates. */
   memset(&s,0,sizeof(s));attitude_from_euler(0,0,0,q);
   attitude_output_update(&s,q,q,1,0,1,.001f);
   float target[4];attitude_from_euler(0,0,90,target);
   attitude_output_update(&s,q,target,1,0,2,.001f);
-  float r,p,y;attitude_to_euler(s.q,&r,&p,&y);assert(y>0 && y<.1f);
+  float r,p,y;attitude_to_euler(s.q,&r,&p,&y);assert(fabsf(y)<.01f);
+  for(unsigned i=0;i<500;i++) attitude_output_update(&s,q,target,1,0,2,.001f);
+  attitude_to_euler(s.q,&r,&p,&y);assert(y>0 && y<10);
+  /* Response keeps the pre-stop output for 1.5 s; stable releases at 0.4 s. */
+  memset(&s,0,sizeof(s));attitude_from_euler(0,0,0,q);
+  attitude_output_update(&s,q,q,1,0,0,.001f);
+  attitude_from_euler(0,0,20,target);
+  for(unsigned i=0;i<1400;i++) attitude_output_update(&s,q,target,1,0,0,.001f);
+  attitude_to_euler(s.q,&r,&p,&y);assert(fabsf(y)<.05f);
+  memset(&s,0,sizeof(s));attitude_output_update(&s,q,q,1,0,2,.001f);
+  for(unsigned i=0;i<500;i++) attitude_output_update(&s,q,target,1,0,2,.001f);
+  attitude_to_euler(s.q,&r,&p,&y);assert(y>1.f);
   memset(&s,0,sizeof(s));
   for(unsigned i=0;i<=10000;i++) {
     attitude_from_euler(0,0,i*.0002f,q);

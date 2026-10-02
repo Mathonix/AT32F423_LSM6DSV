@@ -4,8 +4,10 @@
 #include "vqf_full.hpp"
 #include "vqf.h"
 #include "app_config.h"
+#include "fusion_profile.h"
 
 #include <cmath>
+#include <cstring>
 #include <new>
 
 #ifndef M_PI
@@ -18,6 +20,8 @@ VQF* g_vqf = nullptr;
 float g_acc_dt = 0.0005f;
 float g_tau_acc = APP_VQF_TAU_ACC;
 float g_tau_mag = APP_VQF_TAU_MAG;
+float g_rest_th_gyr = APP_VQF_REST_GYR_DPS;
+float g_rest_th_acc = APP_VQF_REST_ACC_MS2;
 float g_rest_time = 0.0f;
 bool g_mag_ready = false;
 
@@ -46,15 +50,18 @@ extern "C" void vqf_init(float gyr_dt, float acc_dt)
     params.motionBiasEstEnabled = (APP_VQF_MOTION_BIAS_ENABLE != 0U);
     params.restBiasEstEnabled = true;
     params.magDistRejectionEnabled = true;
+    params.biasSigmaInit = APP_VQF_BIAS_SIGMA_INIT_DPS;
     params.biasSigmaRest = APP_VQF_BIAS_SIGMA_REST_DPS;
+    params.biasSigmaMotion = APP_VQF_BIAS_SIGMA_MOTION_DPS;
+    params.biasClip = APP_VQF_BIAS_CLIP_DPS;
     params.biasForgettingTime = APP_VQF_BIAS_FORGETTING_TIME_S;
+    params.restFilterTau = APP_VQF_REST_FILTER_TAU_S;
     // A fixed installation can boot without being rotated. Allow the first
     // stable norm/dip candidate to become the reference after the official
     // 5 s magNewFirstTime; later disturbances are still rejected normally.
     params.magNewMinGyr = 0.0f;
-    // Preserve the previous deviation thresholds for this single-variable trial.
-    params.restThGyr = APP_VQF_REST_GYR_DPS;
-    params.restThAcc = APP_VQF_REST_ACC_MS2;
+    params.restThGyr = g_rest_th_gyr;
+    params.restThAcc = g_rest_th_acc;
     params.restMinT = APP_VQF_REST_MIN_SECONDS;
 
     // IST8310 is read at 50 Hz; main.c feeds the compute-heavy Full VQF
@@ -62,6 +69,35 @@ extern "C" void vqf_init(float gyr_dt, float acc_dt)
     g_vqf = new (g_storage) VQF(params, gyr_dt, acc_dt, 0.1f);
     g_rest_time = 0.0f;
     g_mag_ready = false;
+}
+
+extern "C" void vqf_apply_profile(unsigned profile)
+{
+    const fusion_profile_t p = fusion_profile_get(profile);
+    g_tau_acc = p.tau_acc_s;
+    g_tau_mag = p.tau_mag_s;
+    g_rest_th_gyr = p.rest_th_gyr_dps;
+    g_rest_th_acc = p.rest_th_acc_ms2;
+    if (!g_vqf) return;
+    filter().setTauAcc(g_tau_acc);
+    filter().setTauMag(g_tau_mag);
+    filter().setRestDetectionThresholds(g_rest_th_gyr, g_rest_th_acc);
+}
+
+extern "C" void vqf_set_rest_thresholds(float th_gyr_dps, float th_acc_ms2)
+{
+    if (!std::isfinite(th_gyr_dps) || th_gyr_dps <= 0) return;
+    if (!std::isfinite(th_acc_ms2) || th_acc_ms2 <= 0) return;
+    g_rest_th_gyr = th_gyr_dps;
+    g_rest_th_acc = th_acc_ms2;
+    if (g_vqf) filter().setRestDetectionThresholds(g_rest_th_gyr, g_rest_th_acc);
+}
+
+extern "C" void vqf_set_bias_sigmas(float sigma_init_dps, float sigma_rest_dps)
+{
+    if (!std::isfinite(sigma_init_dps) || sigma_init_dps <= 0) return;
+    if (!std::isfinite(sigma_rest_dps) || sigma_rest_dps <= 0) return;
+    if (g_vqf) filter().setBiasSigmas(sigma_init_dps, sigma_rest_dps);
 }
 
 extern "C" void vqf_set_tau_acc(float tau)
@@ -175,6 +211,23 @@ extern "C" void vqf_get_gyr_bias(float gyr_bias[3])
     vqf_real_t b[3];
     filter().getBiasEstimate(b);
     for (unsigned i = 0; i < 3; ++i) gyr_bias[i] = static_cast<float>(b[i]);
+}
+
+extern "C" void vqf_get_bias_estimator_config(vqf_bias_estimator_config_t *out)
+{
+    if (!out) return;
+    std::memset(out, 0, sizeof(*out));
+    if (!g_vqf) return;
+    const VQFParams& p = filter().getParams();
+    out->motion_bias_enabled = p.motionBiasEstEnabled ? 1U : 0U;
+    out->rest_bias_enabled = p.restBiasEstEnabled ? 1U : 0U;
+    out->bias_sigma_motion_dps = static_cast<float>(p.biasSigmaMotion);
+    out->bias_vertical_forgetting = static_cast<float>(p.biasVerticalForgettingFactor);
+    out->bias_forgetting_time_s = static_cast<float>(p.biasForgettingTime);
+    out->bias_clip_dps = static_cast<float>(p.biasClip);
+    out->bias_sigma_rest_dps = static_cast<float>(p.biasSigmaRest);
+    out->bias_sigma_init_dps = static_cast<float>(p.biasSigmaInit);
+    out->tau_acc_s = static_cast<float>(p.tauAcc);
 }
 
 extern "C" float vqf_get_rest_time(void) { return g_rest_time; }

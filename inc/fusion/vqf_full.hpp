@@ -841,6 +841,8 @@ public:
      * For details about the parameters, see VQFParams.restThGyr and VQFParams.restThAcc.
      */
     void setRestDetectionThresholds(vqf_real_t thGyr, vqf_real_t thAcc);
+    /* Updates the bias-noise coefficients only. Does not reset attitude or bias. */
+    void setBiasSigmas(vqf_real_t sigmaInit, vqf_real_t sigmaRest);
 
     /**
      * @brief Returns the current parameters.

@@ -9,7 +9,14 @@ test('滤波配置：运行/保存分开回读，分包和参数校验',()=>{
   parser.configure('binary',3);feedChunked(b=>parser.push(b),fwPackFrame(11,9,p),rng(17),1,3);
   assert.equal(got.length,1);assert.equal(got[0].active,2);assert.equal(got[0].saved,1);
   assert.equal(got[0].estimatorHz,1000);assert.equal(C.decodePayload(11,p.slice(0,15)).type,'badLength');
-  p[1]=3;assert.equal(C.decodePayload(11,p).type,'unknown');p[1]=2;
+  p[1]=4;assert.equal(C.decodePayload(11,p).type,'unknown');p[1]=2;
+  {
+    const z=new Uint8Array(16),zv=new DataView(z.buffer);
+    z.set([1,3,3,4]);zv.setUint16(4,1000,true);zv.setFloat32(8,4,true);zv.setFloat32(12,.5,true);
+    const zd=C.decodePayload(11,z);
+    assert.equal(zd.type,'filterConfig');assert.equal(zd.active,3);assert.equal(zd.saved,3);
+    assert.equal(zd.tauMag,4);assert.equal(zd.restTau,.5);
+  }
   v.setFloat32(8,NaN,true);assert.equal(C.decodePayload(11,p).type,'unknown');
   assert.deepEqual([...C.buildFrame(C.CMD.SET_FILTER,3,[2,1])],[...fwPackFrame(0x27,3,[2,1])]);
 });
@@ -17,6 +24,7 @@ test('融合诊断：完整时间戳、三轴零偏/残余、原始姿态和不�
   const p=new Uint8Array(60),v=new DataView(p.buffer);p.set([1,1,1,3]);v.setUint32(4,0xfffffff0,true);
   for(let i=0;i<12;i++) v.setFloat32(8+4*i,i*.1,true);v.setFloat32(56,.05,true);
   const got=C.decodePayload(12,p);assert.equal(got.type,'fusionDiagnostic');assert.equal(got.timestamp,0xfffffff0);
+  p[1]=3;assert.equal(C.decodePayload(12,p).profile,3);p[1]=4;assert.equal(C.decodePayload(12,p).type,'unknown');p[1]=1;
   assert.equal(got.raw.length,3);assert.ok(Math.abs(got.bias[0]-.3)<1e-6);assert.ok(Math.abs(got.residual[0]-.6)<1e-6);
   assert.ok(Math.abs(got.rawEuler[0]-.9)<1e-6);assert.ok(Math.abs(got.sigma-.05)<1e-6);
   v.setFloat32(56,-1,true);assert.equal(C.decodePayload(12,p).type,'unknown');

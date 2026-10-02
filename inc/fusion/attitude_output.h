@@ -4,6 +4,7 @@
 #include "fusion_profile.h"
 typedef struct {
   float q[4], last_q6[4];
+  float rest_hold_s;
   uint8_t initialized;
 } attitude_output_t;
 void attitude_from_euler(float roll, float pitch, float yaw, float q[4]);
