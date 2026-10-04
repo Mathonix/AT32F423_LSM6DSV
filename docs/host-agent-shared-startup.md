@@ -91,3 +91,10 @@ MicroLink `04CF952C7A94199D`，4 MHz SWD，AT32F423 ID `0x700A3253`。一次备�
 - `shared-startup-hardware-20261004-033353.json`：运动到期回退。
 - `shared-startup-hardware-20261004-033553.json`：放稳后重启验证与型号/版本回读。
 - `shared-startup-final-rest-20261004.json`：最终运行、固件、校准及历史保留校验。
+
+
+## 最新发布与配套网页
+
+正式 Release [20261003e](https://github.com/Mathonix/AT32F423_LSM6DSV/releases/tag/20261003e) 已发布为 Latest，来源提交 `8db84a8`。发布 APP HEX 对构建 HEX 的四个未映射对齐字节 0x0801E554～0x0801E557 补零，使其与已实测 BIN 完整一致。发布附件 SHA256 见 Release 的 SHA256SUMS.txt；此前构建目录 HEX 对这些地址不指定写入值。
+
+新版网页源码在 `../upper/gyroa/src/public/`，构建目录 `../upper/gyroa/dist/public/`，目标 `gyroa.233688.xyz`，未线上部署。保留最新压缩包界面并支持配置 v4、型号 AT32、量程/频率持久化、原端口重连；83 项单元测试及 4 组模拟浏览器回归通过。源码/预构建包附在上述 Release，使用见 `../upper/gyroa/README.md`。旧 gyro-live 构建与 62 项测试是前一轮记录。

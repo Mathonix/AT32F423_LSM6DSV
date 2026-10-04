@@ -105,3 +105,14 @@ v4 显示启动窗口 0～60 秒（默认 2 秒），隐藏旧快速启动复选
 83 项单元测试通过；模拟浏览器：共享窗口（0/2/60、非法输入、失败草稿、量程/频率保存、T=0/60 快捷融合与同端口重连、旧配置兼容、型号）、版本查询 13 步、快捷设置 11 步、完整 app4 25 步（含模拟升级）通过。桌面 1440/1024 和手机 390 宽布局已检查。测试没有操作实板；真实 60 秒计时属于前一节固件测试。
 
 发布源码包 `E:/Downlload/gyroa-src-20261004-startup1.zip`，预构建部署包 `E:/Downlload/gyroa-deploy-20261004-startup1.zip`，同份归档在 artifacts/web-host/gyroa-20261004-startup1。包内无 node_modules 或账户凭证。构建说明见 upper/gyroa/README.md。本轮没有 Cloudflare 部署或外部发送。
+
+
+## 2026-10-04 最新 Release 已发布（20261003e）
+
+用户要求推送当前项目并附上上位机后，代码已提交 `8db84a8f47175db3aff8903ef9b455d9fff87426` 并推送 origin/master。随后按用户要求发布正式 Release `20261003e` 并标为 Latest：https://github.com/Mathonix/AT32F423_LSM6DSV/releases/tag/20261003e 。保留旧 20261002c Release 与标签。
+
+8 个附件：20261003e.bin、20261003e.hex、20261003e-bootloader.bin、20261003e-bootloader.hex、gyroa-src-20261004-startup1.zip、gyroa-deploy-20261004-startup1.zip、SHA256SUMS.txt、release-manifest.json。全部远程附件 digest 与本地 SHA256、长度一致，已检查发布状态非草稿非预发布，Latest 指向 20261003e。
+
+APP bin 95636 字节，SHA256 6a003b4697e0c03fe71b6c0b2db203518b5ed4b78f65f147b117f17f6387d8d8，与实板 USB 升级最终回读一致。Bootloader bin 22304 字节，SHA256 f19027ed665a9126767a3fc515d4f0bbd649792e9de97cec20dee0463b4c3872。发布 APP HEX 从已验证 bin 生成，补齐构建 HEX 未映射的 0x0801E554～0x0801E557 四个零填充对齐字节；所有有效映射保持一致，完整 HEX/BIN 逐字节一致。BL HEX 沿用构建文件。
+
+上位机包已重新生成以包含推送时的完整文件；两个 ZIP 的当前校验以 Release SHA256SUMS.txt 为准。本轮没有重新烧录或 Cloudflare 部署。发布前复验 15 项原生回归、83 项网页单元测试及 8 项 WebUSB 工具测试通过。
