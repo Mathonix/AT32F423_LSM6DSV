@@ -27,6 +27,11 @@
 #include "fusion_settings.h"
 #include "gyro_range.h"
 #include "boot_request.h"
+#include "user_bl_update.h"
+#ifdef APP_USER_BL_UPDATE
+static uint8_t user_bl_pending;
+static uint32_t user_bl_requested_ms;
+#endif
 
 #include <math.h>
 #include <string.h>
@@ -249,10 +254,15 @@ static int app_save_acc_calibration(const acc_calibration_t *cal)
 
 static int app_save_gyro_bias(const float bias[3], float temp_c)
 {
+#ifdef APP_USER_BL_UPDATE
+  /* Temporary maintenance APP must not alter the persistent bias journal. */
+  (void)bias; (void)temp_c; return 0;
+#else
   uint32_t start = dwt_cycles();
   int result = gyro_bias_history_save_at_temp(bias, temp_c);
   app_flash_pause_end(start);
   return result;
+#endif
 }
 
 /* Prefer the most recent capture within a narrow temperature window;
@@ -667,6 +677,32 @@ static void protocol_frame_received(uint8_t msg_id, uint8_t seq,
   uint8_t frame[AHRS_MAX_FRAME_LEN];
   uint16_t frame_len;
   uint8_t status = AHRS_ACK_SUCCESS;
+#ifdef APP_USER_BL_UPDATE
+  if(msg_id==0x39U) {
+    user_bl_info_t info;
+    if(len) protocol_reply_ack(source,seq,msg_id,AHRS_ACK_INVALID_PARAM,0);
+    else { user_bl_get_info(&info); frame_len=protocol_pack_frame(frame,sizeof(frame),0x3AU,seq,&info,sizeof(info)); (void)protocol_send_frame(source,frame,frame_len); }
+    return;
+  }
+  if(msg_id==0x3BU) {
+    /* Read-only bounded backup: area 0 BL (32 KiB), area 1 reserved (16 KiB). */
+    if(len!=4 || payload[0]>1 || !payload[3] || payload[3]>56) status=AHRS_ACK_INVALID_PARAM;
+    else {
+      uint32_t offset=(uint32_t)payload[1]|((uint32_t)payload[2]<<8), size=payload[0] ? 0x4000U : 0x8000U;
+      if(offset>size || payload[3]>size-offset) status=AHRS_ACK_INVALID_PARAM;
+      else { uint8_t data[60];memcpy(data,payload,4);memcpy(data+4,(const void *)(uintptr_t)((payload[0] ? 0x0803C000U : 0x08000000U)+offset),payload[3]);
+        frame_len=protocol_pack_frame(frame,sizeof(frame),0x3CU,seq,data,4+payload[3]);(void)protocol_send_frame(source,frame,frame_len);return; }
+    }
+    protocol_reply_ack(source,seq,msg_id,status,0);return;
+  }
+  if(msg_id==0x3DU) {
+    uint32_t request[3]={0};if(len==sizeof(request))memcpy(request,payload,sizeof(request));
+    if(len!=sizeof(request) || !user_bl_request_valid(request[0],request[1],request[2])) status=AHRS_ACK_INVALID_PARAM;
+    else if(source!=PROTOCOL_SOURCE_USB || !app_settings_mode || user_bl_pending || protocol_reset_pending!=RESET_NONE) status=AHRS_ACK_EXEC_FAILED;
+    if(protocol_reply_ack(source,seq,msg_id,status,0)==0 && status==AHRS_ACK_SUCCESS) {user_bl_pending=1;user_bl_requested_ms=millis();}
+    return;
+  }
+#endif
 
   if(vqf_static_cal_active() &&
      (msg_id == AHRS_CMD_SET_FUSION_MODE || msg_id == AHRS_CMD_SET_OUTPUT_HZ ||
@@ -1450,6 +1486,12 @@ static void app_service_commands(void)
     legacy_command_feed(ch, webusb_legacy_buf, &webusb_legacy_idx);
   }
   uart_tx_task();
+#ifdef APP_USER_BL_UPDATE
+  if(user_bl_pending && ((uart_tx_idle() && usb_cdc_tx_idle() && webusb_tx_idle()) ||
+     (uint32_t)(millis()-user_bl_requested_ms)>=100U)) {
+    user_bl_pending=0;user_bl_apply();
+  }
+#endif
   if(protocol_reset_pending != RESET_NONE &&
      ((uart_tx_idle() && usb_cdc_tx_idle() && webusb_tx_idle()) || (uint32_t)(millis() - reset_requested_ms) >= 100U))
     app_perform_reset(protocol_reset_pending);
@@ -1984,9 +2026,15 @@ service_tasks:
       }
       else
 #endif
-      if(app_settings_mode != 0U)
+      if(vqf_static_cal_active())
       {
-        /* Settings mode has priority over all status warnings and freezes
+        /* Preparation, collection and validation override settings colour;
+         * completion or cancellation naturally returns to the prior mode. */
+        ws2812_calibration_task(millis());
+      }
+      else if(app_settings_mode != 0U)
+      {
+        /* Settings mode has priority over status warnings and freezes
          * the LED brightness (no breathing). */
         ws2812_settings_task(millis(), led_mode);
       }

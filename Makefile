@@ -61,6 +61,7 @@ SRCS := \
   middleware/usbd_class/cdc/cdc_class.c \
   middleware/usbd_class/cdc/cdc_desc.c \
   $(SRC_DIR)/drivers/protocol.c \
+  $(SRC_DIR)/drivers/user_bl_update.c \
   $(SRC_DIR)/bsp/at32f423_clock.c \
   $(SRC_DIR)/bsp/at32f423_int.c \
   $(LIB)/libraries/cmsis/cm4/device_support/system_at32f423.c \
@@ -112,6 +113,10 @@ CFLAGS := -mcpu=$(MCU) -mthumb -mfpu=fpv4-sp-d16 -mfloat-abi=hard \
   -fno-common -fno-builtin $(EXTRA_CFLAGS)
 
 CXXFLAGS := $(CFLAGS) -O3 -DVQF_SINGLE_PRECISION -std=gnu++14 -fno-exceptions -fno-rtti
+ifeq ($(USER_BL_UPDATER),1)
+CFLAGS += -DAPP_USER_BL_UPDATE -Ibuild/user-bl-updater
+CXXFLAGS += -DAPP_USER_BL_UPDATE -Ibuild/user-bl-updater
+endif
 
 LDFLAGS := -mcpu=$(MCU) -mthumb -mfpu=fpv4-sp-d16 -mfloat-abi=hard \
   -T$(LDSCRIPT) -Wl,--gc-sections -Wl,-Map=$(BUILD)/$(TARGET).map \

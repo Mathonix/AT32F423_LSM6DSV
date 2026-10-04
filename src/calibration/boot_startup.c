@@ -45,6 +45,8 @@ void boot_startup_finish(const boot_startup_t *s, uint32_t now, int allow_fresh,
   if(allow_fresh && gyro_startup_calibration_finish_window(&s->calibration, now, s->start_ms,
                                                         out->bias_rad_s,out->gravity_ms2))
     out->status=BOOT_STARTUP_FRESH;
+  else if(out->duration_ms) out->rejection_reason = allow_fresh ?
+      gyro_startup_calibration_window_reason(&s->calibration,now,s->start_ms) : 14U;
   out->crc=checksum(out);
 }
 void boot_startup_publish(volatile boot_startup_handoff_t *mailbox, const boot_startup_handoff_t *data)

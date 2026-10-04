@@ -9,6 +9,7 @@
 #include "lsm6dsv.h"
 #include "gyro_range.h"
 #include "acc_calibration.h"
+#include "ws2812.h"
 #include <string.h>
 static boot_cycle_clock_t boot_clock;
 
@@ -80,6 +81,8 @@ int main(void)
   mailbox->magic=0U;
   bl_io_init();
   boot_timer_init();
+  /* Initialise the shared PA8 RGB driver before IMU setup and capture. */
+  ws2812_init();
   bl_protocol_reset();
 
   const int force = boot_requested();
@@ -113,6 +116,10 @@ int main(void)
       __DMB();
       jump_app();
     }
+    /* A WS2812 waveform occupies about 30 us. Pause animation while a
+     * command is partial or an upload owns the transport, preserving the
+     * existing 2-Mbaud UART upgrade path without introducing RX pauses. */
+    if(bl_protocol_idle()) ws2812_calibration_task(now);
     if(capture && (uint32_t)(now-startup.start_ms)<settings.gyro_init_ms && lsm6dsv_data_ready()) {
       lsm6dsv_raw_t raw;
       if(lsm6dsv_read_raw(&raw)==0) {

@@ -101,6 +101,14 @@ int bl_protocol_boot_requested(void)
   return boot_requested && bl_protocol_can_boot();
 }
 
+int bl_protocol_idle(void)
+{
+  if(owner_port != BL_IO_PORT_COUNT) return 0;
+  for(unsigned i = 0U; i < BL_IO_PORT_COUNT; ++i)
+    if(parsers[i].length != 0U) return 0;
+  return 1;
+}
+
 static void handle_frame(bl_io_port_t source, const uint8_t *p, uint16_t n)
 {
   uint8_t cmd = p[3];

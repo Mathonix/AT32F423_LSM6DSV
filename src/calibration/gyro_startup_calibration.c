@@ -22,6 +22,34 @@ static void restart_window(gyro_startup_calibration_t *s)
   memset(s->acc_m2, 0, sizeof(s->acc_m2));
 }
 
+static uint8_t block_rejection(const gyro_startup_calibration_t *s)
+{
+  float g2=0, a2=0;
+  if(s->block_samples<2U) return 0;
+  for(unsigned i=0;i<3;++i) {
+    g2+=s->gyro_mean[i]*s->gyro_mean[i];
+    a2+=s->acc_mean[i]*s->acc_mean[i];
+  }
+  const float mean_limit=APP_CAL_GYR_REST_DPS*0.017453292519943295f;
+  if(g2>mean_limit*mean_limit) return 7; /* mean angular rate */
+  if(fabsf(sqrtf(a2)-9.80665f)>APP_CAL_ACC_REST_MS2) return 8;
+  const float std_limit=APP_STARTUP_GYR_STD_DPS*0.017453292519943295f;
+  for(unsigned i=0;i<3;++i) {
+    if(s->gyro_m2[i]/(float)(s->block_samples-1U)>std_limit*std_limit) return 4;
+    if(s->acc_m2[i]/(float)(s->block_samples-1U)>
+       APP_STARTUP_ACC_STD_MS2*APP_STARTUP_ACC_STD_MS2) return 9;
+  }
+  if(s->gravity_reference_valid) {
+    float dot=0,b2=0;
+    for(unsigned i=0;i<3;++i) {
+      dot+=s->gravity_reference[i]*s->acc_mean[i];
+      b2+=s->gravity_reference[i]*s->gravity_reference[i];
+    }
+    if(dot<.999847695f*sqrtf(a2*b2)) return 5;
+  }
+  return 0;
+}
+
 int gyro_startup_calibration_push(gyro_startup_calibration_t *s, uint32_t now,
                                   const float gyro[3], const float acc[3])
 {
@@ -32,10 +60,11 @@ int gyro_startup_calibration_push(gyro_startup_calibration_t *s, uint32_t now,
     gyro_norm2 += gyro[i] * gyro[i];
     acc_norm2 += acc[i] * acc[i];
   }
-  const float gyro_limit = APP_CAL_GYR_REST_DPS * 0.017453292519943295f;
-  if(gyro_norm2 > gyro_limit * gyro_limit ||
-     fabsf(sqrtf(acc_norm2) - 9.80665f) > APP_CAL_ACC_REST_MS2) {
-    restart_window(s); s->rejection_reason=2; ++s->rejected_windows; return 0;
+  const float gyro_limit = APP_STARTUP_GYR_GROSS_DPS * 0.017453292519943295f;
+  uint8_t gross=gyro_norm2>gyro_limit*gyro_limit ? 7 :
+    fabsf(sqrtf(acc_norm2)-9.80665f)>APP_STARTUP_ACC_GROSS_MS2 ? 8 : 0;
+  if(gross) {
+    restart_window(s); s->rejection_reason=gross; ++s->rejected_windows; return 0;
   }
   if(s->samples && (uint32_t)(now - s->last_ms) > 5U) { restart_window(s); s->rejection_reason=3; ++s->rejected_windows; }
   if(!s->samples) s->start_ms = now;
@@ -53,23 +82,12 @@ int gyro_startup_calibration_push(gyro_startup_calibration_t *s, uint32_t now,
     s->acc_m2[i] += da*(acc[i]-s->acc_mean[i]);
   }
   ++s->samples;
-  if((uint32_t)(now-s->block_start_ms)>=100U && s->block_samples>=50U) {
-    const float gyro_std_limit=.15f*0.017453292519943295f;
-    uint8_t bad=0;
-    for(unsigned i=0;i<3;i++) {
-      if(s->gyro_m2[i]/(float)(s->block_samples-1U)>gyro_std_limit*gyro_std_limit ||
-         s->acc_m2[i]/(float)(s->block_samples-1U)>.15f*.15f) bad=4;
-    }
-    if(s->gravity_reference_valid) {
-      float dot=0, a2=0, b2=0;
-      for(unsigned i=0;i<3;i++) {
-        dot+=s->gravity_reference[i]*s->acc_mean[i];
-        a2+=s->gravity_reference[i]*s->gravity_reference[i];
-        b2+=s->acc_mean[i]*s->acc_mean[i];
-      }
-      if(dot<.999847695f*sqrtf(a2*b2)) bad=5; /* gravity changed by >1 degree */
-    } else { memcpy(s->gravity_reference,s->acc_mean,sizeof(s->acc_mean)); s->gravity_reference_valid=1; }
+  if((uint32_t)(now-s->block_start_ms)>=APP_STARTUP_BLOCK_MS && s->block_samples>=50U) {
+    uint8_t bad=block_rejection(s);
     if(bad) { restart_window(s); s->rejection_reason=bad; ++s->rejected_windows; return 0; }
+    if(!s->gravity_reference_valid) {
+      memcpy(s->gravity_reference,s->acc_mean,sizeof(s->acc_mean)); s->gravity_reference_valid=1;
+    }
     s->block_samples=0;
     memset(s->gyro_mean,0,sizeof(s->gyro_mean)); memset(s->gyro_m2,0,sizeof(s->gyro_m2));
     memset(s->acc_mean,0,sizeof(s->acc_mean)); memset(s->acc_m2,0,sizeof(s->acc_m2));
@@ -87,30 +105,24 @@ int gyro_startup_calibration_result(const gyro_startup_calibration_t *s,
   return 1;
 }
 
+uint8_t gyro_startup_calibration_window_reason(const gyro_startup_calibration_t *s,
+    uint32_t now, uint32_t start)
+{
+  if(!s->duration_ms) return 0; /* T=0 intentionally selects history */
+  if(s->rejected_windows) return s->rejection_reason;
+  if((uint32_t)(now-start)<s->duration_ms) return 13;
+  if(s->samples<s->duration_ms || s->samples<2U) return 10;
+  if((uint32_t)(s->start_ms-start)>5U) return 11;
+  if((uint32_t)(now-s->last_ms)>5U) return 12;
+  if((uint32_t)(s->last_ms-s->start_ms)+5U<s->duration_ms) return 13;
+  /* Validate the final partial block as well as the full 100-ms blocks. */
+  return block_rejection(s);
+}
+
 int gyro_startup_calibration_finish_window(const gyro_startup_calibration_t *s,
     uint32_t now, uint32_t start, float bias[3], float gravity[3])
 {
-  if(!s->duration_ms || (uint32_t)(now-start)<s->duration_ms ||
-     s->samples<s->duration_ms || s->rejected_windows ||
-     (uint32_t)(s->start_ms-start)>5U || (uint32_t)(now-s->last_ms)>5U ||
-     (uint32_t)(s->last_ms-s->start_ms)+5U<s->duration_ms) return 0;
-  /* Validate the final partial block as well as the full 100-ms blocks. */
-  if(s->block_samples>1U) {
-    const float gyro_limit=.15f*0.017453292519943295f;
-    for(unsigned i=0;i<3;++i)
-      if(s->gyro_m2[i]/(s->block_samples-1U)>gyro_limit*gyro_limit ||
-         s->acc_m2[i]/(s->block_samples-1U)>.15f*.15f) return 0;
-    if(s->gravity_reference_valid) {
-      float dot=0,a2=0,b2=0;
-      for(unsigned i=0;i<3;++i) {
-        dot+=s->gravity_reference[i]*s->acc_mean[i];
-        a2+=s->gravity_reference[i]*s->gravity_reference[i];
-        b2+=s->acc_mean[i]*s->acc_mean[i];
-      }
-      if(dot<.999847695f*sqrtf(a2*b2)) return 0;
-    }
-  }
-  if(s->samples<2U) return 0;
+  if(!s->duration_ms || gyro_startup_calibration_window_reason(s,now,start)) return 0;
   for(unsigned i=0;i<3;++i) { bias[i]=s->gyro_sum[i]; gravity[i]=s->acc_sum[i]; }
   return 1;
 }

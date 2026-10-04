@@ -5,7 +5,11 @@
 
 /* Application label: YYYYMMDD and one letter. The first build of a day is
  * "a". Each later build on that same day uses the next letter. */
-#define APP_FIRMWARE_VERSION "20261004d"
+#ifdef APP_USER_BL_UPDATE
+#define APP_FIRMWARE_VERSION "20261005b"
+#else
+#define APP_FIRMWARE_VERSION "20261005a"
+#endif
 
 #define APP_FUSION_HZ             2000U
 #define APP_GYR_LPF_CUTOFF_HZ    30.0f
@@ -48,6 +52,13 @@
 #define APP_SFLP_BIAS_MAX_DPS     5.0f
 #define APP_CAL_GYR_REST_DPS      1.0f
 #define APP_CAL_ACC_REST_MS2      0.8f
+/* Startup rest is decided from 100-ms blocks. Raw samples can exceed the
+ * mean gate because of noise; only gross excursions reject immediately. */
+#define APP_STARTUP_GYR_GROSS_DPS 5.0f
+#define APP_STARTUP_ACC_GROSS_MS2 2.4f
+#define APP_STARTUP_BLOCK_MS     100U
+#define APP_STARTUP_GYR_STD_DPS   0.15f
+#define APP_STARTUP_ACC_STD_MS2   0.15f
 /* Persistent gyro-bias history, up to 50 samples per 2 KB slot. The slots
  * sit outside the application image. Version 2 records remain readable. */
 #define APP_GYR_BIAS_FLASH_SLOT0_ADDR 0x0803E800U

@@ -2,6 +2,7 @@
 #include "bsp.h"
 #include "bl_io.h"
 #include "at32f423_gpio.h"
+#include "ws2812.h"
 uint32_t dwt_cycles(void) { return DWT->CYCCNT; }
 uint8_t lsm_int1_read(void) { return gpio_input_data_bit_read(GPIOB,GPIO_PINS_0)!=RESET; }
 void delay_us(uint32_t us)
@@ -12,5 +13,8 @@ void delay_us(uint32_t us)
 void delay_ms(uint32_t ms)
 {
   uint32_t start=millis();
-  while((uint32_t)(millis()-start)<ms) bl_io_task();
+  while((uint32_t)(millis()-start)<ms) {
+    bl_io_task();
+    ws2812_calibration_task(millis());
+  }
 }

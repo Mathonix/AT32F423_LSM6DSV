@@ -13,7 +13,8 @@ typedef struct {
 } gyro_startup_calibration_t;
 
 void gyro_startup_calibration_init(gyro_startup_calibration_t *state, uint16_t duration_ms);
-/* rad/s and m/s^2. Motion, invalid samples and acquisition gaps restart the window. */
+/* rad/s and m/s^2. Rest uses block mean/variance and gravity direction;
+ * gross motion, invalid samples and acquisition gaps restart the window. */
 int gyro_startup_calibration_push(gyro_startup_calibration_t *state, uint32_t now_ms,
                                   const float gyro[3], const float acc[3]);
 int gyro_startup_calibration_result(const gyro_startup_calibration_t *state,
@@ -21,4 +22,7 @@ int gyro_startup_calibration_result(const gyro_startup_calibration_t *state,
 /* Fixed BL deadline: reject movement/gaps instead of extending the window. */
 int gyro_startup_calibration_finish_window(const gyro_startup_calibration_t *state,
     uint32_t now_ms, uint32_t window_start_ms, float bias[3], float gravity[3]);
+/* Same fixed-deadline validation, with a reason for history fallback. */
+uint8_t gyro_startup_calibration_window_reason(const gyro_startup_calibration_t *state,
+    uint32_t now_ms, uint32_t window_start_ms);
 #endif

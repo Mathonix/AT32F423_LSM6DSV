@@ -22,4 +22,6 @@ void bl_protocol_feed(uint8_t b);
 void bl_protocol_feed_from(bl_io_port_t source, uint8_t b);
 int bl_protocol_can_boot(void);
 int bl_protocol_boot_requested(void);
+/* LED waveforms must not interrupt a partial command or an owned upload. */
+int bl_protocol_idle(void);
 #endif

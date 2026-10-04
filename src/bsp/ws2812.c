@@ -226,10 +226,11 @@ void ws2812_calibration_task(uint32_t now_ms)
 {
   if((uint32_t)(now_ms - ws_last_ms) < WS_PERIOD_MS) return;
   ws_last_ms = now_ms;
-  if((now_ms % 1000U) < 180U)
-    ws2812_set_rgb(0U, 0U, 18U);
-  else
-    ws2812_set_rgb(0U, 0U, 0U);
+  /* Two 80-ms blue pulses per second, separated by 100 ms of darkness.
+   * The RGB cache emits only the four transitions, never every task tick. */
+  uint32_t phase = now_ms % 1000U;
+  uint8_t on = phase < 80U || (phase >= 180U && phase < 260U);
+  ws2812_set_rgb(0U, 0U, on ? 12U : 0U);
 }
 
 void ws2812_acc_calibration_task(uint32_t now_ms, uint8_t face, uint8_t active, uint8_t failed)
