@@ -30,6 +30,7 @@ const MSG = {
   DEVICE_MODEL: 0x36, // four ASCII bytes, no terminator
   FW_VERSION: 0x32,    // fwver1：应用固件版本 16 B（format=1, len, char[14] 以 0 结尾）
   BIAS_HISTORY: 0x34,  // biashist1：启动零偏历史 60 B（bias-history.js 解码，只读）
+  STARTUP_BIAS: 0x38,
   ACK: 0x90,        // cmd_id, status, detail
 };
 // #pragma pack(1) 结构体 sizeof：payload 长度必须严格相等，否则丢弃
@@ -46,6 +47,7 @@ const PAYLOAD_LEN = {
   [MSG.DEVICE_MODEL]: 4,
   [MSG.FW_VERSION]: 16, // fwver1：format + len + char[14]
   [MSG.MOTION_BIAS]: 48, // 必须正好 48 B，否则整帧丢弃
+  [MSG.STARTUP_BIAS]: 60,
 };
 const CMD = {
   PING: 0x10,
@@ -67,6 +69,7 @@ const CMD = {
   QUERY_CAN: 0x21,
   CAN_CONFIG: 0x22,
   QUERY_DEVICE_MODEL: 0x35,
+  QUERY_STARTUP_BIAS: 0x37,
   QUERY_FW_VERSION: 0x23,  // fwver1：应用固件版本查询（空 payload，成功只回 0x32；旧固件 ACK 0x01）
   QUERY_ACC_CAL: 0x24,
   CANCEL_ACC_CAL: 0x25,
@@ -202,6 +205,15 @@ function decodePayload(id, payload) {
   const view = new DataView(payload.buffer, payload.byteOffset, payload.length);
   const f32 = (offset) => view.getFloat32(offset, true);
   switch (id) {
+    case MSG.STARTUP_BIAS: {
+      const initial = [36,40,44].map(f32), current = [48,52,56].map(f32);
+      const bootTemp = f32(28), selectedTemp = f32(32);
+      if (payload[0] !== 1 || ![1,2,3].includes(payload[1]) ||
+          ![...initial,...current,bootTemp,selectedTemp].every(Number.isFinite)) return {type:'unknown',id,length:payload.length};
+      return {type:'startupBias',source:payload[1],initial,current,bootTemp,selectedTemp,
+        duration:view.getUint32(4,true),elapsed:view.getUint32(8,true),samples:view.getUint32(12,true),
+        rejected:view.getUint32(16,true),reason:view.getUint32(20,true),range:view.getUint16(24,true)};
+    }
     case MSG.DEVICE_MODEL:
       if (![...payload].every(byte => byte >= 0x21 && byte <= 0x7e)) return { type: 'unknown', id, length: payload.length };
       return { type: 'deviceModel', text: String.fromCharCode(...payload) };
@@ -835,6 +847,7 @@ setInterval(() => { motionBias?.tick(); }, 100); // bias1：仅 #biasPanel 展�
 setInterval(() => { if (running && !firmwareBusy) vqfInit?.tick(); }, 250); // vqfinit1：采集中 1 s 无推送 → 静默补查 0x29
 
 function setConnected(connected) {
+  if ($('startupBiasRead')) $('startupBiasRead').disabled = !connected || firmwareBusy;
   if (!connected) { clearTimeout(accAckTimer); accStartPending = false; }
   $('connectBtn').disabled = firmwareBusy || connected || connecting || !!reconnectPlan;
   $('disconnectBtn').disabled = firmwareBusy || (!connected && !reconnectPlan);
@@ -1377,6 +1390,17 @@ function handleAck({ cmd: command, status, detail, seq: ackSeq }) {
 
 function handleMessage(message) {
   switch (message.type) {
+    case 'startupBias': {
+      if (!$('startupBiasPanel')) break;
+      $('startupBiasPanel').hidden = false;
+      const source = {1:'本次启动采集',2:'历史回退',3:'默认零偏'}[message.source];
+      const reason = {0:'采集未完成',1:'采样异常',2:'检测到移动',3:'采样中断',4:'噪声超限',5:'重力方向变化',6:'启动交接信息缺失'}[message.reason] || '采集不合格';
+      $('startupBiasSource').textContent = `${source} · ${message.samples} 样本 · ${message.duration/1000} s · ±${message.range} dps · 采集温度 ${message.selectedTemp.toFixed(2)}℃${message.source !== 1 && message.duration ? ` · ${reason}` : ''}`;
+      const format = a => a.map(v => `${v>=0?'+':''}${v.toFixed(6)}`).join(' / ');
+      $('startupBiasInitial').textContent = format(message.initial);
+      $('startupBiasCurrent').textContent = format(message.current);
+      break;
+    }
     case 'accCalibration':
       configureAccCalibration(message);
       break;
@@ -1659,6 +1683,7 @@ async function connect(autoConnection = null) {
       $('baud').value = String(baudRate); $('parseMode').value = parseModeValue; $('justChannels').value = String(justChannels);
     }
     rememberedConnection = { port:picked, baudRate, parseMode:parseModeValue, justChannels };
+    if ($('startupBiasPanel')) $('startupBiasPanel').hidden = true;
     port = picked;
     writes.reset();
     resetParser();
@@ -1698,6 +1723,7 @@ async function connect(autoConnection = null) {
     await vqfInit?.query(); // vqfinit1：0x2C + 0x29（3 s 无数据帧 → 隐藏）
     await queryFwVersion(); // fwver1：0x23 → 0x32
     await biasHist?.read(); // biashist1：0x33 → 0x34 整表
+    await sendQuiet(CMD.QUERY_STARTUP_BIAS);
   } catch (error) {
     connecting = false;
     if (autoConnection?.firmware) log(`升级重连暂不可用，继续等待：${error.message}`);
@@ -2320,6 +2346,7 @@ if (zaruLimits) {
 }
 if (motionBias) { biasView = GyroBias.bindDom(motionBias, { connected: () => running && !firmwareBusy }); biasView.render(); }
 if (biasHist) { biasHistView = GyroBiasHist.bindDom(biasHist, { connected: () => running && !firmwareBusy }); biasHistView.render(); }
+if ($('startupBiasRead')) $('startupBiasRead').onclick = () => sendQuiet(CMD.QUERY_STARTUP_BIAS);
 if (vqfInit) { vqfView = GyroVqf.bindDom(vqfInit, { editable: () => settingEditable(), connected: () => running && !firmwareBusy }); vqfView.render(); }
 resetParser(); updateSettingUI(); draw(); updateRate();
 import('/pcb-view.js?v=20261001fw1-app2').then(async ({ createPCBView }) => {

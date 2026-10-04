@@ -16,13 +16,14 @@
     const [version, recordVersion, corrupt, count] = [payload[0], payload[1], payload[2], payload[3]];
     const offset = v.getUint16(4, true), entryCount = payload[6], reserved = payload[7], sequence = v.getUint32(8, true);
     const bad = (reason) => ({ type: 'unknown', id, length: payload.length, reason });
-    if (version !== VERSION) return bad(`version ${version}`);
+    if (version !== VERSION && version !== 2) return bad(`version ${version}`);
     if (![0, 2, 3].includes(recordVersion) || corrupt > 1 || count > MAX || entryCount > PER || reserved !== 0 || offset > MAX) return bad('字段超出范围');
     if (recordVersion === 0 && (count !== 0 || entryCount !== 0)) return bad('无记录却有条目');
     if (entryCount && offset + entryCount > count) return bad('条目超出 count');
     const entries = [];
     for (let k = 0; k < entryCount; k++) {
       const o = 12 + 16 * k, bias = [0, 4, 8].map((d) => v.getFloat32(o + d, true)), temp = v.getFloat32(o + 12, true);
+      if (version === 1) for (let axis = 0; axis < 3; axis++) bias[axis] *= 180 / Math.PI;
       if (![...bias, temp].every(Number.isFinite)) return bad('非有限数');
       entries.push({ index: offset + k, bias, tempC: temp });
     }

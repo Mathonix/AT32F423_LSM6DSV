@@ -24,6 +24,7 @@ float g_rest_th_gyr = APP_VQF_REST_GYR_DPS;
 float g_rest_th_acc = APP_VQF_REST_ACC_MS2;
 float g_rest_time = 0.0f;
 bool g_mag_ready = false;
+float g_calibrated_bias[3] = {0.0f, 0.0f, 0.0f};
 
 VQF& filter()
 {
@@ -48,7 +49,7 @@ extern "C" void vqf_init(float gyr_dt, float acc_dt)
     params.tauAcc = g_tau_acc;
     params.tauMag = g_tau_mag;
     params.motionBiasEstEnabled = (APP_VQF_MOTION_BIAS_ENABLE != 0U);
-    params.restBiasEstEnabled = true;
+    params.restBiasEstEnabled = (APP_VQF_REST_BIAS_ENABLE != 0U);
     params.magDistRejectionEnabled = true;
     params.biasSigmaInit = APP_VQF_BIAS_SIGMA_INIT_DPS;
     params.biasSigmaRest = APP_VQF_BIAS_SIGMA_REST_DPS;
@@ -69,6 +70,7 @@ extern "C" void vqf_init(float gyr_dt, float acc_dt)
     g_vqf = new (g_storage) VQF(params, gyr_dt, acc_dt, 0.1f);
     g_rest_time = 0.0f;
     g_mag_ready = false;
+    std::memset(g_calibrated_bias, 0, sizeof(g_calibrated_bias));
 }
 
 extern "C" void vqf_apply_profile(unsigned profile)
@@ -124,7 +126,14 @@ extern "C" void vqf_seed_gyr_bias(const float gyr_bias[3], float sigma_dps)
     vqf_real_t b[3] = {gyr_bias[0], gyr_bias[1], gyr_bias[2]};
     if (!std::isfinite(sigma_dps) || sigma_dps <= 0 || sigma_dps > 10) return;
     for (unsigned i=0; i<3; ++i) if (!std::isfinite(b[i])) return;
-    if (g_vqf) filter().setBiasEstimate(b, sigma_dps * static_cast<float>(M_PI/180.0));
+    if (g_vqf) {
+        // Keep measured startup bias outside the motion estimator. Its
+        // artificial vertical-zero measurement must act on the correction,
+        // rather than erase a known nonzero calibration.
+        std::memcpy(g_calibrated_bias, gyr_bias, sizeof(g_calibrated_bias));
+        vqf_real_t correction[3] = {0, 0, 0};
+        filter().setBiasEstimate(correction, sigma_dps * static_cast<float>(M_PI/180.0));
+    }
 }
 
 extern "C" float vqf_get_bias_sigma_dps(void)
@@ -149,7 +158,9 @@ extern "C" void vqf_prime_rest(const float acc_ms2[3], const float gyr_bias[3])
 
 extern "C" void vqf_update_gyr(const float gyr[3])
 {
-    const vqf_real_t v[3] = {gyr[0], gyr[1], gyr[2]};
+    const vqf_real_t v[3] = {gyr[0] - g_calibrated_bias[0],
+                           gyr[1] - g_calibrated_bias[1],
+                           gyr[2] - g_calibrated_bias[2]};
     filter().updateGyr(v);
 }
 
@@ -210,7 +221,8 @@ extern "C" void vqf_get_gyr_bias(float gyr_bias[3])
 {
     vqf_real_t b[3];
     filter().getBiasEstimate(b);
-    for (unsigned i = 0; i < 3; ++i) gyr_bias[i] = static_cast<float>(b[i]);
+    for (unsigned i = 0; i < 3; ++i)
+        gyr_bias[i] = g_calibrated_bias[i] + static_cast<float>(b[i]);
 }
 
 extern "C" void vqf_get_bias_estimator_config(vqf_bias_estimator_config_t *out)

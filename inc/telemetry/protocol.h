@@ -37,6 +37,7 @@ extern "C" {
 #define AHRS_MSG_FIRMWARE_INFO     0x32U /* compiled application version text */
 #define AHRS_MSG_BIAS_HISTORY      0x34U /* one page of startup gyro-bias history */
 #define AHRS_MSG_DEVICE_MODEL      0x36U /* ASCII AT32, exactly 4 bytes, no NUL */
+#define AHRS_MSG_STARTUP_BIAS      0x38U /* actual boot selection and current total bias */
 #define AHRS_MSG_ACK               0x90U /* Command Acknowledge */
 
 /* Uplink Command IDs (Host -> MCU) */
@@ -76,6 +77,7 @@ extern "C" {
 #define AHRS_CMD_RESTORE_ZARU      0x31U /* persist + reserved; settings mode, compiled defaults */
 #define AHRS_CMD_QUERY_BIAS_HISTORY 0x33U /* empty or offset:u16; reply BIAS_HISTORY, no ACK */
 #define AHRS_CMD_QUERY_DEVICE_MODEL 0x35U /* empty; reply DEVICE_MODEL, no ACK */
+#define AHRS_CMD_QUERY_STARTUP_BIAS 0x37U /* empty; reply STARTUP_BIAS, no ACK */
 
 #define AHRS_CONFIG_VERSION        4U /* v3 layout; shared BL/init time 0..60000 ms */
 #define AHRS_FIELD_COUNT           9U
@@ -177,6 +179,7 @@ typedef struct {
 #define AHRS_BIAS_HISTORY_PAGE 3U
 typedef struct {
   uint8_t version; /* 1 */
+  /* History wire version 2 reports deg/s; legacy version 1 sent rad/s. */
   uint8_t record_version; /* 0 none, 2 legacy 15-entry slot, 3 current slot */
   uint8_t corrupt; /* 1 when a slot was present but unreadable */
   uint8_t count; /* valid samples, 0..50. Index 0 is the oldest */
@@ -192,6 +195,13 @@ typedef struct {
   float raw_gyro_dps[3], bias_dps[3], residual_dps[3], raw_euler_deg[3];
   float bias_sigma_dps;
 } ahrs_payload_fusion_diagnostic_t;
+typedef struct {
+  uint8_t version, source, reserved[2]; /* source: 1 fresh, 2 history, 3 default */
+  uint32_t duration_ms, elapsed_ms, samples, rejected_windows, rejection_reason;
+  uint16_t range_dps, reserved2;
+  float boot_temperature_c, selected_temperature_c;
+  float initial_bias_dps[3], current_bias_dps[3];
+} ahrs_payload_startup_bias_t; /* 60 bytes; initial values are immutable per boot */
 typedef struct {
   uint8_t version, motion_bias_enabled, rest_bias_enabled, rest_detected;
   float bias_sigma_motion_dps, bias_vertical_forgetting, bias_forgetting_time_s;

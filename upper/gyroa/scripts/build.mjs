@@ -26,6 +26,6 @@ await cp(source,target,{recursive:true});
 await build({entryPoints:[join(root,'src/index.js')],bundle:true,format:'esm',platform:'browser',target:'es2022',outfile:join(root,'dist/worker.js')});
 const hashes={};
 for(const path of await files(target)) hashes[relative(target,path).split(sep).join('/')]=createHash('sha256').update(await readFile(path)).digest('hex');
-const manifest={version:'20261004startup1',domain:'gyroa.233688.xyz',firmware:'20261003e',configVersions:[1,2,3,4],files:hashes};
+const manifest={version:'20261004biasfix1',domain:'gyroa.233688.xyz',firmware:'20261004d',configVersions:[1,2,3,4],files:hashes};
 await writeFile(join(root,'dist/asset-manifest.json'),JSON.stringify(manifest,null,2)+'\n');
 console.log(`Built ${assets.length} static assets and worker; target ${manifest.domain}. No deployment performed.`);

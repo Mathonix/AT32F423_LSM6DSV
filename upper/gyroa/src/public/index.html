@@ -200,7 +200,13 @@
           <!-- biashist1：启动零偏历史（只读，0x33 → 0x34）；旧固件 ACK 0x01 / 3 s 无回复 → 隐藏 -->
           <section class="card bh-card" id="bhPanel" aria-labelledby="bhTitle">
             <div class="card-h"><h2 id="bhTitle">启动零偏历史</h2><span id="bhMeta" class="chip" title="count · record_version · sequence">--</span></div>
-            <p class="bh-lead">每次开机采集写入 Flash 的陀螺零偏（只读，最多 50 条）。不是运动零偏，也不含静置初始化结果。</p>
+            <p class="bh-lead">启动零偏历史（只读，最多 50 条）。</p>
+            <div id="startupBiasPanel" hidden>
+              <p id="startupBiasSource"></p>
+              <p>本次启动初值（dps）：<b id="startupBiasInitial" class="num">--</b></p>
+              <p>当前实际补偿（dps）：<b id="startupBiasCurrent" class="num">--</b></p>
+              <button id="startupBiasRead" type="button" class="sm">读取本次初值与补偿</button>
+            </div>
             <p id="bhCorrupt" class="warn-line" hidden>有一个记录槽读不出来，下面列出的是仍可读的那一槽。</p>
             <div id="bhWrap" class="bh-wrap" hidden>
               <table class="bh-tbl" aria-label="启动零偏历史，最新在上">
@@ -408,8 +414,8 @@
 <script src="/zaru-limits.js?v=20261002restore1"></script>
 <script src="/motion-bias.js?v=20261002bias1"></script>
 <script src="/vqf-init.js?v=20261002vqfinit1"></script>
-<script src="/bias-history.js?v=20261002biashist1"></script>
-<script src="/app.js?v=20261004startup1"></script>
+<script src="/bias-history.js?v=20261004biasfix1"></script>
+<script src="/app.js?v=20261004biasfix1"></script>
   <script src="/ui-shell.js?v=20261004startup1"></script>
 <script src="/ui-pages.js?v=20261001fw1-app4"></script>
 <script src="/ui-chart.js?v=20261002vqfinit1"></script>

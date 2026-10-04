@@ -5,7 +5,7 @@
 
 /* Application label: YYYYMMDD and one letter. The first build of a day is
  * "a". Each later build on that same day uses the next letter. */
-#define APP_FIRMWARE_VERSION "20261003e"
+#define APP_FIRMWARE_VERSION "20261004d"
 
 #define APP_FUSION_HZ             2000U
 #define APP_GYR_LPF_CUTOFF_HZ    30.0f
@@ -15,7 +15,7 @@
 #define APP_GYR_TEMP_REF_C             25.0f
 /* Maximum temperature difference for selecting a temperature-matched
  * historical gyro bias during startup fallback. */
-#define APP_GYR_BIAS_TEMP_WINDOW_C     5.0f
+#define APP_GYR_BIAS_TEMP_WINDOW_C     1.0f
 
 /* Fast startup: use a valid temperature-matched history record, then refine
  * it only after confirmed rest. A save is attempted at most once per boot. */
@@ -57,9 +57,10 @@
 #define APP_GYR_DEFAULT_BIAS_Y_DPS     0.0f
 #define APP_GYR_DEFAULT_BIAS_Z_DPS     0.0f
 
-/* Full VQF parameters. Motion bias is enabled. Every other estimator
- * number below stays at the value already running on this firmware. */
+/* Runtime VQF bias estimators. Startup averaging remains independent of
+ * these switches; rest detection remains available for status and ZARU. */
 #define APP_VQF_MOTION_BIAS_ENABLE 1U
+#define APP_VQF_REST_BIAS_ENABLE   1U
 /* Balanced-gear fallback used only before a profile is applied. */
 #define APP_VQF_TAU_ACC           2.5f
 #define APP_VQF_TAU_MAG           4.0f

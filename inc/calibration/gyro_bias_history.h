@@ -8,6 +8,13 @@ extern "C" {
  * of 15 samples stay readable; the next save keeps them and appends. */
 #define GYRO_BIAS_HISTORY_MAX 50U
 
+/* Newest record inside the temperature window; otherwise the caller may
+ * fall back to load_nearest. Bias arrays are always in rad/s. */
+int gyro_bias_history_load_recent_for_temp(float latest[3], float average[3],
+    float selected[3], float current_temp_c, float temp_window_c,
+    float *selected_temp_c, uint8_t *selected_valid, uint32_t *count,
+    uint8_t *corrupt);
+
 /* Load the latest record and the average of all valid history entries. */
 int gyro_bias_history_load(float latest[3], float average[3], uint32_t *count, uint8_t *corrupt);
 /* Temperature-aware load. nearest_valid is set when at least one entry is

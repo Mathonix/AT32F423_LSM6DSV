@@ -253,6 +253,30 @@ int gyro_bias_history_load(float latest[3], float average[3], uint32_t *count, u
                                           count, corrupt);
 }
 
+int gyro_bias_history_load_recent_for_temp(float latest[3], float average[3],
+    float selected[3], float current_temp_c, float temp_window_c,
+    float *selected_temp_c, uint8_t *selected_valid, uint32_t *count,
+    uint8_t *corrupt)
+{
+  gyro_bias_record_t record;
+  if(selected != NULL) memset(selected, 0, sizeof(float) * 3U);
+  if(selected_temp_c != NULL) *selected_temp_c = 0.0f;
+  if(selected_valid != NULL) *selected_valid = 0U;
+  int valid = gyro_bias_history_load(latest, average, count, corrupt);
+  if(!valid || !isfinite(current_temp_c) || !isfinite(temp_window_c) ||
+     temp_window_c < 0.0f || !load_records(&record, NULL, NULL)) return valid;
+  for(uint32_t logical = record.count; logical > 0U; --logical) {
+    uint32_t physical = chrono_index(&record, logical - 1U);
+    if(fabsf(record.temperature_c[physical] - current_temp_c) <= temp_window_c) {
+      if(selected != NULL) memcpy(selected, record.bias[physical], sizeof(float) * 3U);
+      if(selected_temp_c != NULL) *selected_temp_c = record.temperature_c[physical];
+      if(selected_valid != NULL) *selected_valid = 1U;
+      break;
+    }
+  }
+  return valid;
+}
+
 int gyro_bias_history_load_nearest(float bias[3], float temperature_c, float *matched_temperature_c)
 {
   gyro_bias_record_t record;

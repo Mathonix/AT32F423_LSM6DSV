@@ -70,6 +70,7 @@ volatile struct {
   uint32_t magic, status, duration_ms, elapsed_ms, samples;
   float bias_dps[3];
 } gyro_startup_live = {0x47535443U, 0, APP_GYR_INIT_DEFAULT_MS, 0, 0, {0}};
+static ahrs_payload_startup_bias_t app_startup_bias;
 /* Separate raw capture ABI; leaves existing attitude telemetry unchanged. */
 volatile struct {
   uint32_t magic, seq, millis, sample_n, fusion_enabled;
@@ -254,8 +255,8 @@ static int app_save_gyro_bias(const float bias[3], float temp_c)
   return result;
 }
 
-/* Prefer the mean of history within the temperature window; otherwise use
- * the closest valid historical temperature. No history uses compiled defaults. */
+/* Prefer the most recent capture within a narrow temperature window;
+ * otherwise use the closest record. Never average unrelated boot captures. */
 static int app_select_temp_matched_bias(float bias_rad[3], float *matched_temp_c,
                                         float temp_c)
 {
@@ -267,7 +268,7 @@ static int app_select_temp_matched_bias(float bias_rad[3], float *matched_temp_c
   uint8_t nearest_valid = 0U;
   uint8_t corrupt = 0U;
   unsigned axis;
-  int valid = gyro_bias_history_load_for_temp(
+  int valid = gyro_bias_history_load_recent_for_temp(
       latest, average, nearest, temp_c, CAL_BIAS_TEMP_WINDOW_C,
       &nearest_temp_c, &nearest_valid, &count, &corrupt);
 
@@ -344,7 +345,7 @@ static void protocol_reply_bias_history(protocol_source_t source, uint8_t seq, u
   memset(&page, 0, sizeof(page));
   (void)gyro_bias_history_read(offset, AHRS_BIAS_HISTORY_PAGE, bias, temperature_c,
                                &copied, &count, &sequence, &record_version, &corrupt);
-  page.version = 1U;
+  page.version = 2U; /* v1 accidentally transmitted rad/s; v2 is deg/s. */
   page.record_version = record_version;
   page.corrupt = corrupt;
   page.count = (uint8_t)count;
@@ -353,7 +354,8 @@ static void protocol_reply_bias_history(protocol_source_t source, uint8_t seq, u
   page.sequence = sequence;
   for(i = 0U; i < copied && i < AHRS_BIAS_HISTORY_PAGE; ++i)
   {
-    memcpy(page.entry[i].bias_dps, bias[i], sizeof(bias[i]));
+    for(unsigned axis = 0U; axis < 3U; ++axis)
+      page.entry[i].bias_dps[axis] = bias[i][axis] / DEG2RAD;
     page.entry[i].temperature_c = temperature_c[i];
   }
   uint16_t n = protocol_pack_frame(frame, sizeof(frame), AHRS_MSG_BIAS_HISTORY,
@@ -563,6 +565,19 @@ static void protocol_reply_motion_bias(protocol_source_t source, uint8_t seq)
     uint16_t n = protocol_pack_frame(frame, sizeof(frame), AHRS_MSG_MOTION_BIAS, seq, &d, sizeof(d));
     if(n) (void)protocol_send_frame(source, frame, n);
   }
+}
+
+static void protocol_reply_startup_bias(protocol_source_t source, uint8_t seq)
+{
+  ahrs_payload_startup_bias_t d = app_startup_bias;
+  uint8_t frame[AHRS_MAX_FRAME_LEN];
+  float bias_rad[3];
+  _Static_assert(sizeof(d) == 60U, "startup bias payload");
+  vqf_get_gyr_bias(bias_rad);
+  for(unsigned axis = 0U; axis < 3U; ++axis)
+    d.current_bias_dps[axis] = bias_rad[axis] / DEG2RAD;
+  uint16_t n = protocol_pack_frame(frame, sizeof(frame), AHRS_MSG_STARTUP_BIAS, seq, &d, sizeof(d));
+  if(n) (void)protocol_send_frame(source, frame, n);
 }
 
 static void protocol_reply_fusion_diagnostic(protocol_source_t source, uint8_t seq)
@@ -803,6 +818,10 @@ static void protocol_frame_received(uint8_t msg_id, uint8_t seq,
         frame_len = protocol_pack_device_model(frame, sizeof(frame), seq);
         if(frame_len != 0U) (void)protocol_send_frame(source, frame, frame_len);
       }
+      break;
+    case AHRS_CMD_QUERY_STARTUP_BIAS:
+      if(len != 0U) protocol_reply_ack(source, seq, msg_id, AHRS_ACK_INVALID_PARAM, 0U);
+      else protocol_reply_startup_bias(source, seq);
       break;
     case AHRS_CMD_QUERY_BIAS_HISTORY: {
       uint16_t offset = 0U;
@@ -1583,6 +1602,14 @@ int main(void)
     }
     int valid_handoff = startup_handoff_present &&
         boot_startup_matches(&startup_handoff, app_gyro_init_ms, app_gyro_range_dps);
+    app_startup_bias.version = 1U;
+    app_startup_bias.duration_ms = app_gyro_init_ms;
+    app_startup_bias.range_dps = app_gyro_range_dps;
+    app_startup_bias.boot_temperature_c = temp_c;
+    app_startup_bias.elapsed_ms = valid_handoff ? startup_handoff.elapsed_ms : 0U;
+    app_startup_bias.samples = valid_handoff ? startup_handoff.samples : 0U;
+    app_startup_bias.rejected_windows = valid_handoff ? startup_handoff.rejected_windows : 0U;
+    app_startup_bias.rejection_reason = valid_handoff ? startup_handoff.rejection_reason : 6U;
     gyro_startup_live.elapsed_ms = valid_handoff ? startup_handoff.elapsed_ms : 0U;
     gyro_startup_live.samples = valid_handoff ? startup_handoff.samples : 0U;
     if(valid_handoff && startup_handoff.status == BOOT_STARTUP_FRESH) {
@@ -1593,6 +1620,8 @@ int main(void)
         gyro_startup_live.bias_dps[i] = gyr_bias[i] / DEG2RAD;
       }
       gyro_startup_live.status = 2U;
+      app_startup_bias.source = 1U;
+      app_startup_bias.selected_temperature_c = temp_c;
       if(app_save_gyro_bias(gyr_bias, temp_c) != 0) bias_history_write_error = 1U;
     } else {
       /* T=0, motion, missing/corrupt mailbox, or incomplete sampling:
@@ -1610,7 +1639,11 @@ int main(void)
       quick_bias_active = 1U;
       seed_history_sigma = 1U;
       gyro_startup_live.status = 3U;
+      app_startup_bias.source = bias_no_history ? 3U : 2U;
+      app_startup_bias.selected_temperature_c = quick_bias_temp_c;
     }
+    memcpy(app_startup_bias.initial_bias_dps, gyro_startup_live.bias_dps,
+           sizeof(app_startup_bias.initial_bias_dps));
     vqf_prime_rest(acc_avg, gyr_bias);
     if(seed_history_sigma) vqf_seed_gyr_bias(gyr_bias, bias_fallback ? .50f : .25f);
   }
@@ -1701,7 +1734,7 @@ int main(void)
 
     /* VQF is the sole runtime bias owner. A fast-start history estimate is
      * seeded once; do not override its mean or covariance on each sample. */
-    if(quick_bias_active) {
+    if(quick_bias_active && APP_VQF_REST_BIAS_ENABLE) {
       uint32_t now_ms=millis();
       uint32_t elapsed=quick_save_elapsed_ms ? (uint32_t)(now_ms-quick_save_elapsed_ms) : 0U;
       float b[3]; vqf_get_gyr_bias(b);
