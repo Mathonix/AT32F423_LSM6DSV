@@ -1,0 +1,419 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <link rel="icon" href="data:,">
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>AT32 AHRS</title><link rel="stylesheet" href="/style.css?v=20261004startup1">
+</head>
+<body>
+<svg class="sprite" aria-hidden="true" xmlns="http://www.w3.org/2000/svg">
+  <!-- Lucide icons (ISC License), stroke style -->
+  <symbol id="i-gauge" viewBox="0 0 24 24"><path d="m12 14 4-4"/><path d="M3.34 19a10 10 0 1 1 17.32 0"/></symbol>
+  <symbol id="i-activity" viewBox="0 0 24 24"><path d="M22 12h-2.48a2 2 0 0 0-1.93 1.46l-2.35 8.36a.25.25 0 0 1-.48 0L9.24 2.18a.25.25 0 0 0-.48 0l-2.35 8.36A2 2 0 0 1 4.49 12H2"/></symbol>
+  <symbol id="i-cable" viewBox="0 0 24 24"><path d="M17 21v-2a1 1 0 0 1-1-1v-1a2 2 0 0 1 2-2h2a2 2 0 0 1 2 2v1a1 1 0 0 1-1 1"/><path d="M19 15V6.5a1 1 0 0 0-7 0v11a1 1 0 0 1-7 0V9"/><path d="M21 21v-2h-4"/><path d="M3 5h4V3"/><path d="M7 5a1 1 0 0 1 1 1v1a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V6a1 1 0 0 1 1-1V3"/></symbol>
+  <symbol id="i-crosshair" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M22 12h-4"/><path d="M6 12H2"/><path d="M12 6V2"/><path d="M12 22v-4"/></symbol>
+  <symbol id="i-network" viewBox="0 0 24 24"><rect x="16" y="16" width="6" height="6" rx="1"/><rect x="2" y="16" width="6" height="6" rx="1"/><rect x="9" y="2" width="6" height="6" rx="1"/><path d="M5 16v-3a1 1 0 0 1 1-1h12a1 1 0 0 1 1 1v3"/><path d="M12 12V8"/></symbol>
+  <symbol id="i-upload" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="m17 8-5-5-5 5"/><path d="M12 3v12"/></symbol>
+  <symbol id="i-settings" viewBox="0 0 24 24"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/></symbol>
+  <symbol id="i-plug" viewBox="0 0 24 24"><path d="M12 22v-5"/><path d="M9 8V2"/><path d="M15 8V2"/><path d="M18 8v5a4 4 0 0 1-4 4h-4a4 4 0 0 1-4-4V8Z"/></symbol>
+  <symbol id="i-thermometer" viewBox="0 0 24 24"><path d="M14 4v10.54a4 4 0 1 1-4 0V4a2 2 0 0 1 4 0Z"/></symbol>
+  <symbol id="i-rotate" viewBox="0 0 24 24"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/></symbol>
+  <symbol id="i-file" viewBox="0 0 24 24"><path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/></symbol>
+  <symbol id="i-alert" viewBox="0 0 24 24"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3"/><path d="M12 9v4"/><path d="M12 17h.01"/></symbol>
+  <symbol id="i-chevron" viewBox="0 0 24 24"><path d="m9 18 6-6-6-6"/></symbol>
+  <symbol id="i-zoom-in" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/><path d="M11 8v6"/><path d="M8 11h6"/></symbol>
+</svg>
+
+<div class="app">
+  <nav class="nav" aria-label="主导航">
+    <div class="nav-mark" aria-hidden="true"></div>
+    <a class="nav-item" href="#/status" data-nav="status" title="状态"><svg class="ic"><use href="#i-gauge"/></svg><span>状态</span></a>
+    <a class="nav-item" href="#/output" data-nav="output" title="输出"><svg class="ic"><use href="#i-cable"/></svg><span>输出</span></a>
+    <a class="nav-item" href="#/calib" data-nav="calib" title="校准"><svg class="ic"><use href="#i-crosshair"/></svg><span>校准</span></a>
+    <a class="nav-item" href="#/upgrade" data-nav="upgrade" title="升级"><svg class="ic"><use href="#i-upload"/></svg><span>升级</span></a>
+    <div class="nav-fill"></div>
+    <a class="nav-item" href="#/settings" data-nav="settings" title="设置"><svg class="ic"><use href="#i-settings"/></svg><span>设置</span></a>
+  </nav>
+
+  <div class="main">
+    <header class="topbar">
+      <div class="tb-left">
+        <span class="tb-title">AT32 AHRS</span>
+        <span class="conn" id="connChip" data-state="off"><i class="dot"></i><span id="connStatus">未连接</span></span>
+      </div>
+      <div class="tb-right">
+        <button id="connectBtn" class="primary"><svg class="ic sm"><use href="#i-plug"/></svg><span class="lbl">连接设备</span></button>
+        <button id="disconnectBtn" disabled hidden>断开</button>
+        <a class="icon-btn" href="#/settings" title="设置" aria-label="设置"><svg class="ic"><use href="#i-settings"/></svg></a>
+      </div>
+    </header>
+
+    <div class="serial-notice" id="serialNotice" role="note" hidden><span id="serialNoticeText">手机浏览器不支持 Web Serial，可使用 Mock 演示或在电脑 Chrome/Edge 中连接</span><a id="serialNoticeMock" href="/?mock=1#/status">打开 Mock 演示</a></div>
+    <main class="views">
+      <!-- ============ 状态 ============ -->
+      <section class="view view-status" data-view="status">
+        <div class="home-grid">
+          <div class="home-main">
+            <div class="stage-wrap">
+              <div class="stage"><canvas id="attitude" width="720" height="410"></canvas></div>
+              <button id="modelReset" class="sm stage-reset" disabled title="恢复默认查看角度"><svg class="ic sm"><use href="#i-rotate"/></svg>复位视角</button>
+              <span id="modelStatus" class="sr-only" role="status">板卡模型加载中…</span>
+            </div>
+            <div class="card ypr">
+              <div class="ypr-item"><span>Yaw</span><div><strong id="yaw">--</strong><em>°</em></div></div>
+              <div class="ypr-item"><span>Pitch</span><div><strong id="pitch">--</strong><em>°</em></div></div>
+              <div class="ypr-item"><span>Roll</span><div><strong id="roll">--</strong><em>°</em></div></div>
+            </div>
+            <div class="card quick-set" id="quickSet" title="点击即生效：融合模式保存后立即重启并自动重连；姿态稳定性保存（重启后保留）">
+              <div class="qs-h"><h2>快捷设置</h2><small id="qsMsg" class="qs-msg" role="status"></small></div>
+              <div class="qs-body">
+                <div class="qs-row" id="qsFusionRow"><span class="qs-k" id="qsFusionNote" title="切换即重启">融合模式</span><div class="seg" id="qsFusion" role="group" aria-label="融合模式"><button type="button" data-mode="0">六轴</button><button type="button" data-mode="1">九轴</button></div></div>
+                <div class="qs-row" id="qsFilterRow"><span class="qs-k" title="重启后保留">姿态稳定性</span><div class="seg" id="qsFilter" role="group" aria-label="姿态稳定性"><button type="button" data-profile="0">响应优先</button><button type="button" data-profile="1">均衡</button><button type="button" data-profile="2">静态稳定</button><button type="button" data-profile="3" title="ZARU：静止时锁定航向（仅六轴）">零角速保持</button></div></div>
+                <small id="qsEmpty" class="qs-msg" hidden>当前固件不支持快捷设置</small>
+              </div>
+            </div>
+          </div>
+          <aside class="home-side">
+            <div class="card dev-card">
+              <div class="dev-row" title="温度：10 Hz 轮询（0x14 状态查询）；超过 1 秒未更新显示 --"><svg class="ic"><use href="#i-thermometer"/></svg><span class="k">温度</span><span class="v"><b id="temp">--</b> °C</span></div>
+              <div class="dev-row"><svg class="ic"><use href="#i-activity"/></svg><span class="k">数据速率</span><span class="v"><b id="rate">--</b> 帧/s</span></div>
+              <div class="dev-row"><svg class="ic"><use href="#i-plug"/></svg><span class="k">数据</span><span class="v"><span id="dataState" class="badge">无数据</span></span></div>
+            </div>
+            <div class="quick-grid">
+              <a class="quick" href="#/output"><svg class="ic"><use href="#i-cable"/></svg><span>数据输出</span></a>
+              <a class="quick" href="#/calib"><svg class="ic"><use href="#i-crosshair"/></svg><span>传感器校准</span></a>
+              <a class="quick" href="#/output?tab=can"><svg class="ic"><use href="#i-network"/></svg><span>CAN 设置</span></a>
+              <a class="quick" href="#/upgrade"><svg class="ic"><use href="#i-upload"/></svg><span>固件升级</span></a>
+            </div>
+            <div class="charts" id="homeCharts" hidden>
+              <section class="card chart" id="accChart" hidden aria-label="三轴加速度波形">
+                <div class="chart-h"><span class="chart-t">加速度<em>g</em></span>
+                  <span class="chart-tools"><span class="legend"><i class="lg-x">X<b id="axLive">--</b></i><i class="lg-y">Y<b id="ayLive">--</b></i><i class="lg-z">Z<b id="azLive">--</b></i></span><button type="button" class="chart-zoom-btn" id="accZoomBtn" title="放大" aria-label="放大加速度波形"><svg class="ic xs" aria-hidden="true"><use href="#i-zoom-in"/></svg></button></span></div>
+                <div class="plot"><canvas></canvas></div>
+              </section>
+              <section class="card chart" id="gyroChart" hidden aria-label="三轴角速度波形">
+                <div class="chart-h"><span class="chart-t">角速度<em>dps</em></span>
+                  <span class="chart-tools"><span class="legend"><i class="lg-x">X<b id="gxLive">--</b></i><i class="lg-y">Y<b id="gyLive">--</b></i><i class="lg-z">Z<b id="gzLive">--</b></i></span><button type="button" class="chart-zoom-btn" id="gyroZoomBtn" title="放大" aria-label="放大角速度波形"><svg class="ic xs" aria-hidden="true"><use href="#i-zoom-in"/></svg></button></span></div>
+                <div class="plot"><canvas></canvas></div>
+              </section>
+            </div>
+          </aside>
+        </div>
+      </section>
+
+      <!-- ============ 输出 ============ -->
+      <section class="view view-output" data-view="output" hidden>
+        <header class="page-h"><h1>数据输出</h1><span id="configState" class="chip">等待读取</span><span id="canConfigState" class="chip" hidden>等待读取</span></header>
+        <div class="card form-card" data-fw-inert>
+          <div class="seg" role="tablist" id="outPortSeg"><button type="button" role="tab" data-port="0" class="on">UART</button><button type="button" role="tab" data-port="1">USB</button><button type="button" role="tab" data-port="2">CAN</button></div>
+          <fieldset id="outputPanel0" class="out-form" data-port="0" disabled>
+            <label class="field">协议<select id="outputFormat0"><option value="0">JustFloat</option><option value="1">自定义协议（AA55 + CRC）</option></select></label>
+            <div class="field"><div class="field-h"><span>输出内容</span><span class="links"><button type="button" id="allFields0" class="link">全选</button><button type="button" id="noFields0" class="link">清空</button></span></div><div id="outputFields0" class="checks"></div></div>
+            <label class="switch-row"><span>断电保存</span><input type="checkbox" class="switch" id="outputPersist0" checked></label>
+            <button id="outputApply0" type="button" hidden>应用 UART</button>
+          </fieldset>
+          <fieldset id="outputPanel1" class="out-form" data-port="1" disabled hidden>
+            <label class="field">协议<select id="outputFormat1"><option value="0">JustFloat</option><option value="1">自定义协议（AA55 + CRC）</option></select></label>
+            <div class="field"><div class="field-h"><span>输出内容</span><span class="links"><button type="button" id="allFields1" class="link">全选</button><button type="button" id="noFields1" class="link">清空</button></span></div><div id="outputFields1" class="checks"></div></div>
+            <label class="switch-row"><span>断电保存</span><input type="checkbox" class="switch" id="outputPersist1" checked></label>
+            <button id="outputApply1" type="button" hidden>应用 USB</button>
+          </fieldset>
+          <div class="out-serial" id="outSerialPane">
+          <label class="field field-narrow">输出频率<span class="suffix"><input id="outHz" value="200" inputmode="numeric" maxlength="4"><i>Hz</i></span></label>
+          <button id="rateApplyBtn" type="button" hidden>设置输出频率</button>
+          <div class="actions">
+            <details class="disclosure"><summary>设备当前配置<svg class="ic xs"><use href="#i-chevron"/></svg></summary>
+              <div class="kv"><small id="outputSummary0"></small><small id="outputSummary1"></small><small id="rateState">USB / UART 共用输出频率。</small></div>
+            </details>
+            <span class="fill"></span>
+            <button id="outputApplyAll" type="button" class="primary">应用</button>
+          </div>
+          </div>
+          <div class="out-can can-card" id="outCanPane" hidden>
+          <fieldset id="canPanel" disabled>
+            <div class="form-2col">
+              <label class="field">CAN ID<input id="canRequestId" value="1" maxlength="6" placeholder="1 或 0x001"></label>
+              <label class="field">主机 ID<input id="canMasterId" value="0x6FF" maxlength="6" placeholder="1791 或 0x6FF"></label>
+              <label class="field">波特率<select id="canBaud"><option value="0">1 Mbps</option><option value="1">500 Kbps</option><option value="2">400 Kbps（约 401.07）</option><option value="3">250 Kbps</option><option value="4">200 Kbps</option><option value="5">100 Kbps</option><option value="6">50 Kbps</option><option value="7">25 Kbps</option></select></label>
+              <label class="field">发送模式<select id="canActive"><option value="1">主动周期输出</option><option value="0">请求 / 应答</option></select></label>
+              <label class="field">输出频率<span class="suffix"><input id="canFrequency" value="1000" type="number" min="0.1" max="1000" step="any"><i>Hz</i></span></label>
+              <label class="field">发送间隔<span class="suffix"><input id="canPeriod" value="1" type="number" min="1" max="10000" step="1"><i>ms</i></span></label>
+            </div>
+            <p id="canFrequencyHint" class="status-line"></p>
+            <div class="field"><div class="field-h"><span>输出内容</span></div>
+              <div id="canOutputs" class="checks checks-2">
+                <label><input type="checkbox" value="0"> 加速度 + 温度</label>
+                <label><input type="checkbox" value="1"> 角速度</label>
+                <label><input type="checkbox" value="2" checked> 欧拉角</label>
+                <label><input type="checkbox" value="3"> 四元数</label>
+              </div>
+            </div>
+            <label class="switch-row"><span>断电保存</span><input id="canPersist" type="checkbox" class="switch" checked></label>
+            <p id="canDraftHint" class="sr-only" role="status"></p>
+            <div class="actions">
+              <details class="disclosure"><summary>详情<svg class="ic xs"><use href="#i-chevron"/></svg></summary>
+                <div class="kv"><small id="canConfigSummary">尚未读取 CAN 配置</small><small id="canSavedSummary"></small></div>
+              </details>
+              <span class="fill"></span>
+              <span id="canDirty" class="dirty" hidden>未保存</span>
+              <button id="canDiscard" type="button" disabled>撤销</button>
+              <button id="canRefresh" type="button">读取</button>
+              <button id="canApply" type="button" class="primary">保存</button>
+            </div>
+          </fieldset>
+          <details class="disclosure legacy" data-fw-inert><summary>旧固件节点 ID<svg class="ic xs"><use href="#i-chevron"/></svg></summary>
+            <div class="inline-form"><label class="field">节点 ID<input id="canNodeId" value="1" inputmode="numeric" maxlength="4"></label><button id="canIdBtn" type="button">保存</button></div>
+            <p id="canHint" class="warn-line"></p>
+          </details>
+          </div>
+        </div>
+      </section>
+
+      <!-- ============ 校准 ============ -->
+      <section class="view view-calib" data-view="calib" hidden>
+        <header class="page-h"><h1>传感器校准</h1></header>
+        <div class="calib-grid" data-fw-inert>
+          <div class="calib-main">
+          <section class="card">
+            <div class="card-h"><h2>六面校准</h2><span id="accStateChip" class="chip">未校准</span></div>
+            <p class="lead">请依次将六个方向朝上并保持静止。</p>
+            <div id="accFaces" class="acc-faces" aria-label="六面完成进度"><span data-face="1">+X</span><span data-face="0">−X</span><span data-face="3">+Y</span><span data-face="2">−Y</span><span data-face="5">+Z</span><span data-face="4">−Z</span></div>
+            <div class="progress-row"><div class="bar"><i id="accOverallBar"></i></div><span id="accCount" class="num">0 / 6</span></div>
+            <progress id="accFaceProgress" max="1000" value="0" hidden aria-label="当前面采样进度"></progress>
+            <p id="accStatus" class="status-line" role="status" aria-live="polite"></p>
+            <p id="accAdvice" class="warn-line" hidden></p>
+            <div class="actions">
+              <details class="disclosure"><summary>高级数据<svg class="ic xs"><use href="#i-chevron"/></svg></summary>
+                <div class="adv-acc">
+                  <div class="acc-raw-head"><span id="accRawLabel">原始加速度（等待校准采样）</span><span id="accRawNorm"></span></div>
+                  <div id="accRaw" class="acc-raw stale" aria-label="校准原始三轴加速度，单位 g"><div><span>X</span><strong id="accRawX">—</strong><small>g</small></div><div><span>Y</span><strong id="accRawY">—</strong><small>g</small></div><div><span>Z</span><strong id="accRawZ">—</strong><small>g</small></div></div>
+                  <p id="accPlacement" class="aux"></p>
+                  <p id="accParams" class="aux mono"></p>
+                  <div><button id="accRefreshBtn" type="button" class="sm" disabled>读取状态</button></div>
+                </div>
+              </details>
+              <span class="fill"></span>
+              <button id="accCancelBtn" type="button" disabled hidden>取消</button>
+              <button id="acc6Btn" type="button" class="primary" disabled>开始校准</button>
+            </div>
+          </section>
+          <!-- biashist1：启动零偏历史（只读，0x33 → 0x34）；旧固件 ACK 0x01 / 3 s 无回复 → 隐藏 -->
+          <section class="card bh-card" id="bhPanel" aria-labelledby="bhTitle">
+            <div class="card-h"><h2 id="bhTitle">启动零偏历史</h2><span id="bhMeta" class="chip" title="count · record_version · sequence">--</span></div>
+            <p class="bh-lead">每次开机采集写入 Flash 的陀螺零偏（只读，最多 50 条）。不是运动零偏，也不含静置初始化结果。</p>
+            <p id="bhCorrupt" class="warn-line" hidden>有一个记录槽读不出来，下面列出的是仍可读的那一槽。</p>
+            <div id="bhWrap" class="bh-wrap" hidden>
+              <table class="bh-tbl" aria-label="启动零偏历史，最新在上">
+                <thead><tr><th title="设备序号，0 = 最旧">#</th><th>X °/s</th><th>Y °/s</th><th>Z °/s</th><th>温度 °C</th></tr></thead>
+                <tbody id="bhBody"></tbody>
+              </table>
+            </div>
+            <p id="bhEmpty" class="bh-msg" hidden>还没有记录。</p>
+            <div class="actions bh-actions"><span id="bhMsg" class="bh-msg" role="status" aria-live="polite"></span><span class="fill"></span><button id="bhRead" type="button" class="sm" disabled>读取</button></div>
+          </section>
+          </div>
+          <div class="calib-side">
+          <section class="card vqf-card" id="vqfPanel" data-state="idle" aria-labelledby="vqfTitle">
+            <div class="card-h"><h2 id="vqfTitle">静置初始化 VQF</h2><span id="vqfSource" class="chip" title="0x0E source">--</span></div>
+            <p class="vqf-lead">平放静止：先稳 5 s，再采集 60 s；通过后写 Flash 并立即生效。默认值以设备回读为准。</p>
+            <table class="vqf-tbl" aria-label="VQF 静置参数"><thead><tr><th></th><th>当前</th><th>默认</th></tr></thead><tbody id="vqfParams"></tbody></table>
+            <div class="vqf-kv"><span id="vqfBiasK" class="k">零偏（VQF 当前）</span><b id="vqfBias" class="num">--</b></div>
+            <div class="vqf-kv" id="vqfTempRow" hidden><span class="k">标定温度</span><b id="vqfTemp" class="num">--</b></div>
+            <p id="vqfState" class="vqf-state" role="status" aria-live="polite">--</p>
+            <div class="bar" id="vqfProg" hidden><i id="vqfBar"></i></div>
+            <p id="vqfLive" class="vqf-live num"></p>
+            <p id="vqfMsg" class="vqf-msg" role="status" aria-live="polite"></p>
+            <div class="actions vqf-actions">
+              <button id="vqfRead" type="button" class="sm" disabled>读取</button>
+              <span class="fill"></span>
+              <button id="vqfRestore" type="button" disabled hidden title="0x2D：清除静置结果，两个 σ 与两个静止门限回到默认值">恢复默认</button>
+              <button id="vqfCancel" type="button" hidden>取消</button>
+              <button id="vqfStart" type="button" class="primary" disabled title="0x2A：需设置模式（自动进入）">开始静置</button>
+            </div>
+          </section>
+          </div>
+        </div>
+      </section>
+
+      <!-- ============ 升级 ============ -->
+      <section class="view view-upgrade" data-view="upgrade" hidden>
+        <header class="page-h"><h1>固件升级</h1></header>
+        <div class="card form-card fw-card" id="firmwarePanel">
+          <div class="list-row"><span class="k">设备型号</span><b id="deviceModel" class="num">--</b></div>
+          <div class="list-row"><span class="k">当前版本</span><b id="fwVersion" class="num" title="未读到应用版本">--</b></div>
+          <label class="file-pick">
+            <input id="firmwareFile" type="file" accept=".bin,application/octet-stream">
+            <svg class="ic"><use href="#i-file"/></svg>
+            <span class="file-meta"><b id="fwFileName">请选择固件</b><small id="fwFileSize"></small></span>
+            <span class="btn-like">选择文件</span>
+          </label>
+          <div class="progress-row"><progress id="firmwareProgress" max="100" value="0" aria-label="固件已确认上传进度"></progress><span id="fwPct" class="num">0%</span></div>
+          <p class="warn-line"><svg class="ic sm"><use href="#i-alert"/></svg>升级期间请勿断开设备。</p>
+          <p id="firmwareLink" class="firmware-link" data-transport="" style="margin:0;font-size:13px;color:var(--tx2)">当前链路：未连接</p>
+          <div id="fwResult" class="result" hidden></div>
+          <details class="disclosure" id="fwDetails"><summary>查看详情<svg class="ic xs"><use href="#i-chevron"/></svg></summary>
+            <div class="kv"><small id="firmwareStatus" role="status" aria-live="polite">先连接设备，再选择固件。</small><small id="firmwareInfo" class="mono">尚未选择固件。</small></div>
+          </details>
+          <div class="actions">
+            <button type="button" id="fwRecoveryLink" class="link weak-link">设备无法升级？ 恢复模式</button>
+            <span class="fill"></span>
+            <button id="firmwareStopBtn" type="button" disabled hidden>停止</button>
+            <button id="firmwareStartBtn" type="button" class="primary" disabled>开始升级</button>
+          </div>
+          <div id="fwRecoveryBox" class="recovery" hidden>
+            <label class="check"><input id="firmwareRecovery" type="checkbox"> 设备已在升级模式（恢复上传）</label>
+            <button id="firmwarePortBtn" type="button" class="sm" hidden>选择端口</button>
+          </div>
+        </div>
+      </section>
+
+      <!-- ============ 设置 ============ -->
+      <section class="view view-settings" data-view="settings" hidden>
+        <header class="page-h"><h1>设置</h1></header>
+        <div class="settings-grid">
+          <section class="card" data-fw-inert>
+            <div class="card-h"><h2>连接</h2></div>
+            <label class="field">连接方式<select id="connKind" disabled><option>USB / UART 串口</option></select></label>
+            <label class="field">波特率<select id="baud"><option>2000000</option><option>115200</option><option>921600</option></select></label>
+            <label class="field">解析模式<select id="parseMode"><option value="auto">自动（JustFloat 优先）</option><option value="justfloat">JustFloat</option><option value="binary">二进制 AA55</option></select></label>
+            <label class="field">JustFloat 通道<select id="justChannels"><option value="3" selected>3（Yaw / Pitch / Roll）</option><option value="6">6（Yaw / Pitch / Roll / Gz / Az / Temp）</option></select></label>
+          </section>
+          <section class="card" id="startupControls" data-fw-inert>
+            <div class="card-h"><h2>设备</h2></div>
+            <fieldset id="modeField" class="field seg-field" disabled>
+              <legend>融合模式</legend>
+              <div class="seg radios">
+                <label><input type="radio" name="fusion" value="0"><span>六轴</span></label>
+                <label><input type="radio" name="fusion" value="1" checked><span>九轴</span></label>
+                <label><input type="radio" name="fusion" value="2"><span>九轴相对角</span></label>
+              </div>
+            </fieldset>
+            <label class="switch-row" id="fastStartRow"><span>快速启动</span><input type="checkbox" class="switch" id="fastStart" disabled></label>
+            <div class="form-2col">
+              <div id="gyroInitRow"><label class="field" for="gyroInitSeconds"><span id="gyroInitLabel">启动窗口</span><span class="suffix"><input id="gyroInitSeconds" type="number" value="2" min="0" max="60" step="0.1" required disabled><i>s</i></span></label></div>
+              <label class="field">量程<span class="suffix"><select id="gyroRange" disabled><option value="125">±125</option><option value="250">±250</option><option value="500">±500</option><option value="1000" selected>±1000</option><option value="2000">±2000</option><option value="4000">±4000</option></select><i>dps</i></span></label>
+            </div>
+            <label class="switch-row"><span>保存后重启</span><input type="checkbox" class="switch" id="restartNow"></label>
+            <p id="gyroInitHint" class="startup-help">0～60 秒，默认 2 秒；0 秒使用历史零偏直接启动。</p>
+            <p id="restartHint" class="warn-line"></p>
+          </section>
+          <section class="card filter-card" id="filterPanel" data-fw-inert>
+            <div class="card-h"><h2>姿态稳定性</h2><span class="filter-state" id="filterState">当前：-- · 已保存：-- · 内部 -- Hz</span></div>
+            <div class="seg radios" role="radiogroup" aria-label="姿态稳定性"><label><input type="radio" name="filterProfile" value="0" disabled><span>响应优先</span></label><label><input type="radio" name="filterProfile" value="1" checked disabled><span>均衡</span></label><label><input type="radio" name="filterProfile" value="2" disabled><span>静态稳定</span></label><label title="ZARU / Stationary Heading Hold：静止时锁定航向，检测到运动后立即恢复更新"><input type="radio" name="filterProfile" value="3" disabled><span>零角速保持</span></label></div>
+            <p class="filter-hint" title="只改变输出平滑和磁航向收敛时间，立即生效，无需重启。"><span id="filterHint">均衡：兼顾响应与静态平滑。</span><span class="filter-note">只改变输出平滑和磁航向收敛时间，立即生效，无需重启。</span></p>
+            <div class="filter-actions"><label class="filter-persist"><input type="checkbox" class="switch" id="filterPersist" checked disabled><span>重启后保留</span></label><span class="fill"></span><button id="filterRead" type="button" disabled>读取</button><button id="filterDiscard" type="button" disabled>撤销修改</button><button id="filterApply" type="button" class="primary" disabled>应用模式</button></div>
+            <p id="filterMsg" class="filter-msg" role="status" aria-live="polite"></p>
+            <details class="zaru-box" id="zaruPanel">
+              <summary title="零角速保持阈值：修改立即生效，不切换档位"><span class="zaru-title">零角速保持阈值</span><span id="zaruSummary" class="zaru-sum">当前 --</span><svg class="ic xs"><use href="#i-chevron"/></svg></summary>
+              <p id="zaruNote" class="zaru-note">静止时锁定航向，检测到运动后解除。仅六轴融合 + 第 4 档「零角速保持」按这些阈值锁定航向；九轴下可读写，但不锁磁力计航向。</p>
+              <div id="zaruFields" class="zaru-grid"></div>
+              <div class="zaru-line"><label class="filter-persist"><input type="checkbox" class="switch" id="zaruPersist" checked disabled><span>重启后保留</span></label><span id="zaruSaved" class="zaru-saved">已保存 --</span><button id="zaruRead" type="button" disabled>读取</button><button id="zaruDiscard" type="button" disabled>撤销</button><button id="zaruRestore" type="button" disabled title="恢复为固件编译默认值并写入 Flash（0x31）；只替换这六个阈值，需再点一次确认">恢复默认</button><button id="zaruSave" type="button" class="primary" disabled>保存</button></div>
+              <p id="zaruMsg" class="zaru-msg" role="status" aria-live="polite"></p>
+            </details>
+          </section>
+        </div>
+        <details class="card disclosure adv" id="advPanel">
+          <summary>高级设置<svg class="ic xs"><use href="#i-chevron"/></svg></summary>
+          <div class="adv-grid">
+            <div class="adv-sec" data-fw-inert>
+              <h3>数据流预设</h3>
+              <div class="inline-form"><select id="streamMode" aria-label="数据流模式"><option value="0">VOFA JustFloat 3通道</option><option value="1">二进制姿态帧</option><option value="2">二进制紧凑帧</option><option value="3">二进制 IMU 帧</option><option value="4">VOFA JustFloat 6通道</option></select><button id="streamApplyBtn" type="button">切换</button></div>
+              <div class="inline-form"><button id="refreshBtn" type="button">刷新状态</button><button id="pingBtn" type="button">PING</button></div>
+            </div>
+            <div class="adv-sec adv-status">
+              <h3>设备状态</h3>
+              <div class="tiles">
+                <div class="tile"><span>数据流</span><b><em id="stStream" class="chip">未知</em></b></div>
+                <div class="tile"><span>CAN</span><b><em id="stCan" class="chip">未知</em></b></div>
+                <div class="tile"><span>融合率</span><b><span id="stFusion">--</span><small>Hz</small></b></div>
+                <div class="tile"><span>输出频率</span><b><span id="stOut">--</span><small>Hz</small></b></div>
+                <div class="tile tile-wide"><span>状态位</span><b id="stFlags" class="flag-row"><em class="chip">-</em></b></div>
+              </div>
+              <table class="cs-table" id="stStartup">
+                <thead><tr><th>启动配置</th><th>当前</th><th>已保存</th></tr></thead>
+                <tbody>
+                  <tr data-k="mode"><th>融合模式</th><td>--</td><td>--</td></tr>
+                  <tr data-k="fast"><th>快速启动</th><td>--</td><td>--</td></tr>
+                  <tr data-k="init"><th>零偏时间</th><td>--</td><td>--</td></tr>
+                  <tr data-k="range"><th>量程</th><td>--</td><td>--</td></tr>
+                  <tr data-k="rate"><th>输出频率</th><td>--</td><td>--</td></tr>
+                </tbody>
+              </table>
+              <div class="stat-chips" id="stCounters">
+                <span data-k="justFrames">JustFloat<b>0</b></span><span data-k="justResyncs" data-bad="warn">失步<b>0</b></span>
+                <span data-k="binFrames">二进制<b>0</b></span><span data-k="badLengthFrames" data-bad="danger">长度错误<b>0</b></span>
+                <span data-k="crcSkips" data-bad="warn">CRC 跳过<b>0</b></span>
+              </div>
+              <div class="legacy-text" hidden>
+                <small id="streamLabel">数据流：未知</small><small id="modeLabel">融合率：未知 · 输出：未知</small>
+                <small id="startupState">当前启动配置：等待设备读取</small><small id="gyroRangeHint"></small>
+                <small id="flagsLabel">状态位：-</small><small id="statsLabel">JustFloat 0 · 失步 0 · 二进制 0 · 长度错误 0</small>
+              </div>
+            </div>
+            <div class="adv-sec adv-bias" id="biasPanel">
+              <h3>运动零偏（只读）<span id="biasSummary" class="bias-sum">--</span><button id="biasRead" type="button" class="sm" disabled>读取</button></h3>
+              <p id="biasFlags" class="bias-flags">--</p>
+              <div id="biasParams" class="bias-grid"></div>
+              <p id="biasVec" class="bias-vec">零偏 XYZ -- · 残差 --</p>
+              <p id="biasNote" class="bias-note">6 轴没有绝对航向：运动零偏不能消除航向漂移。</p>
+              <p id="biasMsg" class="bias-msg" role="status" aria-live="polite"></p>
+            </div>
+            <div class="adv-sec adv-raw">
+              <h3>原始数据</h3>
+              <table class="raw-table" id="rawTable">
+                <thead><tr><th></th><th>W</th><th>X</th><th>Y</th><th>Z</th></tr></thead>
+                <tbody>
+                  <tr data-k="euler"><th>欧拉角 <small>° · R/P/Y</small></th><td class="na"></td><td>--</td><td>--</td><td>--</td></tr>
+                  <tr data-k="gyr"><th>角速度 <small>dps</small></th><td class="na"></td><td>--</td><td>--</td><td>--</td></tr>
+                  <tr data-k="acc"><th>加速度 <small>m/s²</small></th><td class="na"></td><td>--</td><td>--</td><td>--</td></tr>
+                  <tr data-k="quat"><th>四元数</th><td>--</td><td>--</td><td>--</td><td>--</td></tr>
+                </tbody>
+              </table>
+              <div class="legacy-text" hidden>
+                <b id="yaw2">--</b><b id="pitch2">--</b><b id="roll2">--</b>
+                <b id="gx">--</b><b id="gy">--</b><b id="gz">--</b><b id="ax">--</b><b id="ay">--</b><b id="az">--</b><b id="quat">--</b>
+              </div>
+            </div>
+          </div>
+          <details class="disclosure log-box" id="logPanel">
+            <summary>通信日志<svg class="ic xs"><use href="#i-chevron"/></svg></summary>
+            <div class="log-tools"><button id="clearLog" type="button" class="sm">清空</button><button id="copyLog" type="button" class="sm">复制</button></div>
+            <pre id="log"></pre>
+          </details>
+        </details>
+        <div class="page-foot">
+          <span id="startupDirty" class="dirty" hidden>未保存</span>
+          <span class="fill"></span>
+          <button id="startupDiscard" type="button" disabled>撤销</button>
+          <button id="applyBtn" type="button" class="primary" disabled>保存</button>
+        </div>
+      </section>
+    </main>
+  </div>
+</div>
+
+<!-- 协议状态节点：app.js 仍写入这些元素；ui-shell.js 将其映射为顶栏状态与提示 -->
+<div class="legacy-state" hidden>
+  <span id="linkState" class="badge off">未连接</span>
+  <span id="settingsState" class="badge">未进入设置模式</span>
+  <span id="message">浏览器需使用 HTTPS 或 localhost，并支持 Web Serial。</span>
+  <button id="enterBtn" type="button">进入设置模式</button><button id="exitBtn" type="button" disabled>退出设置模式</button>
+  <p id="startupDraftHint"></p>
+</div>
+<div id="toasts" class="toasts" aria-live="polite"></div>
+
+<script src="/mobile-mock.js?v=20261004startup1"></script>
+<script src="/firmware-upgrade.js?v=20261001fw1-app4"></script>
+<script src="/filter-profile.js?v=20261002zaru1"></script>
+<script src="/zaru-limits.js?v=20261002restore1"></script>
+<script src="/motion-bias.js?v=20261002bias1"></script>
+<script src="/vqf-init.js?v=20261002vqfinit1"></script>
+<script src="/bias-history.js?v=20261002biashist1"></script>
+<script src="/app.js?v=20261004startup1"></script>
+  <script src="/ui-shell.js?v=20261004startup1"></script>
+<script src="/ui-pages.js?v=20261001fw1-app4"></script>
+<script src="/ui-chart.js?v=20261002vqfinit1"></script>
+<script src="/ui-adv.js?v=20261004startup1"></script>
+<script src="/quick-settings.js?v=20261002quick2"></script>
+</body>
+</html>

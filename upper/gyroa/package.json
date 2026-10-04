@@ -1,0 +1,17 @@
+{
+  "name": "gyroa-233688",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22.12.0"
+  },
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "dev": "wrangler dev --port 8833",
+    "deploy": "wrangler deploy"
+  },
+  "devDependencies": {
+    "esbuild": "0.28.2",
+    "wrangler": "4.131.2"
+  }
+}
