@@ -115,6 +115,7 @@ typedef enum
 #define AHRS_FLAG_MAG_DISTURBED    (1U << 2)
 #define AHRS_FLAG_CALIB_DONE       (1U << 3)
 #define AHRS_FLAG_SENSOR_ERROR     (1U << 4)
+#define AHRS_FLAG_VALUE_CLIPPED    (1U << 5) /* compact fixed-point saturated */
 
 /* ACK Status Codes */
 #define AHRS_ACK_SUCCESS           0x00U
@@ -267,7 +268,7 @@ typedef struct
   int16_t roll_x100;     /* roll * 100 (0.01 deg) */
   int16_t pitch_x100;    /* pitch * 100 (0.01 deg) */
   int16_t yaw_x100;      /* yaw * 100 (0.01 deg) */
-  int16_t gz_x10;        /* gz * 10 (0.1 dps) */
+  int16_t gz_x10;        /* 0.1 dps; saturates, flags bit5 marks clipping */
   uint8_t flags;
   uint8_t reserved;
   uint16_t timestamp_ms;
@@ -275,9 +276,9 @@ typedef struct
 
 typedef struct
 {
-  uint32_t fusion_hz;
-  uint32_t out_hz;
-  uint16_t skip_n;
+  uint32_t fusion_hz;    /* configured fusion target, not measured throughput */
+  uint32_t out_hz;       /* configured stream target */
+  uint16_t skip_n;       /* actual cumulative skips, saturates at 65535 */
   int16_t temp_c_x100;
   uint8_t stream_mode;
   uint8_t can_ok;
@@ -342,7 +343,7 @@ uint16_t protocol_pack_attitude(uint8_t *buf, uint16_t capacity, uint8_t seq, fl
 uint16_t protocol_pack_quaternion(uint8_t *buf, uint16_t capacity, uint8_t seq, float qw, float qx, float qy, float qz, uint16_t timestamp_ms);
 uint16_t protocol_pack_compact(uint8_t *buf, uint16_t capacity, uint8_t seq, float roll, float pitch, float yaw, float gz, uint8_t flags, uint16_t timestamp_ms);
 uint16_t protocol_pack_imu(uint8_t *buf, uint16_t capacity, uint8_t seq, float gx, float gy, float gz, float ax, float ay, float az, float temp_c, uint16_t timestamp_ms);
-uint16_t protocol_pack_system_info(uint8_t *buf, uint16_t capacity, uint8_t seq, uint32_t fusion_hz, uint32_t out_hz, uint16_t skip_n, float temp_c, uint8_t stream_mode, uint8_t can_ok);
+uint16_t protocol_pack_system_info(uint8_t *buf, uint16_t capacity, uint8_t seq, uint32_t fusion_hz, uint32_t out_hz, uint32_t skip_n, float temp_c, uint8_t stream_mode, uint8_t can_ok);
 uint16_t protocol_pack_ack(uint8_t *buf, uint16_t capacity, uint8_t seq, uint8_t cmd_id, uint8_t status, uint16_t detail);
 
 #ifdef __cplusplus

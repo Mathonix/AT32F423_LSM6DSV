@@ -123,6 +123,7 @@ static uint8_t vofa_dma[2][VOFA_MAX_BYTES];
 static uint8_t usb_telemetry[VOFA_MAX_BYTES];
 static uint8_t vofa_sel;
 static uint32_t vofa_late;
+static uint32_t app_sample_skips;
 
 static float wrap_deg(float angle)
 {
@@ -774,7 +775,7 @@ static void protocol_frame_received(uint8_t msg_id, uint8_t seq,
         break;
       }
       frame_len = protocol_pack_system_info(frame, sizeof(frame), seq, APP_FUSION_HZ,
-                                             app_output_hz, app_output_div,
+                                             app_output_hz, app_sample_skips,
                                              imu_temp_live.temperature_c,
                                              (uint8_t)(app_outputs[PROTOCOL_PORT(source)].format == OUTPUT_FORMAT_LEGACY ? app_outputs[PROTOCOL_PORT(source)].legacy_mode : 0xFFU),
                                              (uint8_t)((APP_CAN_ENABLE != 0U) && (can_test_live.init_ok != 0U)));
@@ -1514,7 +1515,6 @@ int main(void)
   uint32_t fusion_n = 0; /* monotonic sample sequence; never reset each second */
   uint32_t window_samples = 0;
   uint32_t out_n = 0;
-  uint32_t skip_n = 0;
   uint32_t last_ms;
   uint32_t fusion_hz = 0;
   int err;
@@ -1708,13 +1708,13 @@ int main(void)
 
     if(lsm6dsv_wait_sample(2000U) != 0)
     {
-      skip_n++;
+      app_sample_skips++;
       err_streak++;
       goto recover_or_continue;
     }
     if(lsm6dsv_read_raw(&raw) != 0)
     {
-      skip_n++;
+      app_sample_skips++;
       err_streak++;
       goto recover_or_continue;
     }
@@ -1729,7 +1729,7 @@ int main(void)
     last_sample_cy = now_cy;
     if((fusion_n > 0U) && (dt_cy > DROP_DT_CYCLES))
     {
-      skip_n++;
+      app_sample_skips++;
       err_streak = 0U;
       goto service_tasks;
     }
@@ -1927,7 +1927,7 @@ int main(void)
       vqf_live.mag_disturbed = (uint32_t)vqf_get_mag_dist_detected();
       vqf_live.vqf_us = vqf_us;
       vqf_live.fusion_n = fusion_n;
-      vqf_live.skip_n = skip_n;
+      vqf_live.skip_n = app_sample_skips;
       vqf_live.millis = millis();
       __DMB();
       vqf_live.seq++;
@@ -2007,7 +2007,7 @@ service_tasks:
     {
       app_sample_rebase = 0U;
       last_sample_cy = dwt_cycles();
-      skip_n += (app_flash_pause_us * APP_FUSION_HZ) / 1000000U;
+      app_sample_skips += (app_flash_pause_us * APP_FUSION_HZ) / 1000000U;
     }
 
     {

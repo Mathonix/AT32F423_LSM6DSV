@@ -8,6 +8,7 @@
 
 #include "lsm6dsv.h"
 #include "gyro_range.h"
+#include "spi_wait.h"
 #include "bsp.h"
 #include "at32f423_scfg.h"
 
@@ -111,22 +112,13 @@ static void spi_rx_flush(void)
 
 static int spi_xfer16(uint16_t tx, uint16_t *rx)
 {
-  uint32_t guard = SPI_TIMEOUT;
-
-  while(((SPI1->sts & SPI_I2S_TDBE_FLAG) == 0U) && (guard-- != 0U))
-  {
-  }
-  if(guard == 0U)
+  if(spi_wait_flags(&SPI1->sts, SPI_I2S_TDBE_FLAG, SPI_I2S_TDBE_FLAG, SPI_TIMEOUT))
   {
     return -1;
   }
   SPI1->dt = (uint32_t)tx;
 
-  guard = SPI_TIMEOUT;
-  while(((SPI1->sts & SPI_I2S_RDBF_FLAG) == 0U) && (guard-- != 0U))
-  {
-  }
-  if(guard == 0U)
+  if(spi_wait_flags(&SPI1->sts, SPI_I2S_RDBF_FLAG, SPI_I2S_RDBF_FLAG, SPI_TIMEOUT))
   {
     return -2;
   }
@@ -143,13 +135,8 @@ static int spi_xfer16(uint16_t tx, uint16_t *rx)
 
 static int spi_wait_idle(void)
 {
-  uint32_t guard = SPI_TIMEOUT;
-
-  while((((SPI1->sts & SPI_I2S_TDBE_FLAG) == 0U) ||
-         ((SPI1->sts & SPI_I2S_BF_FLAG) != 0U)) && (guard-- != 0U))
-  {
-  }
-  return (guard == 0U) ? -1 : 0;
+  return spi_wait_flags(&SPI1->sts, SPI_I2S_TDBE_FLAG | SPI_I2S_BF_FLAG,
+                        SPI_I2S_TDBE_FLAG, SPI_TIMEOUT);
 }
 
 static void i2s_mck_off(void)

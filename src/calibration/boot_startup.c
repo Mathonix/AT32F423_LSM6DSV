@@ -35,6 +35,9 @@ void boot_startup_push(boot_startup_t *s, uint32_t now, const float gyro[3], con
 }
 void boot_startup_finish(const boot_startup_t *s, uint32_t now, int allow_fresh, boot_startup_handoff_t *out)
 {
+  boot_startup_t qualified=*s;
+  gyro_startup_calibration_finalize(&qualified.calibration);
+  s=&qualified;
   memset(out,0,sizeof(*out));
   out->magic=BOOT_STARTUP_MAGIC; out->version=BOOT_STARTUP_VERSION;
   out->duration_ms=s->calibration.duration_ms; out->range_dps=s->range_dps;
@@ -44,7 +47,7 @@ void boot_startup_finish(const boot_startup_t *s, uint32_t now, int allow_fresh,
   out->temperature_c=s->temperature_c;
   if(allow_fresh && gyro_startup_calibration_finish_window(&s->calibration, now, s->start_ms,
                                                         out->bias_rad_s,out->gravity_ms2))
-    out->status=BOOT_STARTUP_FRESH;
+    { out->status=BOOT_STARTUP_FRESH; out->rejection_reason=0; }
   else if(out->duration_ms) out->rejection_reason = allow_fresh ?
       gyro_startup_calibration_window_reason(&s->calibration,now,s->start_ms) : 14U;
   out->crc=checksum(out);
@@ -72,7 +75,7 @@ int boot_startup_matches(const boot_startup_handoff_t *data, uint16_t duration, 
      data->crc!=checksum(data) || data->duration_ms!=duration || duration>60000U ||
      data->range_dps!=range || !gyro_range_valid(range) || data->status>BOOT_STARTUP_FRESH) return 0;
   if(data->status==BOOT_STARTUP_HISTORY) return 1;
-  if(!duration || data->samples<duration || data->elapsed_ms<duration || data->rejected_windows ||
+  if(!duration || data->samples<duration || data->elapsed_ms<duration || data->rejection_reason ||
      !isfinite(data->temperature_c)) return 0;
   for(unsigned i=0;i<3;++i)
     if(!isfinite(data->bias_rad_s[i]) || fabsf(data->bias_rad_s[i])>0.017453293f ||

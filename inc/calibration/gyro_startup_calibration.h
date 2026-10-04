@@ -3,23 +3,25 @@
 #include <stdint.h>
 
 typedef struct {
-  uint32_t start_ms, last_ms, samples;
+  uint32_t start_ms, last_ms, samples, seen_samples, accepted_ms;
   uint16_t duration_ms;
   uint8_t complete;
   float gyro_sum[3], acc_sum[3];
-  uint32_t block_start_ms, block_samples, rejected_windows;
+  uint32_t block_start_ms, block_last_ms, block_samples, rejected_windows;
   float gyro_mean[3], gyro_m2[3], acc_mean[3], acc_m2[3], gravity_reference[3];
-  uint8_t gravity_reference_valid, rejection_reason;
+  uint8_t gravity_reference_valid, rejection_reason, block_active, block_bad, last_block_reason;
 } gyro_startup_calibration_t;
 
 void gyro_startup_calibration_init(gyro_startup_calibration_t *state, uint16_t duration_ms);
 /* rad/s and m/s^2. Rest uses block mean/variance and gravity direction;
- * gross motion, invalid samples and acquisition gaps restart the window. */
+ * only qualified blocks enter the weighted mean; bad blocks are discarded. */
 int gyro_startup_calibration_push(gyro_startup_calibration_t *state, uint32_t now_ms,
                                   const float gyro[3], const float acc[3]);
 int gyro_startup_calibration_result(const gyro_startup_calibration_t *state,
                                     float bias[3], float gravity[3]);
-/* Fixed BL deadline: reject movement/gaps instead of extending the window. */
+/* Commit the pending block; no change to the fixed startup deadline. */
+void gyro_startup_calibration_finalize(gyro_startup_calibration_t *state);
+/* At least T samples and ceil(T/2) milliseconds of qualified blocks. */
 int gyro_startup_calibration_finish_window(const gyro_startup_calibration_t *state,
     uint32_t now_ms, uint32_t window_start_ms, float bias[3], float gravity[3]);
 /* Same fixed-deadline validation, with a reason for history fallback. */

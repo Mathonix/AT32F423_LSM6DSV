@@ -1,5 +1,6 @@
 #include "protocol.h"
 #include <string.h>
+#include <math.h>
 
 uint16_t protocol_crc16(const uint8_t *data, uint16_t len)
 {
@@ -232,13 +233,25 @@ uint16_t protocol_pack_quaternion(uint8_t *buf, uint16_t capacity, uint8_t seq, 
   return protocol_pack_frame(buf, capacity, AHRS_MSG_QUATERNION, seq, &payload, (uint8_t)sizeof(payload));
 }
 
+static int16_t compact_scaled(float value, float scale, uint8_t *flags)
+{
+  float scaled=value*scale;
+  if(!isfinite(scaled)) {
+    *flags |= AHRS_FLAG_VALUE_CLIPPED | AHRS_FLAG_SENSOR_ERROR;
+    return 0;
+  }
+  if(scaled>32767.0f) { *flags |= AHRS_FLAG_VALUE_CLIPPED; return INT16_MAX; }
+  if(scaled< -32768.0f) { *flags |= AHRS_FLAG_VALUE_CLIPPED; return INT16_MIN; }
+  return (int16_t)scaled;
+}
+
 uint16_t protocol_pack_compact(uint8_t *buf, uint16_t capacity, uint8_t seq, float roll, float pitch, float yaw, float gz, uint8_t flags, uint16_t timestamp_ms)
 {
   ahrs_payload_compact_t payload;
-  payload.roll_x100 = (int16_t)(roll * 100.0f);
-  payload.pitch_x100 = (int16_t)(pitch * 100.0f);
-  payload.yaw_x100 = (int16_t)(yaw * 100.0f);
-  payload.gz_x10 = (int16_t)(gz * 10.0f);
+  payload.roll_x100 = compact_scaled(roll,100.0f,&flags);
+  payload.pitch_x100 = compact_scaled(pitch,100.0f,&flags);
+  payload.yaw_x100 = compact_scaled(yaw,100.0f,&flags);
+  payload.gz_x10 = compact_scaled(gz,10.0f,&flags);
   payload.flags = flags;
   payload.reserved = 0U;
   payload.timestamp_ms = timestamp_ms;
@@ -259,12 +272,12 @@ uint16_t protocol_pack_imu(uint8_t *buf, uint16_t capacity, uint8_t seq, float g
   return protocol_pack_frame(buf, capacity, AHRS_MSG_IMU_RAW, seq, &payload, (uint8_t)sizeof(payload));
 }
 
-uint16_t protocol_pack_system_info(uint8_t *buf, uint16_t capacity, uint8_t seq, uint32_t fusion_hz, uint32_t out_hz, uint16_t skip_n, float temp_c, uint8_t stream_mode, uint8_t can_ok)
+uint16_t protocol_pack_system_info(uint8_t *buf, uint16_t capacity, uint8_t seq, uint32_t fusion_hz, uint32_t out_hz, uint32_t skip_n, float temp_c, uint8_t stream_mode, uint8_t can_ok)
 {
   ahrs_payload_system_info_t payload;
   payload.fusion_hz = fusion_hz;
   payload.out_hz = out_hz;
-  payload.skip_n = skip_n;
+  payload.skip_n = skip_n>UINT16_MAX ? UINT16_MAX : (uint16_t)skip_n;
   payload.temp_c_x100 = (int16_t)(temp_c * 100.0f);
   payload.stream_mode = stream_mode;
   payload.can_ok = can_ok;

@@ -13,6 +13,8 @@ static bl_io_port_t reply_port, owner_port;
 static uint32_t image_len, image_crc, image_next;
 static uint8_t active;
 static uint8_t boot_allowed, boot_requested;
+/* Keep vectors erased until the complete uploaded image has been verified. */
+static uint8_t image_vectors[8];
 
 uint32_t bl_crc32(const uint8_t *p, uint32_t n)
 {
@@ -71,11 +73,42 @@ static int program_words(uint32_t addr, const uint8_t *p, uint32_t n)
     uint32_t word = 0xFFFFFFFFU;
     uint32_t count = (n - i >= 4U) ? 4U : (n - i);
     memcpy(&word, p + i, count);
+    if(addr + i < BL_APP_BASE + sizeof(image_vectors)) {
+      memcpy(image_vectors + addr + i - BL_APP_BASE, &word, sizeof(word));
+      continue;
+    }
     st = flash_word_program(addr + i, word);
-    if(st != FLASH_OPERATE_DONE) break;
+    if(st != FLASH_OPERATE_DONE || *(const volatile uint32_t *)(uintptr_t)(addr+i) != word) {
+      flash_lock(); return 0;
+    }
   }
   flash_lock();
   return st == FLASH_OPERATE_DONE;
+}
+
+static uint32_t uploaded_crc(void)
+{
+  uint32_t c=0xFFFFFFFFU;
+  const uint8_t *flash=(const uint8_t *)BL_APP_BASE;
+  for(uint32_t i=0;i<image_len;++i) {
+    c ^= i<sizeof(image_vectors) ? image_vectors[i] : flash[i];
+    for(unsigned bit=0;bit<8;++bit) c=(c>>1)^((c&1U)?0xEDB88320U:0U);
+  }
+  return ~c;
+}
+
+static int commit_vectors(void)
+{
+  /* PC first, SP last. Earlier interruptions leave an invalid erased SP. */
+  flash_unlock();
+  for(int i=4;i>=0;i-=4) {
+    uint32_t word; memcpy(&word,image_vectors+i,sizeof(word));
+    if(flash_word_program(BL_APP_BASE+(uint32_t)i,word)!=FLASH_OPERATE_DONE ||
+       *(const volatile uint32_t *)(uintptr_t)(BL_APP_BASE+(uint32_t)i)!=word) {
+      flash_lock(); return 0;
+    }
+  }
+  flash_lock(); return 1;
 }
 
 void bl_protocol_reset(void)
@@ -87,6 +120,7 @@ void bl_protocol_reset(void)
   image_len = 0U;
   image_crc = 0U;
   image_next = 0U;
+  memset(image_vectors,0xFF,sizeof(image_vectors));
   boot_allowed = (uint8_t)valid_app();
   boot_requested = 0U;
 }
@@ -141,6 +175,7 @@ static void handle_frame(bl_io_port_t source, const uint8_t *p, uint16_t n)
       active = 0U; boot_allowed = 0U; boot_requested = 0U;
       owner_port = source;
       image_len = len; image_crc = crc; image_next = 0U;
+      memset(image_vectors,0xFF,sizeof(image_vectors));
       if(!erase_app()) reply(cmd, BL_ST_FLASH, 0U);
       else
       {
@@ -170,16 +205,22 @@ static void handle_frame(bl_io_port_t source, const uint8_t *p, uint16_t n)
   {
     if(!active || image_next != image_len)
       reply(cmd, BL_ST_BAD_PARAM, image_next);
-    else if(bl_crc32((const uint8_t *)BL_APP_BASE, image_len) != image_crc)
+    else if(uploaded_crc() != image_crc)
       reply(cmd, BL_ST_CRC, image_next);
-    else if(!valid_app() ||
-            ((*(const uint32_t *)(BL_APP_BASE + 4U)) & ~1U) >= BL_APP_BASE + image_len)
-      reply(cmd, BL_ST_NO_APP, image_next);
     else
     {
-      active = 0U;
-      boot_allowed = 1U;
-      reply(cmd, BL_ST_OK, image_next);
+      uint32_t sp,pc;
+      memcpy(&sp,image_vectors,4); memcpy(&pc,image_vectors+4,4);
+      if(!bl_app_vectors_valid(sp,pc) || (pc&~1U)>=BL_APP_BASE+image_len)
+        reply(cmd, BL_ST_NO_APP, image_next);
+      else if(!commit_vectors() || !valid_app() ||
+              bl_crc32((const uint8_t *)BL_APP_BASE,image_len)!=image_crc)
+        reply(cmd, BL_ST_FLASH, image_next);
+      else {
+        active = 0U;
+        boot_allowed = 1U;
+        reply(cmd, BL_ST_OK, image_next);
+      }
     }
   }
   else if(cmd == BL_CMD_ABORT)

@@ -6,9 +6,9 @@
 /* Application label: YYYYMMDD and one letter. The first build of a day is
  * "a". Each later build on that same day uses the next letter. */
 #ifdef APP_USER_BL_UPDATE
-#define APP_FIRMWARE_VERSION "20261005b"
+#define APP_FIRMWARE_VERSION "20261005f"
 #else
-#define APP_FIRMWARE_VERSION "20261005a"
+#define APP_FIRMWARE_VERSION "20261005e"
 #endif
 
 #define APP_FUSION_HZ             2000U
@@ -57,7 +57,9 @@
 #define APP_STARTUP_GYR_GROSS_DPS 5.0f
 #define APP_STARTUP_ACC_GROSS_MS2 2.4f
 #define APP_STARTUP_BLOCK_MS     100U
-#define APP_STARTUP_GYR_STD_DPS   0.15f
+/* Measured stationary Y-axis noise is ~0.177 dps at +/-4000 dps.
+ * This is a motion rejection threshold, not the accuracy of the mean. */
+#define APP_STARTUP_GYR_STD_DPS   0.30f
 #define APP_STARTUP_ACC_STD_MS2   0.15f
 /* Persistent gyro-bias history, up to 50 samples per 2 KB slot. The slots
  * sit outside the application image. Version 2 records remain readable. */
