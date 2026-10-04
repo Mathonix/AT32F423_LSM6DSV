@@ -202,6 +202,13 @@ uint16_t protocol_pack_frame(uint8_t *buf, uint16_t capacity, uint8_t msg_id, ui
   return (uint16_t)(AHRS_FRAME_OVERHEAD + len);
 }
 
+uint16_t protocol_pack_device_model(uint8_t *buf, uint16_t capacity, uint8_t seq)
+{
+  static const char model[] = "AT32";
+  return protocol_pack_frame(buf, capacity, AHRS_MSG_DEVICE_MODEL, seq,
+                             model, (uint8_t)(sizeof(model) - 1U));
+}
+
 uint16_t protocol_pack_attitude(uint8_t *buf, uint16_t capacity, uint8_t seq, float roll, float pitch, float yaw, uint8_t flags, uint16_t timestamp_ms)
 {
   ahrs_payload_attitude_t payload;

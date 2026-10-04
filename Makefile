@@ -43,6 +43,7 @@ SRCS := \
   $(SRC_DIR)/drivers/ist8310.c \
   $(SRC_DIR)/calibration/gyro_bias_history.c \
   $(SRC_DIR)/calibration/gyro_startup_calibration.c \
+  $(SRC_DIR)/calibration/boot_startup.c \
   $(SRC_DIR)/calibration/acc_calibration.c \
   $(SRC_DIR)/calibration/acc_six_face.c \
   $(SRC_DIR)/calibration/fusion_settings.c \

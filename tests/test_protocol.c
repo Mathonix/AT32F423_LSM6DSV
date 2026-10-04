@@ -38,6 +38,42 @@ _Static_assert(AHRS_MAX_FRAME_LEN >= AHRS_FRAME_OVERHEAD + sizeof(ahrs_payload_i
 
 static uint32_t callbacks;
 static uint32_t text_callbacks[2], text_frames;
+static uint32_t model_frames;
+
+static void on_model_frame(uint8_t id, uint8_t seq, const uint8_t *data, uint8_t len, void *ctx)
+{
+  assert(seq == (uint8_t)(uintptr_t)ctx);
+  assert(id == AHRS_MSG_DEVICE_MODEL && len == 4);
+  assert(memcmp(data, "AT32", 4) == 0);
+  ++model_frames;
+}
+
+static void test_device_model(void)
+{
+  /* Independent wire examples: CRC-CCITT-FALSE, sequence 1. */
+  const uint8_t query[] = {0xAA,0x55,0x35,0x00,0x01,0xE8,0xF2};
+  const uint8_t reply[] = {0xAA,0x55,0x36,0x04,0x01,0x41,0x54,0x33,0x32,0x67,0x79};
+  uint8_t frame[12];
+  protocol_parser_t parser;
+  assert(protocol_pack_frame(frame, sizeof(frame), AHRS_CMD_QUERY_DEVICE_MODEL, 1, NULL, 0) == sizeof(query));
+  assert(memcmp(frame, query, sizeof(query)) == 0);
+  assert(protocol_pack_device_model(frame, sizeof(frame), 1) == sizeof(reply));
+  assert(memcmp(frame, reply, sizeof(reply)) == 0);
+  for(unsigned seq = 0; seq <= 255; ++seq) {
+    memset(frame, 0xA5, sizeof(frame));
+    assert(protocol_pack_device_model(frame, 10, (uint8_t)seq) == 0);
+    for(unsigned i = 0; i < sizeof(frame); ++i) assert(frame[i] == 0xA5);
+    assert(protocol_pack_device_model(frame, 11, (uint8_t)seq) == 11);
+    assert(frame[11] == 0xA5); /* no trailing NUL or out-of-bounds byte */
+    protocol_parser_init(&parser, on_model_frame, (void *)(uintptr_t)seq);
+    for(unsigned i = 0; i < 11; ++i) protocol_parser_feed_byte(&parser, frame[i]);
+    assert(model_frames == seq + 1 && parser.crc_errors == 0);
+    frame[5] ^= 1;
+    for(unsigned i = 0; i < 11; ++i) protocol_parser_feed_byte(&parser, frame[i]);
+    assert(model_frames == seq + 1 && parser.crc_errors == 1);
+  }
+  assert(protocol_pack_device_model(NULL, 11, 1) == 0);
+}
 
 static void on_vofa(void *ctx)
 {
@@ -147,6 +183,7 @@ static void on_frame(uint8_t id, uint8_t seq, const uint8_t *data, uint8_t len, 
 
 int main(void)
 {
+  test_device_model();
   test_selected_output();
   test_vofa_text_command();
   struct { uint8_t frame[AHRS_MAX_FRAME_LEN]; uint8_t guard[8]; } out;

@@ -120,6 +120,84 @@ static void test_ports(void)
   send_frame(BL_CMD_ABORT, 0, 0, 0, NULL);
   assert(last_status == BL_ST_OK && !bl_protocol_can_boot());
 }
+/* WebUSB is a third, independent transport with the same ownership rules. */
+static void test_webusb_port(void)
+{
+  uint8_t hello[18] = {'B', 'L', 1U, BL_CMD_HELLO};
+  assert(BL_IO_PORT_COUNT == 3 && BL_IO_WEBUSB == 2);
+  bl_protocol_reset();
+  uint32_t before = reply_count;
+  for(uint32_t i = 0; i < 9; ++i)
+  {
+    bl_protocol_feed_from(BL_IO_UART, hello[i]);
+    bl_protocol_feed_from(BL_IO_USB, hello[i]);
+    bl_protocol_feed_from(BL_IO_WEBUSB, hello[i]);
+  }
+  assert(reply_count == before);
+  for(uint32_t i = 9; i < sizeof(hello); ++i) bl_protocol_feed_from(BL_IO_WEBUSB, hello[i]);
+  assert(reply_count == before + 1 && last_port == BL_IO_WEBUSB && last_value == BL_APP_BASE);
+  for(uint32_t i = 9; i < sizeof(hello); ++i) bl_protocol_feed_from(BL_IO_USB, hello[i]);
+  assert(reply_count == before + 2 && last_port == BL_IO_USB);
+  for(uint32_t i = 9; i < sizeof(hello); ++i) bl_protocol_feed_from(BL_IO_UART, hello[i]);
+  assert(reply_count == before + 3 && last_port == BL_IO_UART);
+  bl_protocol_feed_from(BL_IO_PORT_COUNT, 'B');
+  assert(reply_count == before + 3);
+
+  /* One 64-byte bulk packet may carry several back-to-back frames. */
+  uint8_t burst[64];
+  memset(burst, 0x55, sizeof(burst));
+  memcpy(burst, hello, 18); memcpy(burst + 18, hello, 18); memcpy(burst + 36, hello, 18);
+  before = reply_count;
+  for(uint32_t i = 0; i < sizeof(burst); ++i) bl_protocol_feed_from(BL_IO_WEBUSB, burst[i]);
+  assert(reply_count == before + 3 && last_port == BL_IO_WEBUSB);
+
+  uint8_t image[20] = {0};
+  uint32_t vectors[2] = {0x2000BFF0U, BL_APP_BASE + 9U};
+  memcpy(image, vectors, sizeof(vectors));
+  uint32_t crc = bl_crc32(image, sizeof(image));
+  bl_protocol_reset();
+  send_frame_from(BL_IO_WEBUSB, BL_CMD_BEGIN, BL_APP_BASE, sizeof(image), crc, NULL);
+  assert(last_status == BL_ST_OK);
+  uint32_t erased = erase_count, programmed = program_count;
+  const bl_io_port_t others[2] = {BL_IO_UART, BL_IO_USB};
+  for(unsigned k = 0; k < 2; ++k)
+  {
+    send_frame_from(others[k], BL_CMD_HELLO, 0, 0, 0, NULL);
+    assert(last_status == BL_ST_OK && last_value == BL_APP_BASE);
+    send_frame_from(others[k], BL_CMD_BEGIN, BL_APP_BASE, sizeof(image), crc, NULL);
+    assert(last_status == BL_ST_BUSY && erase_count == erased);
+    send_frame_from(others[k], BL_CMD_DATA, BL_APP_BASE, sizeof(image), crc, image);
+    assert(last_status == BL_ST_BUSY && program_count == programmed);
+    send_frame_from(others[k], BL_CMD_END, BL_APP_BASE, sizeof(image), crc, NULL);
+    assert(last_status == BL_ST_BUSY);
+    send_frame_from(others[k], BL_CMD_ABORT, 0, 0, 0, NULL);
+    assert(last_status == BL_ST_BUSY);
+  }
+  send_frame_from(BL_IO_WEBUSB, BL_CMD_DATA, BL_APP_BASE, sizeof(image), crc, image);
+  assert(last_status == BL_ST_OK && last_value == sizeof(image));
+  send_frame_from(BL_IO_WEBUSB, BL_CMD_END, BL_APP_BASE, sizeof(image), crc, NULL);
+  assert(last_status == BL_ST_OK && last_value == sizeof(image) && bl_protocol_can_boot());
+  send_frame_from(BL_IO_USB, BL_CMD_BOOT, 0, 0, 0, NULL);
+  assert(last_status == BL_ST_BUSY && !bl_protocol_boot_requested());
+  send_frame_from(BL_IO_UART, BL_CMD_BOOT, 0, 0, 0, NULL);
+  assert(last_status == BL_ST_BUSY && !bl_protocol_boot_requested());
+  send_frame_from(BL_IO_WEBUSB, BL_CMD_BOOT, 0, 0, 0, NULL);
+  assert(last_status == BL_ST_OK && bl_protocol_boot_requested());
+
+  /* ABORT on WebUSB releases the transfer for CDC. */
+  bl_protocol_reset();
+  send_frame_from(BL_IO_WEBUSB, BL_CMD_BEGIN, BL_APP_BASE, sizeof(image), crc, NULL);
+  assert(last_status == BL_ST_OK);
+  send_frame_from(BL_IO_WEBUSB, BL_CMD_ABORT, 0, 0, 0, NULL);
+  assert(last_status == BL_ST_OK);
+  send_frame_from(BL_IO_USB, BL_CMD_BEGIN, BL_APP_BASE, sizeof(image), crc, NULL);
+  assert(last_status == BL_ST_OK);
+  send_frame_from(BL_IO_WEBUSB, BL_CMD_DATA, BL_APP_BASE, sizeof(image), crc, image);
+  assert(last_status == BL_ST_BUSY);
+  send_frame_from(BL_IO_USB, BL_CMD_ABORT, 0, 0, 0, NULL);
+  assert(last_status == BL_ST_OK);
+  bl_protocol_reset();
+}
 static void test_vectors(void)
 {
   const uint32_t pc = BL_APP_BASE + 0x101;
@@ -213,7 +291,7 @@ int main(void)
 {
   void *flash = test_map_memory(0x08000000U, 0x40000U);
   memset(flash, 0xFF, 0x40000U);
-  test_vectors(); test_upgrade(); test_ports(); test_settings();
+  test_vectors(); test_upgrade(); test_ports(); test_webusb_port(); test_settings();
   device_settings_t saved, loaded;
   assert(device_settings_load(&saved) == 0);
   saved.fast_start = 1;
@@ -290,8 +368,15 @@ int main(void)
   assert(!loaded.fast_start && loaded.gyro_init_ms == 2500);
   before = erase_count; assert(device_settings_save(&loaded) == 0 && erase_count == before);
   saved = loaded; saved.gyro_init_ms = 0;
-  assert(device_settings_save(&saved) != 0 && erase_count == before);
+  assert(device_settings_save(&saved) == 0);
+  assert(device_settings_load(&loaded) == 0 && loaded.gyro_init_ms == 0);
+  saved.gyro_init_ms = 60000;
+  assert(device_settings_save(&saved) == 0);
+  assert(device_settings_load(&loaded) == 0 && loaded.gyro_init_ms == 60000);
+  before = erase_count;
   saved.gyro_init_ms = 60001; assert(device_settings_save(&saved) != 0);
+  assert(erase_count == before);
+  saved.gyro_init_ms = 2500; assert(device_settings_save(&saved) == 0);
   assert(fusion_settings_save_ex(FUSION_MODE_6AXIS, 0x346) == 0);
   assert(device_settings_load(&loaded) == 0 && loaded.gyro_init_ms == 2500 && loaded.can.master_id == 0x123);
   /* V5 migration keeps existing choices; interrupted V6 writes fall back. */

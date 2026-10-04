@@ -269,6 +269,27 @@ static void test_history_pages(void)
   assert(erase_count == erases && slot_version(SLOT1) == 2U);
 }
 
+static void test_nearest_temperature(void)
+{
+  float bias[3]={.001f,.002f,-.003f}, selected[3]={99,99,99}, temperature;
+  clear_flash();
+  assert(!gyro_bias_history_load_nearest(selected,25,&temperature) && selected[0]==99);
+  assert(gyro_bias_history_save_at_temp(bias,20)==0);
+  bias[0]=.004f; assert(gyro_bias_history_save_at_temp(bias,30)==0);
+  assert(gyro_bias_history_load_nearest(selected,50,&temperature));
+  assert(near(selected[0],.004f) && near(temperature,30)); /* outside +/-5 C */
+  assert(gyro_bias_history_load_nearest(selected,25,&temperature));
+  assert(near(selected[0],.004f) && near(temperature,30)); /* newer on tie */
+  assert(gyro_bias_history_load_nearest(selected,21,&temperature));
+  assert(near(selected[0],.001f) && near(temperature,20));
+  assert(!gyro_bias_history_load_nearest(selected,NAN,&temperature));
+  for(unsigned i=0;i<51;++i) {
+    bias[0]=.0001f*i; assert(gyro_bias_history_save_at_temp(bias,40+i)==0);
+  }
+  assert(gyro_bias_history_load_nearest(selected,20,&temperature));
+  assert(near(temperature,41) && near(selected[0],.0001f)); /* ring dropped older */
+}
+
 int main(void)
 {
   void *flash = test_map_memory(0x08000000U, 0x40000U);
@@ -280,6 +301,7 @@ int main(void)
   test_v2_partial_and_failure();
   test_corrupt_and_sequence();
   test_history_pages();
+  test_nearest_temperature();
   test_unmap_memory(flash, 0x40000U);
   puts("gyro bias history: 50-entry ring, v2 migration, failure fallback: OK");
   return 0;

@@ -5,7 +5,7 @@
  * BSS. The application writes the magic immediately before reset; the
  * bootloader reads and clears it before deciding whether to stay in update
  * mode. */
-/* Both GCC linker scripts reserve the top 16 bytes of SRAM. */
+/* Both GCC linker scripts reserve the top 256 bytes of SRAM. */
 #define APP_BOOT_REQUEST_ADDR  0x2000BFF0U
 #define APP_BOOT_REQUEST_MAGIC 0x424F4F54U
 

@@ -112,7 +112,7 @@ static void handle_frame(bl_io_port_t source, const uint8_t *p, uint16_t n)
 
   /* HELLO is read-only. A transfer otherwise belongs to its BEGIN port,
    * including failed writes and the interval between END and BOOT. The
-   * owner can ABORT to release it and restart via the other transport. */
+   * owner can ABORT to release it and restart via another transport. */
   if(cmd != BL_CMD_HELLO && owner_port != BL_IO_PORT_COUNT && owner_port != source)
   {
     reply(cmd, BL_ST_BUSY, image_next);

@@ -1,0 +1,27 @@
+{
+  "name": "gyroa-233688",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22.12.0"
+  },
+  "scripts": {
+    "dev": "wrangler dev --port 8833",
+    "test:app1": "node test/app1.browser.check.mjs",
+    "test:firmware-browser": "node test/firmware-upgrade.browser.check.mjs",
+    "deploy": "wrangler deploy",
+    "build": "node scripts/build.mjs",
+    "test": "node --test test/*.test.mjs",
+    "test:startup": "node test/shared-startup.browser.check.mjs",
+    "test:app4": "node test/app4.browser.check.mjs",
+    "test:quick": "node test/quick-settings.browser.check.mjs",
+    "test:version": "node test/fwver.browser.check.mjs"
+  },
+  "devDependencies": {
+    "esbuild": "0.28.2",
+    "occt-import-js": "0.0.23",
+    "puppeteer-core": "^25.12.0",
+    "three": "0.186.1",
+    "wrangler": "4.131.2"
+  }
+}

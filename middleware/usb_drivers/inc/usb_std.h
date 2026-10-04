@@ -96,6 +96,7 @@ extern "C" {
 #define USB_DESCIPTOR_TYPE_DEVICE_QUALIFIER     6 /*!< usb standard device type qualifier */
 #define USB_DESCIPTOR_TYPE_OTHER_SPEED   7 /*!< usb standard device type other speed */
 #define USB_DESCIPTOR_TYPE_INTERFACE_POWER       8 /*!< usb standard device type interface power */
+#define USB_DESCIPTOR_TYPE_BOS           15 /*!< usb binary device object store (USB 2.01+) */
 
 /**
   * @brief usb standard string type

@@ -22,8 +22,8 @@
 ENTRY(Reset_Handler)
 
 /* Highest address of the user mode stack */
-/* Reserve the last 16 bytes for the boot-request mailbox. */
-_estack = 0x2000BFF0;
+/* Reserve the top 256 bytes for startup handoff and the boot-request mailbox. */
+_estack = 0x2000BF00;
 
 /* Generate a link error if heap and stack don't fit into RAM */
 _Min_Heap_Size = 0x200;      /* required amount of heap  */
@@ -33,7 +33,7 @@ _Min_Stack_Size = 0x400; /* required amount of stack */
 MEMORY
 {
 FLASH (rx)      : ORIGIN = 0x08008000, LENGTH = 208K
-RAM (xrw)       : ORIGIN = 0x20000000, LENGTH = 48K - 16
+RAM (xrw)       : ORIGIN = 0x20000000, LENGTH = 48K - 256
 }
 
 /* Define output sections */

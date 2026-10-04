@@ -87,18 +87,18 @@ ALIGNED_HEAD static uint8_t g_usbd_descriptor[USB_DEVICE_DESC_LEN] ALIGNED_TAIL 
 {
   USB_DEVICE_DESC_LEN,                   /* bLength */
   USB_DESCIPTOR_TYPE_DEVICE,             /* bDescriptorType */
-  0x00,                                  /* bcdUSB */
-  0x02,
-  0x02,                                  /* bDeviceClass */
-  0x00,                                  /* bDeviceSubClass */
-  0x00,                                  /* bDeviceProtocol */
+  LBYTE(USBD_CDC_BCD_USB),               /* bcdUSB 2.10: host reads BOS */
+  HBYTE(USBD_CDC_BCD_USB),
+  0xEF,                                  /* bDeviceClass: miscellaneous (IAD composite) */
+  0x02,                                  /* bDeviceSubClass: common class */
+  0x01,                                  /* bDeviceProtocol: interface association */
   USB_MAX_EP0_SIZE,                      /* bMaxPacketSize */
   LBYTE(USBD_CDC_VENDOR_ID),             /* idVendor */
   HBYTE(USBD_CDC_VENDOR_ID),             /* idVendor */
   LBYTE(USBD_CDC_PRODUCT_ID),            /* idProduct */
   HBYTE(USBD_CDC_PRODUCT_ID),            /* idProduct */
-  0x00,                                  /* bcdDevice rel. 2.00 */
-  0x02,
+  LBYTE(USBD_CDC_BCD_DEVICE),            /* bcdDevice rel. 2.01 (bumped for MS OS 2.0) */
+  HBYTE(USBD_CDC_BCD_DEVICE),
   USB_MFC_STRING,                        /* Index of manufacturer string */
   USB_PRODUCT_STRING,                    /* Index of product string */
   USB_SERIAL_STRING,                     /* Index of serial number string */
@@ -117,12 +117,22 @@ ALIGNED_HEAD static uint8_t g_usbd_configuration[USBD_CDC_CONFIG_DESC_SIZE] ALIG
   USB_DESCIPTOR_TYPE_CONFIGURATION,      /* bDescriptorType: configuration */
   LBYTE(USBD_CDC_CONFIG_DESC_SIZE),          /* wTotalLength: bytes returned */
   HBYTE(USBD_CDC_CONFIG_DESC_SIZE),          /* wTotalLength: bytes returned */
-  0x02,                                  /* bNumInterfaces: 2 interface */
+  USBD_COMPOSITE_NUM_INTERFACES,         /* bNumInterfaces: CDC comm + CDC data + WebUSB */
   0x01,                                  /* bConfigurationValue: configuration value */
   0x00,                                  /* iConfiguration: index of string descriptor describing
                                             the configuration */
   0xC0,                                  /* bmAttributes: self powered */
   0x32,                                  /* MaxPower 100 mA: this current is used for detecting vbus */
+
+  /* IAD: interfaces 0..1 form one CDC ACM function */
+  USB_IAD_DESC_LEN,                      /* bLength */
+  0x0B,                                  /* bDescriptorType: interface association */
+  0x00,                                  /* bFirstInterface */
+  0x02,                                  /* bInterfaceCount */
+  USB_CLASS_CODE_CDC,                    /* bFunctionClass */
+  0x02,                                  /* bFunctionSubClass: ACM */
+  0x01,                                  /* bFunctionProtocol */
+  0x00,                                  /* iFunction */
 
   USB_DEVICE_IF_DESC_LEN,                /* bLength: interface descriptor size */
   USB_DESCIPTOR_TYPE_INTERFACE,          /* bDescriptorType: interface descriptor type */
@@ -191,7 +201,131 @@ ALIGNED_HEAD static uint8_t g_usbd_configuration[USBD_CDC_CONFIG_DESC_SIZE] ALIG
   LBYTE(USBD_CDC_OUT_MAXPACKET_SIZE),
   HBYTE(USBD_CDC_OUT_MAXPACKET_SIZE),        /* wMaxPacketSize: maximum packe size this endpoint */
   0x00,                                  /* bInterval: interval for polling endpoint for data transfers */
+
+  /* interface 2: vendor-specific WebUSB data interface */
+  USB_DEVICE_IF_DESC_LEN,                /* bLength */
+  USB_DESCIPTOR_TYPE_INTERFACE,          /* bDescriptorType */
+  USBD_WEBUSB_INTERFACE,                 /* bInterfaceNumber */
+  0x00,                                  /* bAlternateSetting */
+  0x02,                                  /* bNumEndpoints */
+  0xFF,                                  /* bInterfaceClass: vendor specific */
+  0x00,                                  /* bInterfaceSubClass */
+  0x00,                                  /* bInterfaceProtocol */
+  USB_INTERFACE_STRING,                  /* iInterface: "LSM6DSV WebUSB" */
+
+  USB_DEVICE_EPT_LEN,
+  USB_DESCIPTOR_TYPE_ENDPOINT,
+  USBD_WEBUSB_BULK_IN_EPT,               /* bEndpointAddress: 0x83 */
+  USB_EPT_DESC_BULK,
+  LBYTE(USBD_WEBUSB_MAXPACKET_SIZE),
+  HBYTE(USBD_WEBUSB_MAXPACKET_SIZE),
+  0x00,
+
+  USB_DEVICE_EPT_LEN,
+  USB_DESCIPTOR_TYPE_ENDPOINT,
+  USBD_WEBUSB_BULK_OUT_EPT,              /* bEndpointAddress: 0x03 */
+  USB_EPT_DESC_BULK,
+  LBYTE(USBD_WEBUSB_MAXPACKET_SIZE),
+  HBYTE(USBD_WEBUSB_MAXPACKET_SIZE),
+  0x00,
 };
+
+/* wTotalLength must equal the bytes actually emitted. */
+typedef char usbd_cdc_config_size_check[(sizeof(g_usbd_configuration) == USBD_CDC_CONFIG_DESC_SIZE) ? 1 : -1];
+
+/**
+  * @brief BOS descriptor: one MS OS 2.0 platform capability
+  */
+#if defined ( __ICCARM__ ) /* iar compiler */
+  #pragma data_alignment=4
+#endif
+ALIGNED_HEAD static uint8_t g_usbd_bos[] ALIGNED_TAIL =
+{
+  USBD_BOS_HEADER_LEN,                   /* bLength */
+  USB_DESCIPTOR_TYPE_BOS,                /* bDescriptorType: BOS */
+  LBYTE(USBD_BOS_DESC_SIZE),             /* wTotalLength */
+  HBYTE(USBD_BOS_DESC_SIZE),
+  0x01,                                  /* bNumDeviceCaps */
+
+  USBD_BOS_PLATFORM_CAP_LEN,             /* bLength */
+  0x10,                                  /* bDescriptorType: device capability */
+  0x05,                                  /* bDevCapabilityType: platform */
+  0x00,                                  /* bReserved */
+  /* PlatformCapabilityUUID {D8DD60DF-4589-4CC7-9CD2-659D9E648A9F} */
+  0xDF, 0x60, 0xDD, 0xD8, 0x89, 0x45, 0xC7, 0x4C,
+  0x9C, 0xD2, 0x65, 0x9D, 0x9E, 0x64, 0x8A, 0x9F,
+  (uint8_t)(USBD_MS_OS_20_WINDOWS_VERSION),          /* dwWindowsVersion */
+  (uint8_t)(USBD_MS_OS_20_WINDOWS_VERSION >> 8),
+  (uint8_t)(USBD_MS_OS_20_WINDOWS_VERSION >> 16),
+  (uint8_t)(USBD_MS_OS_20_WINDOWS_VERSION >> 24),
+  LBYTE(USBD_MS_OS_20_DESC_SET_SIZE),    /* wMSOSDescriptorSetTotalLength */
+  HBYTE(USBD_MS_OS_20_DESC_SET_SIZE),
+  USBD_MS_OS_20_VENDOR_CODE,             /* bMS_VendorCode */
+  0x00,                                  /* bAltEnumCode: no alternate enumeration */
+};
+typedef char usbd_bos_size_check[(sizeof(g_usbd_bos) == USBD_BOS_DESC_SIZE) ? 1 : -1];
+
+/**
+  * @brief MS OS 2.0 descriptor set: WinUSB + DeviceInterfaceGUIDs for
+  *        function (interface) 2 only, so the CDC function keeps usbser.
+  */
+#if defined ( __ICCARM__ ) /* iar compiler */
+  #pragma data_alignment=4
+#endif
+ALIGNED_HEAD static uint8_t g_usbd_ms_os_20[] ALIGNED_TAIL =
+{
+  /* set header */
+  LBYTE(USBD_MS_OS_20_SET_HEADER_LEN), HBYTE(USBD_MS_OS_20_SET_HEADER_LEN), /* wLength */
+  0x00, 0x00,                            /* wDescriptorType: MS_OS_20_SET_HEADER_DESCRIPTOR */
+  (uint8_t)(USBD_MS_OS_20_WINDOWS_VERSION),          /* dwWindowsVersion */
+  (uint8_t)(USBD_MS_OS_20_WINDOWS_VERSION >> 8),
+  (uint8_t)(USBD_MS_OS_20_WINDOWS_VERSION >> 16),
+  (uint8_t)(USBD_MS_OS_20_WINDOWS_VERSION >> 24),
+  LBYTE(USBD_MS_OS_20_DESC_SET_SIZE), HBYTE(USBD_MS_OS_20_DESC_SET_SIZE),   /* wTotalLength */
+
+  /* configuration subset header */
+  LBYTE(USBD_MS_OS_20_CFG_SUBSET_LEN), HBYTE(USBD_MS_OS_20_CFG_SUBSET_LEN), /* wLength */
+  0x01, 0x00,                            /* wDescriptorType: MS_OS_20_SUBSET_HEADER_CONFIGURATION */
+  0x00,                                  /* bConfigurationValue: configuration index 0 */
+  0x00,                                  /* bReserved */
+  LBYTE(USBD_MS_OS_20_CFG_SUBSET_TOTAL), HBYTE(USBD_MS_OS_20_CFG_SUBSET_TOTAL), /* wTotalLength */
+
+  /* function subset header: interface 2 (WebUSB vendor interface) */
+  LBYTE(USBD_MS_OS_20_FUNC_SUBSET_LEN), HBYTE(USBD_MS_OS_20_FUNC_SUBSET_LEN), /* wLength */
+  0x02, 0x00,                            /* wDescriptorType: MS_OS_20_SUBSET_HEADER_FUNCTION */
+  USBD_WEBUSB_INTERFACE,                 /* bFirstInterface */
+  0x00,                                  /* bReserved */
+  LBYTE(USBD_MS_OS_20_FUNC_SUBSET_TOTAL), HBYTE(USBD_MS_OS_20_FUNC_SUBSET_TOTAL), /* wSubsetLength */
+
+  /* compatible ID: WINUSB */
+  LBYTE(USBD_MS_OS_20_COMPAT_ID_LEN), HBYTE(USBD_MS_OS_20_COMPAT_ID_LEN), /* wLength */
+  0x03, 0x00,                            /* wDescriptorType: MS_OS_20_FEATURE_COMPATBLE_ID */
+  'W', 'I', 'N', 'U', 'S', 'B', 0x00, 0x00,               /* CompatibleID */
+  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,         /* SubCompatibleID */
+
+  /* registry property: DeviceInterfaceGUIDs (REG_MULTI_SZ) */
+  LBYTE(USBD_MS_OS_20_REG_PROP_LEN), HBYTE(USBD_MS_OS_20_REG_PROP_LEN),   /* wLength */
+  0x04, 0x00,                            /* wDescriptorType: MS_OS_20_FEATURE_REG_PROPERTY */
+  0x07, 0x00,                            /* wPropertyDataType: REG_MULTI_SZ */
+  LBYTE(USBD_MS_OS_20_PROP_NAME_LEN), HBYTE(USBD_MS_OS_20_PROP_NAME_LEN), /* wPropertyNameLength */
+  'D', 0x00, 'e', 0x00, 'v', 0x00, 'i', 0x00, 'c', 0x00, 'e', 0x00,
+  'I', 0x00, 'n', 0x00, 't', 0x00, 'e', 0x00, 'r', 0x00, 'f', 0x00,
+  'a', 0x00, 'c', 0x00, 'e', 0x00, 'G', 0x00, 'U', 0x00, 'I', 0x00,
+  'D', 0x00, 's', 0x00, 0x00, 0x00,
+  LBYTE(USBD_MS_OS_20_PROP_DATA_LEN), HBYTE(USBD_MS_OS_20_PROP_DATA_LEN), /* wPropertyDataLength */
+  '{', 0x00, '7', 0x00, 'B', 0x00, '9', 0x00, '2', 0x00, '6', 0x00,
+  '4', 0x00, '8', 0x00, '6', 0x00, '-', 0x00, '7', 0x00, 'E', 0x00,
+  'E', 0x00, 'E', 0x00, '-', 0x00, '4', 0x00, '9', 0x00, '9', 0x00,
+  'C', 0x00, '-', 0x00, 'B', 0x00, 'F', 0x00, 'F', 0x00, 'C', 0x00,
+  '-', 0x00, '1', 0x00, 'C', 0x00, 'A', 0x00, '5', 0x00, '9', 0x00,
+  'C', 0x00, '7', 0x00, 'D', 0x00, 'D', 0x00, '9', 0x00, 'E', 0x00,
+  'D', 0x00, '}', 0x00, 0x00, 0x00, 0x00, 0x00,
+};
+typedef char usbd_ms_os_20_size_check[(sizeof(g_usbd_ms_os_20) == USBD_MS_OS_20_DESC_SET_SIZE) ? 1 : -1];
+/* A reply that is an exact multiple of the 64-byte EP0 packet would need a
+ * ZLP when wLength is larger; keep both control replies off that edge. */
+typedef char usbd_ms_os_20_zlp_check[((USBD_MS_OS_20_DESC_SET_SIZE % USB_MAX_EP0_SIZE) != 0U &&
+                                      (USBD_BOS_DESC_SIZE % USB_MAX_EP0_SIZE) != 0U) ? 1 : -1];
 
 /**
   * @brief usb string lang id
@@ -248,7 +382,39 @@ static usbd_desc_t serial_descriptor =
   g_string_serial
 };
 
+static usbd_desc_t bos_descriptor =
+{
+  USBD_BOS_DESC_SIZE,
+  g_usbd_bos
+};
+
+static usbd_desc_t ms_os_20_descriptor =
+{
+  USBD_MS_OS_20_DESC_SET_SIZE,
+  g_usbd_ms_os_20
+};
+
 static usbd_desc_t vp_desc;
+
+/**
+  * @brief  get BOS descriptor (GET_DESCRIPTOR type 0x0F)
+  * @param  none
+  * @retval usbd_desc
+  */
+usbd_desc_t *cdc_get_bos_descriptor(void)
+{
+  return &bos_descriptor;
+}
+
+/**
+  * @brief  get MS OS 2.0 descriptor set (vendor request, wIndex 7)
+  * @param  none
+  * @retval usbd_desc
+  */
+usbd_desc_t *cdc_get_ms_os_20_descriptor_set(void)
+{
+  return &ms_os_20_descriptor;
+}
 
 /**
   * @brief  standard usb unicode convert

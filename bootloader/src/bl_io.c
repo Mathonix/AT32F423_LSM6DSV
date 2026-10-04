@@ -15,9 +15,15 @@
 #include "boot_config.h"
 #include "bl_io.h"
 #include <stdint.h>
+#if (USBD_CDC_BCD_DEVICE & 0x0080U) == 0U
+#error "bootloader/inc/usb_conf.h must set the bootloader bcdDevice (bit 7)"
+#endif
 static otg_core_type core;
 static uint8_t usb_packet[64], usb_fifo[512], usb_tx[64];
 static uint16_t usb_fifo_r, usb_fifo_w;
+/* WebUSB interface 2 (EP 0x03 OUT / 0x83 IN): own fifo, parser and IN buffer. */
+static uint8_t webusb_fifo[512], webusb_tx[64];
+static uint16_t webusb_fifo_r, webusb_fifo_w;
 /* The CDC class retains usb_tx until its IN completion interrupt. */
 static int usb_wait_tx(void)
 {
@@ -25,6 +31,17 @@ static int usb_wait_tx(void)
   uint32_t start = DWT->CYCCNT;
   uint32_t timeout = (system_core_clock / 1000U) * 100U;
   while(!cdc->g_tx_completed)
+  {
+    if(!bl_usb_ready() || (uint32_t)(DWT->CYCCNT - start) >= timeout) return 0;
+  }
+  return 1;
+}
+static int webusb_wait_tx(void)
+{
+  cdc_struct_type *cdc = (cdc_struct_type *)core.dev.class_handler->pdata;
+  uint32_t start = DWT->CYCCNT;
+  uint32_t timeout = (system_core_clock / 1000U) * 100U;
+  while(!cdc->g_webusb_tx_completed)
   {
     if(!bl_usb_ready() || (uint32_t)(DWT->CYCCNT - start) >= timeout) return 0;
   }
@@ -40,6 +57,7 @@ void bl_io_deinit(void)
   if(core.usb_reg != 0)
   {
     if(bl_usb_ready()) (void)usb_wait_tx();
+    if(bl_usb_ready()) (void)webusb_wait_tx();
     usb_interrupt_disable(core.usb_reg);
     usbd_disconnect(&core.dev);
   }
@@ -50,9 +68,24 @@ void bl_io_deinit(void)
 void OTGFS1_IRQHandler(void){usbd_irq_handler(&core);}
 int bl_usb_ready(void){return core.dev.dev_config!=0;}
 static void usb_poll_rx(void){uint16_t n,i; if(!bl_usb_ready())return; n=usb_vcp_get_rxdata(&core.dev,usb_packet);for(i=0;i<n;i++){uint16_t next=(uint16_t)((usb_fifo_w+1U)&511U);if(next!=usb_fifo_r){usb_fifo[usb_fifo_w]=usb_packet[i];usb_fifo_w=next;}}}
+/* EP 0x03 is re-armed only after its packet is copied, and only when a whole
+ * packet fits: a busy fifo NAKs the host instead of dropping bytes. */
+static void webusb_poll_rx(void)
+{
+  uint16_t n, i;
+  if(!bl_usb_ready()) return;
+  if((uint16_t)((webusb_fifo_w - webusb_fifo_r) & 511U) > (511U - USBD_WEBUSB_MAXPACKET_SIZE)) return;
+  n = usb_webusb_get_rxdata(&core.dev, usb_packet);
+  for(i = 0U; i < n; i++)
+  {
+    webusb_fifo[webusb_fifo_w] = usb_packet[i];
+    webusb_fifo_w = (uint16_t)((webusb_fifo_w + 1U) & 511U);
+  }
+}
 int bl_io_read(bl_io_port_t *source, uint8_t *b)
 {
   usb_poll_rx();
+  webusb_poll_rx();
   if(usart_flag_get(USART4, USART_ROERR_FLAG) != RESET)
     usart_flag_clear(USART4, USART_ROERR_FLAG);
   if(usart_flag_get(USART4, USART_RDBF_FLAG) != RESET)
@@ -66,6 +99,13 @@ int bl_io_read(bl_io_port_t *source, uint8_t *b)
     *source = BL_IO_USB;
     *b = usb_fifo[usb_fifo_r];
     usb_fifo_r = (uint16_t)((usb_fifo_r+1U)&511U);
+    return 1;
+  }
+  if(webusb_fifo_r != webusb_fifo_w)
+  {
+    *source = BL_IO_WEBUSB;
+    *b = webusb_fifo[webusb_fifo_r];
+    webusb_fifo_r = (uint16_t)((webusb_fifo_r+1U)&511U);
     return 1;
   }
   return 0;
@@ -84,6 +124,20 @@ int bl_io_write_to(bl_io_port_t destination, const uint8_t *p, uint16_t n)
      * wait on the USB endpoint here: an unopened CDC port can stall it. */
     return 0;
   }
+  if(destination == BL_IO_WEBUSB)
+  {
+    /* Replies are 14 bytes, i.e. one short packet: never needs a ZLP. */
+    uint16_t off = 0U;
+    while(off < n && bl_usb_ready())
+    {
+      uint16_t count = (uint16_t)((n-off)>64U ? 64U : (n-off));
+      if(!webusb_wait_tx()) break;
+      for(uint16_t i = 0U; i < count; ++i) webusb_tx[i] = p[off+i];
+      if(usb_webusb_send_data(&core.dev, webusb_tx, count) != SUCCESS) break;
+      off = (uint16_t)(off+count);
+    }
+    return off == n ? 0 : -1;
+  }
   if(destination != BL_IO_USB) return -1;
   uint16_t off = 0U;
   while(off < n && bl_usb_ready())
@@ -96,5 +150,5 @@ int bl_io_write_to(bl_io_port_t destination, const uint8_t *p, uint16_t n)
   }
   return off == n ? 0 : -1;
 }
-void bl_io_task(void){usb_poll_rx();}
+void bl_io_task(void){usb_poll_rx();webusb_poll_rx();}
 

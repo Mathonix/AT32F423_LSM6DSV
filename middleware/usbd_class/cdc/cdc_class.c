@@ -104,6 +104,11 @@ static usb_sts_type class_init_handler(void *udev)
   /* set out endpoint to receive status */
   usbd_ept_recv(pudev, USBD_CDC_BULK_OUT_EPT, pcdc->g_rx_buff, USBD_CDC_OUT_MAXPACKET_SIZE);
 
+  /* interface 2: WebUSB vendor bulk pair */
+  usbd_ept_open(pudev, USBD_WEBUSB_BULK_IN_EPT, EPT_BULK_TYPE, USBD_WEBUSB_MAXPACKET_SIZE);
+  usbd_ept_open(pudev, USBD_WEBUSB_BULK_OUT_EPT, EPT_BULK_TYPE, USBD_WEBUSB_MAXPACKET_SIZE);
+  usbd_ept_recv(pudev, USBD_WEBUSB_BULK_OUT_EPT, pcdc->g_webusb_rx_buff, USBD_WEBUSB_MAXPACKET_SIZE);
+
   return status;
 }
 
@@ -125,6 +130,9 @@ static usb_sts_type class_clear_handler(void *udev)
 
   /* close out endpoint */
   usbd_ept_close(pudev, USBD_CDC_BULK_OUT_EPT);
+
+  usbd_ept_close(pudev, USBD_WEBUSB_BULK_IN_EPT);
+  usbd_ept_close(pudev, USBD_WEBUSB_BULK_OUT_EPT);
 
   return status;
 }
@@ -189,13 +197,30 @@ static usb_sts_type class_setup_handler(void *udev, usb_setup_type *setup)
       switch(setup->bRequest)
       {
         case USB_STD_REQ_GET_DESCRIPTOR:
-          usbd_ctrl_unsupport(pudev);
+          /* The core forwards BOS (type 0x0F) here; everything else stalls. */
+          if((setup->wValue >> 8) == USB_DESCIPTOR_TYPE_BOS &&
+             (setup->wValue & 0xFFU) == 0U &&
+             setup->bmRequestType == (USB_REQ_DIR_DTH | USB_REQ_TYPE_STANDARD | USB_REQ_RECIPIENT_DEVICE) &&
+             setup->wLength != 0U)
+          {
+            usbd_desc_t *bos = cdc_get_bos_descriptor();
+            usbd_ctrl_send(pudev, bos->descriptor, MIN(bos->length, setup->wLength));
+          }
+          else
+          {
+            usbd_ctrl_unsupport(pudev);
+            status = USB_FAIL;
+          }
           break;
         case USB_STD_REQ_GET_INTERFACE:
+          /* every interface (0..2) has only alternate setting 0 */
+          if(setup->wIndex > USBD_WEBUSB_INTERFACE) { usbd_ctrl_unsupport(pudev); break; }
           usbd_ctrl_send(pudev, (uint8_t *)&pcdc->alt_setting, 1);
           break;
         case USB_STD_REQ_SET_INTERFACE:
-          pcdc->alt_setting = setup->wValue;
+          if(setup->wIndex > USBD_WEBUSB_INTERFACE || setup->wValue != 0U)
+          { usbd_ctrl_unsupport(pudev); break; }
+          pcdc->alt_setting = 0U;
           break;
         case USB_STD_REQ_CLEAR_FEATURE:
           break;
@@ -204,6 +229,22 @@ static usb_sts_type class_setup_handler(void *udev, usb_setup_type *setup)
         default:
           usbd_ctrl_unsupport(pudev);
           break;
+      }
+      break;
+    /* vendor request: only the MS OS 2.0 descriptor set (device, IN, wIndex 7) */
+    case USB_REQ_TYPE_VENDOR:
+      if(setup->bmRequestType == (USB_REQ_DIR_DTH | USB_REQ_TYPE_VENDOR | USB_REQ_RECIPIENT_DEVICE) &&
+         setup->bRequest == USBD_MS_OS_20_VENDOR_CODE &&
+         setup->wIndex == USBD_MS_OS_20_DESCRIPTOR_INDEX &&
+         setup->wValue == 0U && setup->wLength != 0U)
+      {
+        usbd_desc_t *set = cdc_get_ms_os_20_descriptor_set();
+        usbd_ctrl_send(pudev, set->descriptor, MIN(set->length, setup->wLength));
+      }
+      else
+      {
+        usbd_ctrl_unsupport(pudev);
+        status = USB_FAIL;
       }
       break;
     default:
@@ -264,8 +305,18 @@ static usb_sts_type class_in_handler(void *udev, uint8_t ept_num)
   /* ...user code...
     trans next packet data
   */
-  usbd_flush_tx_fifo(pudev, ept_num);
-  pcdc->g_tx_completed = 1;
+  ept_num &= 0x7FU;
+  if(ept_num == (USBD_CDC_BULK_IN_EPT & 0x7FU))
+  {
+    usbd_flush_tx_fifo(pudev, ept_num);
+    pcdc->g_tx_completed = 1;
+  }
+  else if(ept_num == (USBD_WEBUSB_BULK_IN_EPT & 0x7FU))
+  {
+    usbd_flush_tx_fifo(pudev, ept_num);
+    pcdc->g_webusb_tx_completed = 1;
+  }
+  /* EP2 (CDC notification) is never armed; ignore anything else */
 
   return status;
 }
@@ -282,11 +333,20 @@ static usb_sts_type class_out_handler(void *udev, uint8_t ept_num)
   usbd_core_type *pudev = (usbd_core_type *)udev;
   cdc_struct_type *pcdc = (cdc_struct_type *)pudev->class_handler->pdata;
 
-  /* get endpoint receive data length  */
-  pcdc->g_rxlen = usbd_get_recv_len(pudev, ept_num);
-
-  /*set recv flag*/
-  pcdc->g_rx_completed = 1;
+  ept_num &= 0x7FU;
+  if(ept_num == USBD_CDC_BULK_OUT_EPT)
+  {
+    /* get endpoint receive data length  */
+    pcdc->g_rxlen = usbd_get_recv_len(pudev, ept_num);
+    /*set recv flag*/
+    pcdc->g_rx_completed = 1;
+  }
+  else if(ept_num == USBD_WEBUSB_BULK_OUT_EPT)
+  {
+    uint32_t n = usbd_get_recv_len(pudev, ept_num);
+    pcdc->g_webusb_rxlen = (uint16_t)(n > USBD_WEBUSB_MAXPACKET_SIZE ? USBD_WEBUSB_MAXPACKET_SIZE : n);
+    pcdc->g_webusb_rx_completed = 1;
+  }
 
   return status;
 }
@@ -350,6 +410,9 @@ static usb_sts_type cdc_struct_init(cdc_struct_type *pcdc)
 {
   pcdc->g_tx_completed = 1;
   pcdc->g_rx_completed = 0;
+  pcdc->g_webusb_tx_completed = 1;
+  pcdc->g_webusb_rx_completed = 0;
+  pcdc->g_webusb_rxlen = 0U;
   pcdc->alt_setting = 0;
   pcdc->g_req = 0U;
   pcdc->g_len = 0U;
@@ -411,6 +474,32 @@ error_status usb_vcp_send_data(void *udev, uint8_t *send_data, uint16_t len)
     status = ERROR;
   }
   return status;
+}
+
+/* WebUSB interface 2: same contract as the VCP helpers above, separate state.
+ * The OUT endpoint is re-armed only after the packet has been copied out, so
+ * the host is NAKed (back-pressured) while the firmware ring is busy. */
+uint16_t usb_webusb_get_rxdata(void *udev, uint8_t *recv_data)
+{
+  usbd_core_type *pudev = (usbd_core_type *)udev;
+  cdc_struct_type *pcdc = (cdc_struct_type *)pudev->class_handler->pdata;
+  uint16_t n;
+  if(pcdc->g_webusb_rx_completed == 0) return 0;
+  pcdc->g_webusb_rx_completed = 0;
+  n = pcdc->g_webusb_rxlen;
+  for(uint16_t i = 0; i < n; ++i) recv_data[i] = pcdc->g_webusb_rx_buff[i];
+  usbd_ept_recv(pudev, USBD_WEBUSB_BULK_OUT_EPT, pcdc->g_webusb_rx_buff, USBD_WEBUSB_MAXPACKET_SIZE);
+  return n;
+}
+
+error_status usb_webusb_send_data(void *udev, uint8_t *send_data, uint16_t len)
+{
+  usbd_core_type *pudev = (usbd_core_type *)udev;
+  cdc_struct_type *pcdc = (cdc_struct_type *)pudev->class_handler->pdata;
+  if(len > USBD_WEBUSB_MAXPACKET_SIZE || !pcdc->g_webusb_tx_completed) return ERROR;
+  pcdc->g_webusb_tx_completed = 0;
+  usbd_ept_send(pudev, USBD_WEBUSB_BULK_IN_EPT, send_data, len);
+  return SUCCESS;
 }
 
 /**

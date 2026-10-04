@@ -18,4 +18,7 @@ int gyro_startup_calibration_push(gyro_startup_calibration_t *state, uint32_t no
                                   const float gyro[3], const float acc[3]);
 int gyro_startup_calibration_result(const gyro_startup_calibration_t *state,
                                     float bias[3], float gravity[3]);
+/* Fixed BL deadline: reject movement/gaps instead of extending the window. */
+int gyro_startup_calibration_finish_window(const gyro_startup_calibration_t *state,
+    uint32_t now_ms, uint32_t window_start_ms, float bias[3], float gravity[3]);
 #endif

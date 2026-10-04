@@ -34,6 +34,8 @@ def main():
          ["-Iinc/fusion", "-Iinc/app", "-DVQF_SINGLE_PRECISION"]),
         ("gyro_startup_calibration", ["tests/test_gyro_startup_calibration.c", "src/calibration/gyro_startup_calibration.c"],
          ["-Iinc/calibration", "-Iinc/app"]),
+        ("boot_startup", ["tests/test_boot_startup.c", "src/calibration/boot_startup.c", "src/calibration/gyro_startup_calibration.c"],
+         ["-Iinc/config", "-Iinc/calibration", "-Iinc/app"]),
         ("protocol", ["tests/test_protocol.c", "src/drivers/protocol.c"], ["-Iinc/telemetry"]),
         ("can_protocol", ["tests/test_can_protocol.c", "src/drivers/can_protocol.c"], ["-Iinc/telemetry", "-Iinc/app"]),
         ("can_driver", ["tests/test_can_driver.c", "src/drivers/can_test.c", "src/drivers/can_protocol.c"],
@@ -49,10 +51,18 @@ def main():
                             "src/calibration/vqf_static_cal.c"],
          ["-Itests/stubs", "-Iinc/calibration", "-Iinc/app"]),
         ("usb_cdc", ["tests/test_usb_cdc.c", "tests/test_memory.c",
-                     "middleware/usbd_class/cdc/cdc_class.c", "middleware/usb_drivers/src/usbd_int.c",
+                     "middleware/usbd_class/cdc/cdc_class.c", "middleware/usbd_class/cdc/cdc_desc.c",
+                     "middleware/usb_drivers/src/usbd_int.c",
                      "middleware/usb_drivers/src/usbd_sdr.c"],
          ["-DAT32F423KCU7_4", "-Wno-pointer-to-int-cast", "-Wno-int-to-pointer-cast",
           "-Wno-unused-parameter"] + ["-I" + p for p in usb_inc]),
+        # Same descriptor sources with the bootloader identity (bootloader/inc first).
+        ("usb_cdc_bootloader", ["tests/test_usb_cdc.c", "tests/test_memory.c",
+                                "middleware/usbd_class/cdc/cdc_class.c", "middleware/usbd_class/cdc/cdc_desc.c",
+                                "middleware/usb_drivers/src/usbd_int.c",
+                                "middleware/usb_drivers/src/usbd_sdr.c"],
+         ["-DAT32F423KCU7_4", "-DUSB_TEST_BOOTLOADER", "-Ibootloader/inc", "-Wno-pointer-to-int-cast",
+          "-Wno-int-to-pointer-cast", "-Wno-unused-parameter"] + ["-I" + p for p in usb_inc]),
     ]
     for name, sources, flags in cases:
         exe = output / (name + (".exe" if os.name == "nt" else ""))

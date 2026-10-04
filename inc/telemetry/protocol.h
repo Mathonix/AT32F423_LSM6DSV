@@ -36,6 +36,7 @@ extern "C" {
 #define AHRS_MSG_ZARU_CONFIG       0x0FU /* active and saved zero-rate-hold limits */
 #define AHRS_MSG_FIRMWARE_INFO     0x32U /* compiled application version text */
 #define AHRS_MSG_BIAS_HISTORY      0x34U /* one page of startup gyro-bias history */
+#define AHRS_MSG_DEVICE_MODEL      0x36U /* ASCII AT32, exactly 4 bytes, no NUL */
 #define AHRS_MSG_ACK               0x90U /* Command Acknowledge */
 
 /* Uplink Command IDs (Host -> MCU) */
@@ -74,8 +75,9 @@ extern "C" {
 #define AHRS_CMD_SET_ZARU          0x2FU /* limits + persist; settings mode, apply live */
 #define AHRS_CMD_RESTORE_ZARU      0x31U /* persist + reserved; settings mode, compiled defaults */
 #define AHRS_CMD_QUERY_BIAS_HISTORY 0x33U /* empty or offset:u16; reply BIAS_HISTORY, no ACK */
+#define AHRS_CMD_QUERY_DEVICE_MODEL 0x35U /* empty; reply DEVICE_MODEL, no ACK */
 
-#define AHRS_CONFIG_VERSION        3U
+#define AHRS_CONFIG_VERSION        4U /* v3 layout; shared BL/init time 0..60000 ms */
 #define AHRS_FIELD_COUNT           9U
 #define AHRS_FIELDS_ALL            0x01FFU
 #define AHRS_FIELDS_ATTITUDE       0x0007U
@@ -325,6 +327,7 @@ void protocol_parser_set_vofa_callback(protocol_parser_t *parser, protocol_vofa_
 void protocol_parser_feed_byte(protocol_parser_t *parser, uint8_t byte);
 
 uint16_t protocol_pack_frame(uint8_t *buf, uint16_t capacity, uint8_t msg_id, uint8_t seq, const void *payload, uint8_t len);
+uint16_t protocol_pack_device_model(uint8_t *buf, uint16_t capacity, uint8_t seq);
 uint16_t protocol_pack_attitude(uint8_t *buf, uint16_t capacity, uint8_t seq, float roll, float pitch, float yaw, uint8_t flags, uint16_t timestamp_ms);
 uint16_t protocol_pack_quaternion(uint8_t *buf, uint16_t capacity, uint8_t seq, float qw, float qx, float qy, float qz, uint16_t timestamp_ms);
 uint16_t protocol_pack_compact(uint8_t *buf, uint16_t capacity, uint8_t seq, float roll, float pitch, float yaw, float gz, uint8_t flags, uint16_t timestamp_ms);

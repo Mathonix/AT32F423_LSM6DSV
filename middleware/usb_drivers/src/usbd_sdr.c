@@ -129,6 +129,10 @@ static usb_sts_type usbd_get_descriptor(usbd_core_type *udev)
     case USB_DESCIPTOR_TYPE_OTHER_SPEED:
       usbd_ctrl_unsupport(udev);
       return ret;
+    case USB_DESCIPTOR_TYPE_BOS:
+      /* BOS (USB 2.01+) is owned by the class layer; it replies or stalls. */
+      udev->class_handler->setup_handler(udev, &udev->setup);
+      return ret;
     default:
       usbd_ctrl_unsupport(udev);
       return ret;

@@ -25,6 +25,8 @@ def main():
     parser.add_argument('--verify-boot-hex', type=Path)
     parser.add_argument('--install-boot-hex', type=Path)
     parser.add_argument('--reset', action='store_true')
+    parser.add_argument('--probe-uid', default='349B8F06B96E',
+                        help='CMSIS-DAP unique_id (default: WCH-Link; MicroLink is 04CF952C7A94199D)')
     args = parser.parse_args()
     if args.output.exists() or (args.snapshot and args.snapshot.exists()):
         raise RuntimeError('Refusing to replace existing evidence/backup')
@@ -37,7 +39,8 @@ def main():
     if verify_boot and (min(verify_boot) != BASE or max(verify_boot) >= APP):
         raise ValueError('Boot comparison image outside 32 KiB Boot region')
     report = {'started_unix': time.time(), 'device_id_expected': hex(0x700a3253)}
-    session = ConnectHelper.session_with_chosen_probe(unique_id='349B8F06B96E', target_override='cortex_m',
+    report['probe_uid'] = args.probe_uid
+    session = ConnectHelper.session_with_chosen_probe(unique_id=args.probe_uid, target_override='cortex_m',
         options={'connect_mode': 'attach', 'frequency': 4000000, 'resume_on_disconnect': False, 'vector_catch': ''})
     if session is None:
         raise RuntimeError('Expected SWD probe absent')

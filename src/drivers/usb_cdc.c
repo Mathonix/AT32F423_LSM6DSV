@@ -24,6 +24,17 @@ static uint8_t rx_ring[USB_RX_RING_SIZE];
 static volatile uint16_t rx_r, rx_w;
 static uint8_t usb_tx_packet[USBD_CDC_IN_MAXPACKET_SIZE];
 
+/* Interface 2 (WebUSB vendor bulk 0x83/0x03): independent rings so a CDC
+ * host and a WebUSB host never block or corrupt each other's stream. */
+#define WEBUSB_TX_RING_SIZE 2048U
+#define WEBUSB_RX_RING_SIZE 512U
+static uint8_t wu_tx_ring[WEBUSB_TX_RING_SIZE];
+static volatile uint16_t wu_tx_r, wu_tx_w;
+static uint8_t wu_rx_packet[USBD_WEBUSB_MAXPACKET_SIZE];
+static uint8_t wu_rx_ring[WEBUSB_RX_RING_SIZE];
+static volatile uint16_t wu_rx_r, wu_rx_w;
+static uint8_t wu_tx_packet[USBD_WEBUSB_MAXPACKET_SIZE];
+
 static uint16_t ring_used(volatile uint16_t r, volatile uint16_t w, uint16_t size)
 {
   return (uint16_t)((w - r) & (size - 1U));
@@ -60,6 +71,7 @@ void usb_cdc_init(void)
   /* Clear application queues before the USB core starts touching the CDC
    * buffers.  This also makes a second init/re-enumeration deterministic. */
   tx_r = tx_w = rx_r = rx_w = 0U;
+  wu_tx_r = wu_tx_w = wu_rx_r = wu_rx_w = 0U;
   /* The bootloader also initializes OTGFS1 before jumping to the app.  A
    * peripheral reset here is required for a clean USB disconnect/reconnect;
    * otherwise the app may inherit stale device/endpoint state and Windows
@@ -99,6 +111,8 @@ int usb_cdc_configured(void)
 void usb_cdc_task(void)
 {
   uint16_t n, i;
+
+  webusb_task();
 
   /* Do not call the class data helpers before SET_CONFIGURATION.  The
    * middleware initializes g_tx_completed/g_rx_completed from the class init
@@ -163,6 +177,74 @@ int usb_cdc_write(const uint8_t *data, uint16_t len)
   tx_w = (uint16_t)(tx_w + len);
   return 0;
 }
+int webusb_configured(void) { return usb_cdc_configured(); }
+
+int webusb_tx_idle(void)
+{
+  cdc_struct_type *pcdc;
+  if(!usb_cdc_configured()) return 1;
+  pcdc = (cdc_struct_type *)otg_core.dev.class_handler->pdata;
+  return wu_tx_r == wu_tx_w && pcdc != NULL && pcdc->g_webusb_tx_completed != 0U;
+}
+
+void webusb_task(void)
+{
+  uint16_t n, i, used;
+  if(otg_core.dev.conn_state != USB_CONN_STATE_CONFIGURED)
+  {
+    wu_tx_r = wu_tx_w;
+    wu_rx_r = wu_rx_w;
+    return;
+  }
+  used = ring_used(wu_tx_r, wu_tx_w, WEBUSB_TX_RING_SIZE);
+  if(used != 0U)
+  {
+    n = (used > USBD_WEBUSB_MAXPACKET_SIZE) ? USBD_WEBUSB_MAXPACKET_SIZE : used;
+    for(i = 0U; i < n; ++i)
+      wu_tx_packet[i] = wu_tx_ring[(wu_tx_r + i) & (WEBUSB_TX_RING_SIZE - 1U)];
+    if(usb_webusb_send_data(&otg_core.dev, wu_tx_packet, n) == SUCCESS)
+      wu_tx_r = (uint16_t)(wu_tx_r + n);
+  }
+  /* Copy the packet out only if it fits; otherwise leave the OUT endpoint
+   * un-armed (host is NAKed) until the parser has drained the ring. */
+  if(ring_used(wu_rx_r, wu_rx_w, WEBUSB_RX_RING_SIZE) <= (WEBUSB_RX_RING_SIZE - 1U - USBD_WEBUSB_MAXPACKET_SIZE))
+  {
+    n = usb_webusb_get_rxdata(&otg_core.dev, wu_rx_packet);
+    for(i = 0U; i < n; ++i)
+    {
+      wu_rx_ring[wu_rx_w] = wu_rx_packet[i];
+      wu_rx_w = (uint16_t)((wu_rx_w + 1U) & (WEBUSB_RX_RING_SIZE - 1U));
+    }
+  }
+}
+
+int webusb_available(void)
+{
+  return (int)ring_used(wu_rx_r, wu_rx_w, WEBUSB_RX_RING_SIZE);
+}
+
+int webusb_read_byte(uint8_t *ch)
+{
+  if(wu_rx_r == wu_rx_w) return 0;
+  if(ch != NULL) *ch = wu_rx_ring[wu_rx_r];
+  wu_rx_r = (uint16_t)((wu_rx_r + 1U) & (WEBUSB_RX_RING_SIZE - 1U));
+  return 1;
+}
+
+int webusb_write(const uint8_t *data, uint16_t len)
+{
+  uint16_t free_n, i;
+  if(data == NULL || len == 0U) return 0;
+  if(otg_core.dev.conn_state != USB_CONN_STATE_CONFIGURED) return -1;
+  free_n = (uint16_t)((WEBUSB_TX_RING_SIZE - 1U) - ring_used(wu_tx_r, wu_tx_w, WEBUSB_TX_RING_SIZE));
+  if(len > free_n) return -1;
+  for(i = 0U; i < len; ++i)
+    wu_tx_ring[(wu_tx_w + i) & (WEBUSB_TX_RING_SIZE - 1U)] = data[i];
+  __DMB();
+  wu_tx_w = (uint16_t)(wu_tx_w + len);
+  return 0;
+}
+
 #include "bsp.h"
 void usb_delay_ms(uint32_t ms) { delay_ms(ms); }
 void usb_delay_us(uint32_t us) { delay_us(us); }

@@ -86,3 +86,31 @@ int gyro_startup_calibration_result(const gyro_startup_calibration_t *s,
   for(unsigned i = 0; i < 3; ++i) { bias[i] = s->gyro_sum[i]; gravity[i] = s->acc_sum[i]; }
   return 1;
 }
+
+int gyro_startup_calibration_finish_window(const gyro_startup_calibration_t *s,
+    uint32_t now, uint32_t start, float bias[3], float gravity[3])
+{
+  if(!s->duration_ms || (uint32_t)(now-start)<s->duration_ms ||
+     s->samples<s->duration_ms || s->rejected_windows ||
+     (uint32_t)(s->start_ms-start)>5U || (uint32_t)(now-s->last_ms)>5U ||
+     (uint32_t)(s->last_ms-s->start_ms)+5U<s->duration_ms) return 0;
+  /* Validate the final partial block as well as the full 100-ms blocks. */
+  if(s->block_samples>1U) {
+    const float gyro_limit=.15f*0.017453292519943295f;
+    for(unsigned i=0;i<3;++i)
+      if(s->gyro_m2[i]/(s->block_samples-1U)>gyro_limit*gyro_limit ||
+         s->acc_m2[i]/(s->block_samples-1U)>.15f*.15f) return 0;
+    if(s->gravity_reference_valid) {
+      float dot=0,a2=0,b2=0;
+      for(unsigned i=0;i<3;++i) {
+        dot+=s->gravity_reference[i]*s->acc_mean[i];
+        a2+=s->gravity_reference[i]*s->gravity_reference[i];
+        b2+=s->acc_mean[i]*s->acc_mean[i];
+      }
+      if(dot<.999847695f*sqrtf(a2*b2)) return 0;
+    }
+  }
+  if(s->samples<2U) return 0;
+  for(unsigned i=0;i<3;++i) { bias[i]=s->gyro_sum[i]; gravity[i]=s->acc_sum[i]; }
+  return 1;
+}

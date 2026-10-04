@@ -408,11 +408,16 @@ void uart_rx_isr(void)
 #if APP_UART_ENABLE
   uint8_t val;
   uint16_t next;
-  /* Read STS before DT to clear the hardware overrun flag. */
-  if(usart_flag_get(PRINT_UART, USART_ROERR_FLAG) != RESET)
-    uart_rx_overruns++;
-  if(usart_flag_get(PRINT_UART, USART_RDBF_FLAG) == RESET) return;
+  /* ROERR is cleared only by reading STS then DT, and it keeps the RDBF
+     interrupt asserted. Sample STS once and always read DT when either flag
+     is set; otherwise a ROERR-without-RDBF state re-fires forever and RX dies. */
+  uint32_t sts = PRINT_UART->sts;
+  if((sts & (USART_RDBF_FLAG | USART_ROERR_FLAG)) == 0U) return;
   val = (uint8_t)usart_data_receive(PRINT_UART);
+  if((sts & USART_ROERR_FLAG) != 0U)
+    uart_rx_overruns++;
+  /* On overrun DT still holds the last valid byte; keep it if RDBF was set. */
+  if((sts & USART_RDBF_FLAG) == 0U) return;
   next = (uint16_t)((uart_rx_write + 1U) & (UART_RX_RING_SIZE - 1U));
   if(next == uart_rx_read)
   {

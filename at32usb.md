@@ -456,3 +456,102 @@ VBUS ignore 配置
 VID_2E3C PID_F401
 USB 串行设备 (COM16)
 ```
+
+## USB Composite + WebUSB（固件 20261003a 起）
+
+应用固件从单一 CDC 改为 **IAD 复合设备**：保留原 CDC 虚拟串口，新增一个厂商自定义 WebUSB 数据接口。板上现有 Bootloader 仍是纯 CDC；源码版 Bootloader（2026-10-03，尚未 SWD 安装）已改为同样的复合设备 + WebUSB，bcdDevice `0x0280`，见 `docs/bootloader-webusb.md`。
+
+### 设备描述符
+
+| 字段 | 值 |
+|---|---|
+| VID:PID | `2E3C:F401`（不变） |
+| bDeviceClass / SubClass / Protocol | `0xEF / 0x02 / 0x01`（Miscellaneous + IAD） |
+| bcdUSB | `0x0210`（20261003b 起；Windows 会请求 BOS，见下文 MS OS 2.0） |
+| bcdDevice | `0x0201`（20261003b 起，原 `0x0200`；用于让 Windows 重新查询 MS OS 描述符） |
+| 序列号 | MCU UID（不变） |
+| bmAttributes / MaxPower | `0xC0` / `0x32`（未改，硬件确认前不改） |
+| 配置描述符 wTotalLength | **98 B**，由 `USBD_CDC_CONFIG_DESC_SIZE` 宏计算，编译期 `sizeof` 校验 + 本机测试逐描述符累加校验 |
+
+### 接口与端点（最终版）
+
+| 接口 | 类 | 端点 | 类型 | 包长 | 用途 |
+|---|---|---|---|---|---|
+| IAD | `0x02/0x02/0x01`，FirstInterface 0，Count 2 | — | — | — | 把接口 0+1 绑成一个 CDC ACM 功能 |
+| 0 | CDC Comm `0x02/0x02/0x01` | `0x82` IN | Interrupt | 8 B | CDC 通知（不发数据） |
+| 1 | CDC Data `0x0A/0x00/0x00` | `0x81` IN / `0x01` OUT | Bulk | 64 B | 串口数据（Web Serial / 上位机） |
+| **2** | **Vendor `0xFF/0x00/0x00`**，iInterface = "LSM6DSV WebUSB" | **`0x83` IN / `0x03` OUT** | **Bulk** | **64 B** | WebUSB 数据（AA55 协议） |
+
+所有接口只有 alt setting 0；`SET_INTERFACE` 对接口 2 只接受 alt 0，接口号 >2 或 alt≠0 会 STALL。CDC 类请求仍只接受 `wIndex == 0`。
+
+FIFO（`usb_conf.h`，单位 word）未改：RX 128，EP0 24，EP1 20，EP2 80，EP3 20（=80 B ≥ 64 B），EP0–3 合计 272 ≤ 320。
+
+### 数据通路
+
+- `usb_cdc.c` 中 WebUSB 有**独立**的 TX 环 2048 B、RX 环 512 B；`webusb_task()` 由 `usb_cdc_task()` 一起调度，同一个 `OTGFS1_IRQHandler`、同一次 `usbd_init`。
+- 每次 IN 传输最多 64 B，**不发 ZLP**；网页应循环 `transferIn(3, 64)`，按字节流解析：一帧可跨多个包，一包可含多帧。
+- OUT 端点只在包被拷入 RX 环后才重新 arm；RX 环不足 64 B 空间时不 arm，主机被 NAK 反压，不丢字节。
+- `main.c` 新增 `PROTOCOL_SOURCE_WEBUSB = 2` 和独立的 `webusb_protocol_parser`，与 UART/CDC 共用 `protocol_frame_received`。**命令回复只回到命令来源的那一路**。该值只在 RAM 中使用，不写 Flash。
+- WebUSB 与 CDC **共用 USB 输出配置**（端口索引 1）。USB 输出打开时，同一帧遥测**同时写入 CDC 和 WebUSB 两个环**；没人读的那一路在环满后丢弃，不影响另一路。
+- 未枚举/断开时两路环都清空，重新连接不会回放旧数据。复位等待条件包含 `webusb_tx_idle()`（仍有 100 ms 超时兜底）。
+- 回复丢包计数：`protocol_reply_drops_webusb`。
+- 协议格式、消息 ID、Flash 格式均未改。
+
+### 平台说明 / 风险
+
+- **Windows**：COM 口由 `usbser` 绑定到 `MI_00`，正常可用；但复合设备的设备实例路径变了，**COM 口号可能会变一次**。20261003a 中接口 2 显示为“无驱动”；**20261003b 起由 MS OS 2.0 描述符自动绑定 WinUSB**（见下节），COM 口不受影响。
+- **Android Chrome**：可直接 `claimInterface(2)` 使用 `0x83/0x03`。
+- **P1（已完成，固件 20261003b）**：MS OS 2.0 描述符集 + WinUSB 兼容 ID，只作用于接口 2。
+- **P2（未做）**：WebUSB BOS 平台能力 + Landing Page URL（不影响 Chrome 使用 WebUSB，只是插入时不弹落地页）。
+
+### 验证
+
+- 本机测试 `tests/test_usb_cdc.c`：设备类 EF/02/01、VID/PID；wTotalLength = 98 = 各描述符 bLength 之和；3 个接口、1 个 IAD、5 个端点地址唯一、包长 ≤64；接口 2 类型 FF/00/00、两个 64 B bulk 端点；EP3 OUT 接收后重新 arm、与 EP1 状态互不影响；EP3 IN 忙状态、EP2 完成被忽略、>64 B 拒绝；SET_INTERFACE 边界；clear/init 关闭 5 个端点并恢复空闲状态。
+- 构建：`make -B DEBUG_BUILD=0 SIX_AXIS=0 all`。
+
+## MS OS 2.0 / WinUSB（固件 20261003b 起）
+
+目的：Windows 免装驱动、自动给 **接口 2（MI_02，"LSM6DSV WebUSB"）** 绑定 WinUSB，Chrome WebUSB / libusb 可直接打开；CDC 功能（MI_00/MI_01）仍由 `usbser` 驱动，COM 口不变。
+
+### 描述符
+
+| 项 | 值 |
+|---|---|
+| bcdUSB | `0x0210`（≥ 0x0201 时 Windows 才会读 BOS） |
+| bcdDevice | `0x0200` → **`0x0201`** |
+| BOS | 33 B = 头 5 B + MS OS 2.0 平台能力 28 B（`bNumDeviceCaps = 1`） |
+| 平台能力 UUID | `{D8DD60DF-4589-4CC7-9CD2-659D9E648A9F}` |
+| dwWindowsVersion | `0x06030000`（Windows 8.1+） |
+| wMSOSDescriptorSetTotalLength | **178 B** |
+| **bMS_VendorCode** | **`0x01`**；bAltEnumCode = 0 |
+| 描述符集结构 | 集合头 10 B → 配置子集头 8 B（配置索引 0）→ **功能子集头 8 B，bFirstInterface = 2** → 兼容 ID `WINUSB` 20 B → 注册表属性 132 B |
+| 注册表属性 | `DeviceInterfaceGUIDs`（REG_MULTI_SZ，UTF-16LE） |
+| **DeviceInterfaceGUID** | **`{7B926486-7EEE-499C-BFFC-1CA59C7DD9ED}`**（固定值，主机程序可用它 `SetupDiGetClassDevs` 枚举） |
+
+因为 WinUSB 兼容 ID 放在**功能子集（接口 2）**里，而不是整机，CDC 功能仍走 usbser。各长度由 `cdc_desc.h` 中的宏计算，`cdc_desc.c` 里有 `sizeof` 编译期校验（BOS 与描述符集），并校验两者都不是 64 B 的整数倍（避免需要 ZLP）。
+
+### 请求处理
+
+- 中间件 `usbd_sdr.c`：`GET_DESCRIPTOR` 类型 `0x0F`（新增 `USB_DESCIPTOR_TYPE_BOS`）转给类层 `class_setup_handler`；其他类型行为不变。
+- 类层 `cdc_class.c`：
+  - 标准 `GET_DESCRIPTOR(BOS)`：只接受 `bmRequestType = 0x80`、`wValue = 0x0F00`、`wLength ≠ 0`，回复 `min(33, wLength)`；其它 STALL。
+  - 厂商请求：只接受 `bmRequestType = 0xC0`（设备、IN）、`bRequest = 0x01`、`wIndex = 7`（MS_OS_20_DESCRIPTOR_INDEX）、`wValue = 0`、`wLength ≠ 0`，回复 `min(178, wLength)`；其它厂商请求（含接口接收者、OUT、其它 bRequest/wIndex）一律 STALL。
+  - CDC 类请求（Line Coding / DTR/RTS）路径不变。
+
+### Windows 缓存
+
+Windows 按 **VID+PID+bcdDevice** 把“是否有 MS OS 描述符”缓存在 `HKLM\SYSTEM\CurrentControlSet\Control\usbflags\2E3CF401xxxx`。旧固件（bcdDevice 0x0200）已被记为“没有”，所以本次把 bcdDevice 改为 `0x0201` 来强制重新查询（无需管理员删注册表）。**以后再改 BOS / MS OS 2.0 内容时，必须再递增 bcdDevice**（宏 `USBD_CDC_BCD_DEVICE`）。
+
+### 测试方法
+
+1. 本机：`python tests/run_native.py`（`test_usb_cdc.c` 的 `test_ms_os_20`：bcdUSB/bcdDevice；经 `usbd_device_request` 读 BOS（5 B 与全长）、UUID、Windows 版本、集合总长 = BOS 字段 = 178、厂商码；厂商请求返回描述符集并逐项解析：子集长度、bFirstInterface = 2、`WINUSB`、属性名/GUID UTF-16 与 MULTI_SZ 结尾、短读；错误厂商请求和非 BOS 描述符 STALL 且不发送数据）。
+2. 刷机后 PowerShell：`Get-PnpDevice -PresentOnly | ? { $_.InstanceId -match 'VID_2E3C' }`，并用 `Get-PnpDeviceProperty -InstanceId <id> DEVPKEY_Device_Service` 确认：MI_00 = `usbser`（USB 串行设备 COMxx），MI_02 = `WINUSB`，均为 Status OK。
+3. pyusb：`pip install pyusb libusb-package`，用 `libusb_package.get_libusb1_backend()` 找 `2E3C:F401`，只 `claim_interface(2)`（不要动 CDC 接口），向 EP `0x03` 发 `0x23` 查询帧，从 EP `0x83` 读并按 AA55 解析，应收到 `0x32` 固件信息与持续的 `0x06` 遥测（约 1000 帧/s）。脚本参考 `C:\Users\Mathonix\at32_webusb_test.py`。
+4. 实测（20261003b）：MI_00 = USB 串行设备 (COM29) / usbser / OK；MI_02 = LSM6DSV WebUSB / WINUSB / OK，`DeviceInterfaceGUIDs` 已写入；pyusb 读到 BOS 33 B、描述符集 178 B，未知厂商请求 STALL；WebUSB 遥测 ≈1021 帧/s；WebUSB 查询只在 WebUSB 收到回复，COM29 查询只在 COM29 收到回复。
+
+## UART RX ROERR 修复（固件 20261003c）
+
+- 现象：App UART（USART4，2 Mbps）在突发接收后 RX 失效：遥测照常发送，但 0x10/0x15/0x23 均无 ACK/回复。
+- 原因：`uart_rx_isr()` 在 ROERR=1、RDBF=0 时直接 return，不读 DT；AT32 的 ROERR 只能靠“读 STS 再读 DT”清除，且会保持 RDBF 中断请求，于是中断反复进入、RX 永久卡死。
+- 修复：ISR 只读一次 STS；RDBF/ROERR 都为 0 才返回；任一置位都读 DT（清 ROERR）；ROERR 计入 `uart_rx_overruns`；仅当 RDBF 置位时把 DT（溢出时为最后一个有效字节）存入环形缓冲。
+- Bootloader（`bootloader/src/bl_io.c`，轮询方式）用 `usart_flag_clear(ROERR)`（内部读 STS+DT）清除溢出，不会卡死，但会丢弃 DT 中的那个字节；bootloader 不能经 App 升级更新，暂不修改。

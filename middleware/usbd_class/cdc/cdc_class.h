@@ -53,6 +53,12 @@ extern "C" {
 #define USBD_CDC_BULK_IN_EPT             0x81
 #define USBD_CDC_BULK_OUT_EPT            0x01
 
+/* Interface 2: vendor-specific WebUSB data interface (class 0xFF/0x00/0x00). */
+#define USBD_WEBUSB_INTERFACE            2U
+#define USBD_WEBUSB_BULK_IN_EPT          0x83
+#define USBD_WEBUSB_BULK_OUT_EPT         0x03
+#define USBD_WEBUSB_MAXPACKET_SIZE       0x40
+
 /**
   * @brief usb cdc in and out max packet size define
   */
@@ -75,6 +81,9 @@ typedef struct
 {
   uint32_t alt_setting;
   uint8_t g_rx_buff[USBD_CDC_OUT_MAXPACKET_SIZE];
+  uint8_t g_webusb_rx_buff[USBD_WEBUSB_MAXPACKET_SIZE];
+  uint16_t g_webusb_rxlen;
+  __IO uint8_t g_webusb_tx_completed, g_webusb_rx_completed;
   uint8_t g_cmd[USBD_CDC_CMD_MAXPACKET_SIZE];
   uint8_t g_req;
   uint16_t g_len, g_rxlen;
@@ -93,6 +102,8 @@ typedef struct
 extern usbd_class_handler cdc_class_handler;
 uint16_t usb_vcp_get_rxdata(void *udev, uint8_t *recv_data);
 error_status usb_vcp_send_data(void *udev, uint8_t *send_data, uint16_t len);
+uint16_t usb_webusb_get_rxdata(void *udev, uint8_t *recv_data);
+error_status usb_webusb_send_data(void *udev, uint8_t *send_data, uint16_t len);
 
 /**
   * @}

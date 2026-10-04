@@ -18,6 +18,7 @@
 #include "acc_calibration.h"
 #include "acc_six_face.h"
 #include "gyro_bias_history.h"
+#include "boot_startup.h"
 #include "gyro_startup_calibration.h"
 #include "vqf_static_cal.h"
 #include "can_test.h"
@@ -135,8 +136,14 @@ static void app_zero_yaw(float current_yaw)
 typedef enum
 {
   PROTOCOL_SOURCE_UART = 0,
-  PROTOCOL_SOURCE_USB = 1
+  PROTOCOL_SOURCE_USB = 1,
+  /* WebUSB (USB interface 2) is a separate transport for replies but shares
+   * the USB output configuration (port index 1). Never persisted. */
+  PROTOCOL_SOURCE_WEBUSB = 2
 } protocol_source_t;
+
+/* Output-config / stream index (0 = UART, 1 = USB) for a transport. */
+#define PROTOCOL_PORT(source) ((source) == PROTOCOL_SOURCE_UART ? 0U : 1U)
 
 /* Non-blocking automatic six-face accelerometer calibration. */
 #if APP_ACC_CAL_ENABLE
@@ -154,6 +161,7 @@ volatile struct {
 
 static protocol_parser_t uart_protocol_parser;
 static protocol_parser_t usb_protocol_parser;
+static protocol_parser_t webusb_protocol_parser;
 static stream_mode_t app_stream_mode = STREAM_MODE_VOFA_3CH;
 static fusion_mode_t app_fusion_mode = FUSION_MODE_9AXIS;
 static device_settings_t app_saved_settings;
@@ -246,9 +254,8 @@ static int app_save_gyro_bias(const float bias[3], float temp_c)
   return result;
 }
 
-/* Same bias fast start would seed. Returns 1 when at least one history entry
- * is inside the temperature window; nearest is their mean, in rad/s. With no
- * match, copies the compiled 0 °/s default and returns 0. */
+/* Prefer the mean of history within the temperature window; otherwise use
+ * the closest valid historical temperature. No history uses compiled defaults. */
 static int app_select_temp_matched_bias(float bias_rad[3], float *matched_temp_c,
                                         float temp_c)
 {
@@ -266,7 +273,6 @@ static int app_select_temp_matched_bias(float bias_rad[3], float *matched_temp_c
 
   (void)latest;
   (void)average;
-  (void)count;
   (void)corrupt;
   if((valid != 0) && (nearest_valid != 0U))
   {
@@ -274,6 +280,7 @@ static int app_select_temp_matched_bias(float bias_rad[3], float *matched_temp_c
     if(matched_temp_c != NULL) *matched_temp_c = nearest_temp_c;
     return 1;
   }
+  if(valid && count && gyro_bias_history_load_nearest(bias_rad,temp_c,matched_temp_c)) return 1;
   bias_rad[0] = APP_GYR_DEFAULT_BIAS_X_DPS * DEG2RAD;
   bias_rad[1] = APP_GYR_DEFAULT_BIAS_Y_DPS * DEG2RAD;
   bias_rad[2] = APP_GYR_DEFAULT_BIAS_Z_DPS * DEG2RAD;
@@ -281,15 +288,19 @@ static int app_select_temp_matched_bias(float bias_rad[3], float *matched_temp_c
   return 0;
 }
 
-volatile uint32_t protocol_reply_drops_uart, protocol_reply_drops_usb;
+volatile uint32_t protocol_reply_drops_uart, protocol_reply_drops_usb, protocol_reply_drops_webusb;
 
 static int protocol_send_frame(protocol_source_t source, const uint8_t *frame, uint16_t len)
 {
-  int result = (source == PROTOCOL_SOURCE_UART) ?
-               uart_control_enqueue(frame, len) : usb_cdc_write(frame, len);
+  int result;
+  /* Replies go back only to the transport the command arrived on. */
+  if(source == PROTOCOL_SOURCE_UART) result = uart_control_enqueue(frame, len);
+  else if(source == PROTOCOL_SOURCE_WEBUSB) result = webusb_write(frame, len);
+  else result = usb_cdc_write(frame, len);
   if(result != 0)
   {
     if(source == PROTOCOL_SOURCE_UART) protocol_reply_drops_uart++;
+    else if(source == PROTOCOL_SOURCE_WEBUSB) protocol_reply_drops_webusb++;
     else protocol_reply_drops_usb++;
   }
   return result;
@@ -714,7 +725,7 @@ static void protocol_frame_received(uint8_t msg_id, uint8_t seq,
       frame_len = protocol_pack_system_info(frame, sizeof(frame), seq, APP_FUSION_HZ,
                                              app_output_hz, app_output_div,
                                              imu_temp_live.temperature_c,
-                                             (uint8_t)(app_outputs[source].format == OUTPUT_FORMAT_LEGACY ? app_outputs[source].legacy_mode : 0xFFU),
+                                             (uint8_t)(app_outputs[PROTOCOL_PORT(source)].format == OUTPUT_FORMAT_LEGACY ? app_outputs[PROTOCOL_PORT(source)].legacy_mode : 0xFFU),
                                              (uint8_t)((APP_CAN_ENABLE != 0U) && (can_test_live.init_ok != 0U)));
       if(frame_len != 0U) protocol_send_frame(source, frame, frame_len);
       break;
@@ -785,6 +796,13 @@ static void protocol_frame_received(uint8_t msg_id, uint8_t seq,
     case AHRS_CMD_QUERY_FIRMWARE_INFO:
       if(len != 0U) protocol_reply_ack(source, seq, msg_id, AHRS_ACK_INVALID_PARAM, 0U);
       else protocol_reply_firmware_info(source, seq);
+      break;
+    case AHRS_CMD_QUERY_DEVICE_MODEL:
+      if(len != 0U) protocol_reply_ack(source, seq, msg_id, AHRS_ACK_INVALID_PARAM, 0U);
+      else {
+        frame_len = protocol_pack_device_model(frame, sizeof(frame), seq);
+        if(frame_len != 0U) (void)protocol_send_frame(source, frame, frame_len);
+      }
       break;
     case AHRS_CMD_QUERY_BIAS_HISTORY: {
       uint16_t offset = 0U;
@@ -930,7 +948,8 @@ static void protocol_frame_received(uint8_t msg_id, uint8_t seq,
         saved.mode = (fusion_mode_t)payload[0]; saved.fast_start = payload[1];
         if(len >= 5U) saved.gyro_init_ms = (uint16_t)payload[3] | ((uint16_t)payload[4] << 8);
         if(len == 7U) saved.gyro_range_dps = (uint16_t)payload[5] | ((uint16_t)payload[6] << 8);
-        if(saved.gyro_init_ms < APP_GYR_INIT_MIN_MS || saved.gyro_init_ms > APP_GYR_INIT_MAX_MS || !gyro_range_valid(saved.gyro_range_dps))
+        saved.fast_start = saved.gyro_init_ms == 0U;
+        if(saved.gyro_init_ms > APP_GYR_INIT_MAX_MS || !gyro_range_valid(saved.gyro_range_dps))
           status = AHRS_ACK_INVALID_PARAM;
         else if(app_save_device_settings(&saved) != 0) status = AHRS_ACK_EXEC_FAILED;
         else app_settings_dirty = (saved.mode != app_fusion_mode || saved.fast_start != app_fast_start || saved.gyro_init_ms != app_gyro_init_ms || saved.gyro_range_dps != app_gyro_range_dps);
@@ -1283,6 +1302,7 @@ static void vofa_send_justfloat(void)
         else vofa_late++;
       } else {
         (void)usb_cdc_write(tx, n);
+        (void)webusb_write(tx, n);
       }
     }
   }
@@ -1394,6 +1414,7 @@ static void app_service_commands(void)
   uint16_t budget = 128U;
   static uint8_t uart_legacy_buf[4], uart_legacy_idx;
   static uint8_t usb_legacy_buf[4], usb_legacy_idx;
+  static uint8_t webusb_legacy_buf[4], webusb_legacy_idx;
   usb_cdc_task();
   while(budget-- && uart_read_byte(&ch)) {
     protocol_parser_feed_byte(&uart_protocol_parser, ch);
@@ -1404,49 +1425,22 @@ static void app_service_commands(void)
     protocol_parser_feed_byte(&usb_protocol_parser, ch);
     legacy_command_feed(ch, usb_legacy_buf, &usb_legacy_idx);
   }
+  budget = 64U;
+  while(budget-- && webusb_read_byte(&ch)) {
+    protocol_parser_feed_byte(&webusb_protocol_parser, ch);
+    legacy_command_feed(ch, webusb_legacy_buf, &webusb_legacy_idx);
+  }
   uart_tx_task();
   if(protocol_reset_pending != RESET_NONE &&
-     ((uart_tx_idle() && usb_cdc_tx_idle()) || (uint32_t)(millis() - reset_requested_ms) >= 100U))
+     ((uart_tx_idle() && usb_cdc_tx_idle() && webusb_tx_idle()) || (uint32_t)(millis() - reset_requested_ms) >= 100U))
     app_perform_reset(protocol_reset_pending);
-}
-
-static int app_collect_startup_bias(float bias[3], float gravity[3], float *temperature)
-{
-  gyro_startup_calibration_t calibration;
-  lsm6dsv_raw_t sample;
-  uint32_t begin = millis();
-  gyro_startup_calibration_init(&calibration, app_gyro_init_ms);
-  gyro_startup_live.status = 1U;
-  gyro_startup_live.duration_ms = app_gyro_init_ms;
-  while((uint32_t)(millis() - begin) < (uint32_t)app_gyro_init_ms + 10000U) {
-    float gyro[3], acc[3];
-    app_service_commands();
-    ws2812_calibration_task(millis());
-    if(lsm6dsv_wait_sample(2000U) != 0 || lsm6dsv_read_raw(&sample) != 0) continue;
-    *temperature = update_temperature(sample.temp_raw);
-    for(unsigned axis = 0; axis < 3; ++axis) {
-      gyro[axis] = gyro_dps_from_raw(axis, sample.gyr[axis], *temperature) * DEG2RAD;
-#if APP_ACC_CAL_ENABLE
-      acc[axis] = acc_calibrate_g(axis, (float)sample.acc[axis] * ACC_G_PER_LSB) * G_TO_MS2;
-#else
-      acc[axis] = (float)sample.acc[axis] * ACC_G_PER_LSB * G_TO_MS2;
-#endif
-    }
-    int complete = gyro_startup_calibration_push(&calibration, millis(), gyro, acc);
-    gyro_startup_live.elapsed_ms = calibration.samples ? (uint32_t)(millis() - calibration.start_ms) : 0;
-    gyro_startup_live.samples = calibration.samples;
-    if(complete && gyro_startup_calibration_result(&calibration, bias, gravity)) {
-      for(unsigned axis = 0; axis < 3; ++axis) gyro_startup_live.bias_dps[axis] = bias[axis] / DEG2RAD;
-      gyro_startup_live.status = 2U;
-      return 1;
-    }
-  }
-  gyro_startup_live.status = 3U;
-  return 0;
 }
 
 int main(void)
 {
+  boot_startup_handoff_t startup_handoff;
+  int startup_handoff_present=boot_startup_take(
+      (volatile boot_startup_handoff_t *)BOOT_STARTUP_ADDR,&startup_handoff);
   SCB->VTOR = 0x08008000U;
   lsm6dsv_raw_t raw;
   float gyr[3];
@@ -1508,9 +1502,14 @@ int main(void)
                        (void *)(uintptr_t)PROTOCOL_SOURCE_USB);
   protocol_parser_set_vofa_callback(&uart_protocol_parser, protocol_vofa_received);
   protocol_parser_set_vofa_callback(&usb_protocol_parser, protocol_vofa_received);
+  protocol_parser_init(&webusb_protocol_parser, protocol_frame_received,
+                       (void *)(uintptr_t)PROTOCOL_SOURCE_WEBUSB);
+  protocol_parser_set_vofa_callback(&webusb_protocol_parser, protocol_vofa_received);
   {
     (void)device_settings_load(&app_saved_settings);
     app_fusion_mode = app_saved_settings.mode;
+    /* Version 4 uses duration as the single startup control. */
+    app_saved_settings.fast_start = app_saved_settings.gyro_init_ms == 0U;
     app_fast_start = app_saved_settings.fast_start;
     app_filter_profile = app_saved_settings.filter_profile;
     app_zaru_limits = app_saved_settings.zaru;
@@ -1561,7 +1560,6 @@ int main(void)
     float acc_avg[3] = {0.0f, 0.0f, G_TO_MS2};
     lsm6dsv_raw_t startup_raw;
     uint8_t seed_history_sigma = 0U;
-    uint8_t seed_cal_sigma = 0U;
     vqf_static_params_t boot_cal;
 
     if(vqf_static_cal_load(&boot_cal) == 0) {
@@ -1569,8 +1567,7 @@ int main(void)
       vqf_set_bias_sigmas(boot_cal.bias_sigma_init_dps, boot_cal.bias_sigma_rest_dps);
     }
 
-    /* Fast start uses this sample immediately; normal start then averages
-     * the full configured stationary window before publishing attitude. */
+    /* Gravity and temperature for fallback; no second startup window. */
     (void)lsm6dsv_wait_sample(2000U);
     if(lsm6dsv_read_raw(&startup_raw) == 0)
     {
@@ -1584,57 +1581,38 @@ int main(void)
 #endif
       }
     }
-    if(vqf_static_cal_source() == VQF_STATIC_CAL_SOURCE_CAL) {
+    int valid_handoff = startup_handoff_present &&
+        boot_startup_matches(&startup_handoff, app_gyro_init_ms, app_gyro_range_dps);
+    gyro_startup_live.elapsed_ms = valid_handoff ? startup_handoff.elapsed_ms : 0U;
+    gyro_startup_live.samples = valid_handoff ? startup_handoff.samples : 0U;
+    if(valid_handoff && startup_handoff.status == BOOT_STARTUP_FRESH) {
+      temp_c = startup_handoff.temperature_c;
       for(i = 0U; i < 3U; ++i) {
-        gyr_bias[i] = boot_cal.gyro_bias_dps[i] * DEG2RAD;
-        acc_avg[i] = boot_cal.acc_mean_ms2[i];
+        gyr_bias[i] = startup_handoff.bias_rad_s[i];
+        acc_avg[i] = startup_handoff.gravity_ms2[i];
+        gyro_startup_live.bias_dps[i] = gyr_bias[i] / DEG2RAD;
       }
-      quick_bias_active = 0U;
-      seed_cal_sigma = 1U;
-    } else if(app_fast_start) {
-    if(app_select_temp_matched_bias(quick_bias, &quick_bias_temp_c, temp_c) == 0)
-    {
-      /* No temperature-matched history: compiled defaults, and the LED
-       * missing-history indication. */
-      bias_no_history = 1U;
-      bias_fallback = 1U;
-    }
-    for(i = 0U; i < 3U; ++i)
-    {
-      quick_bias_initial[i] = quick_bias[i];
-      gyr_bias[i] = quick_bias[i];
-      acc_avg[i] = startup_acc[i];
-    }
-    quick_bias_active = 1U;
-    seed_history_sigma = 1U;
-    } else {
-    /* Normal startup measures a fresh bias. Motion restarts the window.
-     * A failed window takes the fast-start selection for this temperature
-     * and does not append that fallback into the history. */
-    quick_bias[0] = APP_GYR_DEFAULT_BIAS_X_DPS * DEG2RAD;
-    quick_bias[1] = APP_GYR_DEFAULT_BIAS_Y_DPS * DEG2RAD;
-    quick_bias[2] = APP_GYR_DEFAULT_BIAS_Z_DPS * DEG2RAD;
-    for(i = 0U; i < 3U; ++i)
-    {
-      gyr_bias[i] = quick_bias[i];
-      acc_avg[i] = startup_acc[i];
-    }
-    quick_bias_active = 0U;
-    if(app_collect_startup_bias(gyr_bias, acc_avg, &temp_c)) {
+      gyro_startup_live.status = 2U;
       if(app_save_gyro_bias(gyr_bias, temp_c) != 0) bias_history_write_error = 1U;
     } else {
-      if(app_select_temp_matched_bias(quick_bias, &quick_bias_temp_c, temp_c) == 0)
-      {
+      /* T=0, motion, missing/corrupt mailbox, or incomplete sampling:
+       * immediately select history; only fresh results are saved above. */
+      if(app_select_temp_matched_bias(quick_bias, &quick_bias_temp_c, temp_c) == 0) {
         bias_no_history = 1U;
         bias_fallback = 1U;
       }
-      for(i = 0U; i < 3U; ++i) gyr_bias[i] = quick_bias[i];
+      for(i = 0U; i < 3U; ++i) {
+        quick_bias_initial[i] = quick_bias[i];
+        gyr_bias[i] = quick_bias[i];
+        acc_avg[i] = startup_acc[i];
+        gyro_startup_live.bias_dps[i] = gyr_bias[i] / DEG2RAD;
+      }
+      quick_bias_active = 1U;
       seed_history_sigma = 1U;
-    }
+      gyro_startup_live.status = 3U;
     }
     vqf_prime_rest(acc_avg, gyr_bias);
-    if(seed_cal_sigma) vqf_seed_gyr_bias(gyr_bias, boot_cal.bias_sigma_init_dps);
-    else if(seed_history_sigma) vqf_seed_gyr_bias(gyr_bias, bias_fallback ? .50f : .25f);
+    if(seed_history_sigma) vqf_seed_gyr_bias(gyr_bias, bias_fallback ? .50f : .25f);
   }
   vqf_live.seq = 2;
   last_ms = millis();

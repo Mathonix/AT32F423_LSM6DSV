@@ -253,6 +253,22 @@ int gyro_bias_history_load(float latest[3], float average[3], uint32_t *count, u
                                           count, corrupt);
 }
 
+int gyro_bias_history_load_nearest(float bias[3], float temperature_c, float *matched_temperature_c)
+{
+  gyro_bias_record_t record;
+  float best_distance=INFINITY;
+  uint32_t best=0U;
+  if(!bias || !isfinite(temperature_c) || !load_records(&record,NULL,NULL) || !record.count) return 0;
+  for(uint32_t logical=0;logical<record.count;++logical) {
+    uint32_t physical=chrono_index(&record,logical);
+    float distance=fabsf(record.temperature_c[physical]-temperature_c);
+    if(distance<=best_distance) { best_distance=distance; best=physical; }
+  }
+  memcpy(bias,record.bias[best],sizeof(float)*3U);
+  if(matched_temperature_c) *matched_temperature_c=record.temperature_c[best];
+  return 1;
+}
+
 int gyro_bias_history_save_at_temp(const float bias[3], float temperature_c)
 {
   gyro_bias_record_t old_record, next_record, verify_record;

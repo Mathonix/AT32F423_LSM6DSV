@@ -19,6 +19,8 @@ int gyro_bias_history_load_for_temp(float latest[3], float average[3],
                                     uint8_t *nearest_valid, uint32_t *count,
                                     uint8_t *corrupt);
 int gyro_bias_history_save(const float bias[3]);
+/* Closest valid historical temperature, even outside the preferred window. */
+int gyro_bias_history_load_nearest(float bias[3], float temperature_c, float *matched_temperature_c);
 int gyro_bias_history_save_at_temp(const float bias[3], float temperature_c);
 /* Copy samples in oldest-first order. offset 0 is the oldest. record_version
  * is the flash version of the accepted slot (2 or 3), or 0 when none.

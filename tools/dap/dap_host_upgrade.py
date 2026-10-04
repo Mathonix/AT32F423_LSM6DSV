@@ -27,18 +27,19 @@ def main():
     parser.add_argument('--flash', action='store_true')
     parser.add_argument('--hex', type=Path, default=ROOT / 'build/lsm6dsv_spi_test/release-9axis/lsm6dsv_spi_test.hex')
     parser.add_argument('--result-path', type=Path, default=ROOT / 'artifacts/web-host/swd-upgrade.json')
+    parser.add_argument('--probe-uid', default=PROBE, help='CMSIS-DAP probe unique ID')
     args = parser.parse_args()
     mem = parse_hex(args.hex)
     words, start, end = words_from_mem(mem)
     if start != APP or end > END:
         raise RuntimeError('Image is not confined to the application region')
-    session = ConnectHelper.session_with_chosen_probe(unique_id=PROBE, target_override='cortex_m', options={
+    session = ConnectHelper.session_with_chosen_probe(unique_id=args.probe_uid, target_override='cortex_m', options={
         # The firmware uses DWT as its timer. pyOCD's normal disconnect clears
         # DEMCR/TRCENA and freezes that timer; resume manually without disabling it.
         'connect_mode': 'attach', 'frequency': 4000000, 'resume_on_disconnect': False, 'vector_catch': '',
     })
     if session is None:
-        raise RuntimeError('Expected WCH-Link probe not found')
+        raise RuntimeError('Requested CMSIS-DAP probe not found')
     with session:
         t = session.target
         ident = t.read32(0xE0042000)
@@ -73,9 +74,10 @@ def main():
                 raise RuntimeError('Bootloader changed unexpectedly')
             if bytes(t.read_memory_block8(END, 0x4000)) != before[0x3C000:]:
                 raise RuntimeError('Configuration/calibration changed unexpectedly')
-            result = {'probe': PROBE, 'device_id': hex(ident), 'start': hex(start), 'verified_bytes': len(expected),
+            result = {'probe': args.probe_uid, 'device_id': hex(ident), 'start': hex(start), 'verified_bytes': len(expected),
                       'sha256': hashlib.sha256(actual).hexdigest(), 'bootloader_preserved': True,
                       'config_calibration_preserved': True, 'backup': str(backup)}
+            args.result_path.parent.mkdir(parents=True, exist_ok=True)
             args.result_path.write_text(json.dumps(result, indent=2), encoding='utf-8')
             print(json.dumps(result, indent=2)); reset_and_run_after_flash(t)
         finally:

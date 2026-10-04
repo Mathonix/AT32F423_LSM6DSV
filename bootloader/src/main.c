@@ -4,6 +4,13 @@
 #include "boot_request.h"
 #include "bl_io.h"
 #include "bl_protocol.h"
+#include "boot_startup.h"
+#include "fusion_settings.h"
+#include "lsm6dsv.h"
+#include "gyro_range.h"
+#include "acc_calibration.h"
+#include <string.h>
+static boot_cycle_clock_t boot_clock;
 
 /* Use the core cycle counter as a monotonic startup timer.  This avoids
  * counting loop iterations or assuming that one protocol poll is 1 ms. */
@@ -12,14 +19,16 @@ static void boot_timer_init(void)
   CoreDebug->DEMCR |= CoreDebug_DEMCR_TRCENA_Msk;
   DWT->CYCCNT = 0U;
   DWT->CTRL |= DWT_CTRL_CYCCNTENA_Msk;
+  memset(&boot_clock,0,sizeof(boot_clock));
 }
 
 static uint32_t boot_time_ms(void)
 {
   uint32_t cycles_per_ms = system_core_clock / 1000U;
   if(cycles_per_ms == 0U) cycles_per_ms = 1U;
-  return DWT->CYCCNT / cycles_per_ms;
+  return (uint32_t)(boot_cycle_clock_update(&boot_clock,DWT->CYCCNT) / cycles_per_ms);
 }
+uint32_t millis(void) { return boot_time_ms(); }
 
 static int boot_requested(void)
 {
@@ -67,22 +76,53 @@ static void jump_app(void)
 
 int main(void)
 {
+  volatile boot_startup_handoff_t *mailbox=(volatile boot_startup_handoff_t *)BOOT_STARTUP_ADDR;
+  mailbox->magic=0U;
   bl_io_init();
   boot_timer_init();
   bl_protocol_reset();
 
   const int force = boot_requested();
-  const uint32_t deadline = boot_time_ms() + BL_BOOT_TIMEOUT_MS;
+  device_settings_t settings;
+  (void)device_settings_load(&settings);
+  int capture=!force && bl_protocol_can_boot() && settings.gyro_init_ms!=0U;
+  if(capture) {
+    acc_calibration_load();
+    lsm6dsv_spi_init();
+    if(lsm6dsv_init_2khz(settings.gyro_range_dps)!=0) capture=0;
+  }
+  boot_startup_t startup;
+  boot_startup_begin(&startup,boot_time_ms(),settings.gyro_init_ms,settings.gyro_range_dps);
   for(;;)
   {
     uint8_t b;
     bl_io_port_t source;
     bl_io_task();
-    while(bl_io_read(&source, &b))
+    unsigned budget=64U;
+    while(budget-- && bl_io_read(&source, &b)) {
       bl_protocol_feed_from(source, b);
+      /* Never hand a pre-upload calibration to a newly uploaded application. */
+      if(!bl_protocol_can_boot()) capture=0;
+    }
+    uint32_t now=boot_time_ms();
     if(bl_protocol_boot_requested() ||
-       (!force && (int32_t)(boot_time_ms() - deadline) >= 0 &&
-        bl_protocol_can_boot()))
+       (!force && (uint32_t)(now-startup.start_ms)>=settings.gyro_init_ms && bl_protocol_can_boot())) {
+      boot_startup_handoff_t result;
+      boot_startup_finish(&startup,now,capture,&result);
+      boot_startup_publish(mailbox,&result);
+      __DMB();
       jump_app();
+    }
+    if(capture && (uint32_t)(now-startup.start_ms)<settings.gyro_init_ms && lsm6dsv_data_ready()) {
+      lsm6dsv_raw_t raw;
+      if(lsm6dsv_read_raw(&raw)==0) {
+        float gyro[3],acc[3];
+        for(unsigned i=0;i<3;++i) {
+          gyro[i]=(float)raw.gyr[i]*gyro_range_dps_per_lsb(settings.gyro_range_dps)*0.017453292519943295f;
+          acc[i]=acc_calibrate_g(i,(float)raw.acc[i]*.000122f)*9.80665f;
+        }
+        boot_startup_push(&startup,boot_time_ms(),gyro,acc,25.0f+(float)raw.temp_raw/256.0f);
+      }
+    }
   }
 }

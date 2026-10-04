@@ -2,9 +2,9 @@
 
 AT32F423KCU7-4 + LSM6DSV 姿态传感器固件、Bootloader、USB/UART/CAN 输出和状态指示灯。
 
-当前应用版本是 `20261002c`。版本号是日期加一个小写字母：同一天第一版是 `a`，当天再出一版用下一个字母。空命令 `0x23` 回复消息 `0x32`。
+当前应用版本是 `20261003e`。版本号是日期加一个小写字母：同一天第一版是 `a`，当天再出一版用下一个字母。空命令 `0x23` 回复消息 `0x32`；空命令 `0x35` 回复 `0x36` 的四字节 ASCII 型号 `AT32`。
 
-平时烧录九轴构建（`SIX_AXIS=0`）。设备按已保存的设置运行六轴或九轴。快速启动的编译默认是关闭的，设备里还可以单独保存这个开关。
+平时烧录九轴构建（`SIX_AXIS=0`）。设备按已保存的设置运行六轴或九轴。配套新版 BL 与 APP 共用上电启动窗口 T=0～60 秒（默认 2 秒）：升级等待与零偏采集并行，到期采集不合格使用历史零偏；T=0 直接用历史启动。配置 v4 的快速启动标志由 T=0 派生。首次更新 BL 需 SWD，网页升级只更新 APP。详见 [共享启动说明](docs/host-agent-shared-startup.md)。
 
 ## 功能概览
 
@@ -21,6 +21,22 @@ AT32F423KCU7-4 + LSM6DSV 姿态传感器固件、Bootloader、USB/UART/CAN 输�
 - WS2812 工作状态指示；
 - 用户 Bootloader、DAPLink SWD 烧录工具；
 - `upper/Motion_Studio` Tauri + React 桌面上位机。
+- `upper/gyroa` 最新网页版上位机：真实 PCB 模型、USB/UART 升级、输出/CAN、校准、VQF 设置及移动端布局。
+
+## 网页上位机
+
+新版源码在 [upper/gyroa](upper/gyroa/README.md)，目标域名 `gyroa.233688.xyz`，本次仅推送源码，未部署网站。静态源码为 `upper/gyroa/src/public/`，Worker 为 `upper/gyroa/src/index.js`，兼容设备配置 v1～v4；旧 `upper/gyro-live` 保留。
+
+需要 Node.js ≥22.12.0，在 `upper/gyroa` 目录执行：
+
+```sh
+npm ci
+npm run build
+npm test
+npm run dev
+```
+
+本地服务默认 `http://127.0.0.1:8833/`。构建产物 `dist/public`、依赖 `node_modules` 与本地 ZIP 不提交；使用源码构建可获得完整上位机。使用与部署操作见该目录 README，协议及当前实板记录见 [AI 使用指南](docs/AI使用指南.md) 和 [进度交接](progress.md)。
 
 ## 硬件接口
 
@@ -57,16 +73,15 @@ make -B DEBUG_BUILD=0 SIX_AXIS=1 all
 make -B DEBUG_BUILD=0 SIX_AXIS=0 all
 ```
 
-### 快速启动调试版本
+### 历史快速启动调试选项
 
-快速启动是编译期选项。仅在台架验证时开启：
+`DEBUG_BUILD` 仍控制兼容默认标志；在当前配套 BL/APP 中，上电行为以设备保存的 T 为准，使用上位机设为 0 秒可取消普通启动等待：
 
 ```powershell
 make -B DEBUG_BUILD=1 SIX_AXIS=1 all
 ```
 
-- `DEBUG_BUILD=0`：快速启动关闭；
-- `DEBUG_BUILD=1`：快速启动开启；
+- `DEBUG_BUILD=0/1`：兼容代码的快速启动默认标志，不覆盖已保存的共享窗口 T；
 - `SIX_AXIS=1`：强制六轴运行并关闭磁力计融合；
 - `SIX_AXIS=0`：保留九轴磁力计融合能力。
 
@@ -103,7 +118,7 @@ python -u dap_host_upgrade.py --flash
 
 ### 正常启动模式
 
-生产版本默认关闭快速启动：
+当前默认 T=2 秒，BL 在升级等待期间完成采集：
 
 1. 上电后初始化 LSM6DSV；
 2. 丢弃启动初期不稳定样本；
@@ -112,11 +127,11 @@ python -u dap_host_upgrade.py --flash
 5. 计算当前陀螺仪零偏并注入姿态融合算法；
 6. 进入正常姿态输出。
 
-正常启动模式不会直接信任旧的零偏记录，适合产品固件和长期运行场景。
+窗口到期后，采集合格则使用本轮零偏；运动、缺样或噪声超限则立即采用历史，不延长启动窗口或追加 APP 采样。
 
 ### 历史零偏快速启动
 
-调试版本可使用历史零偏快速启动：
+在上位机设 T=0 可使用历史零偏立即启动：
 
 - 优先读取 Flash 中与当前温度匹配的历史零偏；
 - 读取成功后立即开始姿态输出；
@@ -125,7 +140,7 @@ python -u dap_host_upgrade.py --flash
 - 零偏变化达到条件时保存新的温度关联记录；
 - 没有有效历史记录时使用固定默认零偏，并通过灯效提示。
 
-快速启动仅在编译时开启，不建议默认用于生产版本：
+以下为兼容旧流程的编译示例；当前设备上电行为由保存的 T 决定：
 
 ```powershell
 # 关闭快速启动，生产/常规测试
@@ -265,4 +280,4 @@ git diff --cached --stat
 - CAN 外部通信需要正确的 CAN 收发器、终端电阻和总线连接；回环测试不能替代实车总线测试；
 - USB CDC 枚举依赖 USB 时钟、VBUS 检测和 PA11/PA12 硬件连接；
 - 不要把 CAN 帧当成 JustFloat 解析；
-- 生产版本建议保持快速启动关闭，台架验证历史零偏时再使用 `DEBUG_BUILD=1`。
+- 上位机启动窗口默认 2 秒；T=0 使用历史，T>0 采集到期不合格也回退历史，均不追加等待。

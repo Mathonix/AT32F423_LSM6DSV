@@ -173,7 +173,7 @@ function decodePayload(id, payload) {
     const values = Array.from({ length: selectedCount(mask) }, (_, i) => view.getFloat32(4 + 4 * i, true));
     return { type: 'selected', mask, values, ts: view.getUint16(2, true) };
   }
-  const expected = id === MSG.CONFIG ? ({1:18,2:22,3:28}[payload[0]] ?? PAYLOAD_LEN[id]) : PAYLOAD_LEN[id];
+  const expected = id === MSG.CONFIG ? ({1:18,2:22,3:28,4:28}[payload[0]] ?? PAYLOAD_LEN[id]) : PAYLOAD_LEN[id];
   if (expected === undefined) return { type: 'unknown', id, length: payload.length };
   if (payload.length !== expected) return { type: 'badLength', id, length: payload.length, expected };
   const view = new DataView(payload.buffer, payload.byteOffset, payload.length);
@@ -213,9 +213,9 @@ function decodePayload(id, payload) {
         residual:values.slice(6,9),rawEuler:values.slice(9,12),sigma:values[12]};
     }
     case MSG.CONFIG:
-      if (![1, 2, 3].includes(payload[0]) || payload[1] > 1 || payload[2] > 2 || payload[3] > 2 || payload[4] > 1 || payload[5] > 1 ||
-          (payload[0] >= 2 && [18, 20].some((offset) => view.getUint16(offset, true) < 100 || view.getUint16(offset, true) > 60000)) ||
-          (payload[0] === 3 && (!GYRO_RANGES.includes(view.getUint16(22,true)) || !GYRO_RANGES.includes(view.getUint16(24,true)) ||
+      if (![1, 2, 3, 4].includes(payload[0]) || payload[1] > 1 || payload[2] > 2 || payload[3] > 2 || payload[4] > 1 || payload[5] > 1 ||
+          (payload[0] >= 2 && [18, 20].some((offset) => view.getUint16(offset, true) < (payload[0] >= 4 ? 0 : 100) || view.getUint16(offset, true) > 60000)) ||
+          (payload[0] >= 3 && (!GYRO_RANGES.includes(view.getUint16(22,true)) || !GYRO_RANGES.includes(view.getUint16(24,true)) ||
             !validateOutputHz(view.getUint16(26,true),DEFAULT_FUSION_HZ).ok))) return { type: 'unknown', id, length: payload.length };
       return {
         type: 'config', version: payload[0], source: payload[1], activeMode: payload[2], savedMode: payload[3],
@@ -223,9 +223,9 @@ function decodePayload(id, payload) {
         outputs: [10, 14].map((offset) => ({ format: payload[offset], legacyMode: payload[offset + 1], mask: view.getUint16(offset + 2, true) })),
         activeInitMs: payload[0] >= 2 ? view.getUint16(18, true) : null,
         savedInitMs: payload[0] >= 2 ? view.getUint16(20, true) : null,
-        activeRangeDps: payload[0] === 3 ? view.getUint16(22,true) : null,
-        savedRangeDps: payload[0] === 3 ? view.getUint16(24,true) : null,
-        savedOutputHz: payload[0] === 3 ? view.getUint16(26,true) : null,
+        activeRangeDps: payload[0] >= 3 ? view.getUint16(22,true) : null,
+        savedRangeDps: payload[0] >= 3 ? view.getUint16(24,true) : null,
+        savedOutputHz: payload[0] >= 3 ? view.getUint16(26,true) : null,
       };
     case MSG.ACK:
       return { type: 'ack', cmd: payload[0], status: payload[1], detail: view.getUint16(2, true) };
@@ -855,31 +855,36 @@ function outputMask(portIndex) {
 function updateOutputControls() {
   for (let i = 0; i < 2; i++) $('outputPanel' + i).disabled = !running || !deviceConfig || !!pendingOutput;
   $('fastStart').disabled = !setting || !deviceConfig || !(deviceConfig.capabilities & 2) || !!pendingStartup;
-  $('gyroInitSeconds').disabled = !setting || !(deviceConfig?.version >= 2) || !(deviceConfig.capabilities & 16) || $('fastStart').checked || !!pendingStartup;
-  $('gyroRange').disabled = !setting || deviceConfig?.version !== 3 || !(deviceConfig.capabilities & 32) || !!pendingStartup;
+  $('gyroInitSeconds').disabled = !setting || !(deviceConfig?.version >= 2) || !(deviceConfig.capabilities & 16) || (deviceConfig.version < 4 && $('fastStart').checked) || !!pendingStartup;
+  $('gyroRange').disabled = !setting || !(deviceConfig?.version >= 3) || !(deviceConfig.capabilities & 32) || !!pendingStartup;
   $('rateApplyBtn').disabled = !running || !!pendingRate;
   $('canPanel').disabled = !running || !setting || !(deviceConfig?.capabilities & 8) || !canConfig || !canConfig.ready || !!pendingCan;
 }
 
 function fillStartupForm(message) {
-  $('fastStart').checked = !!message.savedFast;
+  $('fastStart').checked = message.version >= 4 ? message.savedInitMs === 0 : !!message.savedFast;
+  $('gyroInitSeconds').min = message.version >= 4 ? '0' : '0.1';
   $('gyroInitSeconds').value = (message.savedInitMs ?? 2000) / 1000;
   $('gyroRange').value = String(message.savedRangeDps ?? 1000);
   const radio = document.querySelector(`input[name="fusion"][value="${message.savedMode}"]`);
   if (radio) radio.checked = true;
 }
 function updateStartupDraftUI() {
-  $('gyroInitRow').hidden = $('fastStart').checked;
+  const combined = deviceConfig?.version >= 4;
+  $('fastStartRow').hidden = !!combined;
+  $('gyroInitRow').hidden = !combined && $('fastStart').checked;
   $('startupDraftHint').textContent = startupFormDirty ? '有未保存的启动修改。保存后在设备重启时生效。' : '';
   $('gyroInitHint').textContent = deviceConfig && (deviceConfig.version < 2 || !(deviceConfig.capabilities & 16))
     ? '当前固件不支持初始化零偏时长，请升级配套固件。'
-    : '重启后保持设备静止，完成此时长的零偏采样后开始输出姿态。';
+    : combined ? '0～60 秒，默认 2 秒。升级等待与零偏采集同时进行；到期采集不合格则使用历史零偏。0 秒直接启动。'
+      : '重启后保持设备静止，完成此时长的零偏采样后开始输出姿态。';
   $('startupDiscard').disabled = !startupFormDirty || !deviceConfig || !!pendingStartup;
-  $('gyroRangeHint').textContent = deviceConfig?.version === 3 && (deviceConfig.capabilities & 32)
+  $('gyroRangeHint').textContent = deviceConfig?.version >= 3 && (deviceConfig.capabilities & 32)
     ? `当前 ±${deviceConfig.activeRangeDps} dps · 已保存 ±${deviceConfig.savedRangeDps} dps；量程在重启时生效。`
     : deviceConfig ? '当前固件固定量程，需升级配套固件才能调节。' : '量程保存后在设备重启时生效。';
 }
 function startupSummary(mode, fast, duration) {
+  if (deviceConfig?.version >= 4) return `${fusionModeName(mode)} / 启动窗口 ${(duration / 1000).toFixed(1)} 秒${duration === 0 ? '（历史零偏）' : ''}`;
   return `${fusionModeName(mode)} / ${fast ? '快速启动开' : `快速启动关${duration === null ? '（旧固件未提供零偏时长）' : ` / 零偏 ${(duration / 1000).toFixed(1)} 秒`}`}`;
 }
 function configureDevice(message) {
@@ -900,7 +905,7 @@ function configureDevice(message) {
   if (!startupFormDirty && !pendingStartup) fillStartupForm(message);
   document.querySelectorAll('input[name="fusion"]').forEach((node) => { node.disabled = !(message.capabilities & 1) && node.value !== '0'; });
   fusionPendingRestart = message.activeMode !== message.savedMode || message.activeFast !== message.savedFast || message.activeInitMs !== message.savedInitMs || message.activeRangeDps !== message.savedRangeDps;
-  $('rateState').textContent = message.version === 3 && (message.capabilities & 64)
+  $('rateState').textContent = message.version >= 3 && (message.capabilities & 64)
     ? `USB / UART：当前 ${message.outHz} Hz · 断电恢复 ${message.savedOutputHz} Hz（设置后自动保存）`
     : '旧固件输出频率仅本次运行有效；升级配套固件后支持重启保留。';
   if (pendingRate?.acked && message.outHz === pendingRate.hz && message.savedOutputHz === pendingRate.hz) {
@@ -1810,21 +1815,24 @@ async function applyMode() {
   }
   if (pendingStartup) return;
   const immediate = $('restartNow').checked;
-  const fast = $('fastStart').checked ? 1 : 0;
+  const combined = deviceConfig?.version >= 4;
+  let fast = $('fastStart').checked ? 1 : 0;
   const supportsDuration = deviceConfig?.version >= 2 && !!(deviceConfig.capabilities & 16);
-  const rangeDps = deviceConfig?.version === 3 && (deviceConfig.capabilities & 32) ? Number($('gyroRange').value) : null;
+  const rangeDps = deviceConfig?.version >= 3 && (deviceConfig.capabilities & 32) ? Number($('gyroRange').value) : null;
   if (rangeDps !== null && !GYRO_RANGES.includes(rangeDps)) { say('请选择有效的陀螺仪量程'); return; }
   let initMs = null;
   if (deviceConfig) {
     if (!fast && !supportsDuration) { say('当前固件不支持普通启动零偏采样，请先升级配套固件'); return; }
     if (supportsDuration) {
-      const seconds = Number($('gyroInitSeconds').value);
+      const durationText = $('gyroInitSeconds').value.trim();
+      const seconds = Number(durationText);
       initMs = Math.round(seconds * 1000);
-      if (!Number.isFinite(seconds) || initMs < 100 || initMs > 60000) {
-        if (!fast) { say('初始化零偏时长须为 0.1～60 秒（默认 2 秒）'); return; }
+      if (!durationText || !Number.isFinite(seconds) || seconds < 0 || seconds > 60 || initMs < (combined ? 0 : 100) || initMs > 60000) {
+        if (combined || !fast) { say(combined ? '启动窗口须为 0～60 秒（默认 2 秒）' : '初始化零偏时长须为 0.1～60 秒（默认 2 秒）'); return; }
         initMs = deviceConfig.savedInitMs;
       }
     }
+    if (combined) fast = initMs === 0 ? 1 : 0;
     startupFormDirty = true;
     pendingStartup = { mode: selectedMode(), fast, initMs, rangeDps, revision: startupFormRevision, acked: false };
     startupAckTimer = setTimeout(() => {
@@ -1873,7 +1881,7 @@ async function applyRate() {
     say(`${check.error}${fusionHz ? '' : `（尚未收到设备状态，按固件默认融合率 APP_FUSION_HZ=${DEFAULT_FUSION_HZ} Hz 校验）`}`);
     return;
   }
-  if (deviceConfig?.version === 3 && (deviceConfig.capabilities & 64)) {
+  if (deviceConfig?.version >= 3 && (deviceConfig.capabilities & 64)) {
     pendingRate = {hz:check.hz,revision:rateFormRevision,acked:false}; updateOutputControls();
     rateAckTimer = setTimeout(() => {pendingRate=null;updateOutputControls();say('未确认输出频率保存，请刷新状态核对设备');},3000);
   }

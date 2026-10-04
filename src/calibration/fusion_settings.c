@@ -103,12 +103,12 @@ static int valid(const settings_record_t *r)
   if(!can_config_valid(&r->can) || r->can.node_id != r->can_node_id) return 0;
   if(r->version == 4U || r->version == 5U) {
     const v5_record_t *old = (const v5_record_t *)r;
-    return (r->version == 4U || (r->gyro_init_ms >= APP_GYR_INIT_MIN_MS && r->gyro_init_ms <= APP_GYR_INIT_MAX_MS)) &&
+    return (r->version == 4U || r->gyro_init_ms <= APP_GYR_INIT_MAX_MS) &&
            old->crc == crc32(old, sizeof(*old) - 4U);
   }
   if(r->version != 6U && r->version != 7U && r->version != SETTINGS_VERSION) return 0;
   if(!gyro_range_valid(r->gyro_range_dps) || !r->output_hz || r->output_hz > APP_FUSION_HZ ||
-     APP_FUSION_HZ % r->output_hz || r->gyro_init_ms < APP_GYR_INIT_MIN_MS ||
+     APP_FUSION_HZ % r->output_hz ||
      r->gyro_init_ms > APP_GYR_INIT_MAX_MS) return 0;
   if(r->version == 6U) {
     const v6_record_t *old = (const v6_record_t *)r;
@@ -197,7 +197,7 @@ int device_settings_save(const device_settings_t *s)
   flash_status_type st;
   uint32_t old_addr = SETTINGS_SLOT1, new_addr, i, word;
   if(!s || s->filter_profile >= FUSION_PROFILE_COUNT || (unsigned)s->mode > FUSION_MODE_9AXIS_RELATIVE || s->can_node_id > 0x7FFU || s->fast_start > 1U ||
-     s->gyro_init_ms < APP_GYR_INIT_MIN_MS || s->gyro_init_ms > APP_GYR_INIT_MAX_MS ||
+     s->gyro_init_ms > APP_GYR_INIT_MAX_MS ||
      !gyro_range_valid(s->gyro_range_dps) || !s->output_hz || s->output_hz > APP_FUSION_HZ || APP_FUSION_HZ % s->output_hz != 0U ||
      !protocol_output_config_valid(&s->outputs[0]) || !protocol_output_config_valid(&s->outputs[1]) ||
      !can_config_valid(&s->can) || s->can.node_id != s->can_node_id ||

@@ -34,14 +34,14 @@
         [c.baud, c.active, c.mask, 0].forEach((x, k) => v.setUint8(o + 6 + k, x));
       });
     })); },
-    config() { return frame(7, this.seq++, le({1:18,2:22,3:28}[this.configVersion], (v) => {
+    config() { return frame(7, this.seq++, le({1:18,2:22,3:28,4:28}[this.configVersion], (v) => {
       [this.configVersion, this.source, this.activeMode, this.savedMode, this.activeFast, this.savedFast, this.capabilities, 0].forEach((x, i) => v.setUint8(i, x));
       v.setUint16(8, this.outHz, true);
       this.outputs.forEach((o, i) => { const at = 10 + 4 * i; v.setUint8(at, o.format); v.setUint8(at + 1, o.legacyMode); v.setUint16(at + 2, o.mask, true); });
       if (this.configVersion >= 2) { v.setUint16(18, this.activeInitMs, true); v.setUint16(20, this.savedInitMs, true); }
-      if (this.configVersion === 3) { v.setUint16(22,this.activeRangeDps,true); v.setUint16(24,this.savedRangeDps,true); v.setUint16(26,this.savedOutputHz,true); }
+      if (this.configVersion >= 3) { v.setUint16(22,this.activeRangeDps,true); v.setUint16(24,this.savedRangeDps,true); v.setUint16(26,this.savedOutputHz,true); }
     })); },
-    reboot() { this.filterProfile=this.savedFilterProfile; this.activeMode = this.savedMode; this.activeFast = this.savedFast; this.activeInitMs = this.savedInitMs; if(this.configVersion===3) {this.activeRangeDps=this.savedRangeDps;this.outHz=this.savedOutputHz;} this.outputs = this.savedOutputs.map((o) => ({ ...o })); this.can = { ...this.savedCan }; this.dirty = 0; this.settings = 0; },
+    reboot() { this.filterProfile=this.savedFilterProfile; this.activeMode = this.savedMode; this.activeFast = this.savedFast; this.activeInitMs = this.savedInitMs; if(this.configVersion>=3) {this.activeRangeDps=this.savedRangeDps;this.outHz=this.savedOutputHz;} this.outputs = this.savedOutputs.map((o) => ({ ...o })); this.can = { ...this.savedCan }; this.dirty = 0; this.settings = 0; },
     ack(cmd, status, detail) { return frame(0x90, this.seq++, le(4, (v) => { v.setUint8(0, cmd); v.setUint8(1, status); v.setUint16(2, detail, true); })); },
     telemetry() {
       const p = this.pose;
@@ -90,7 +90,7 @@
         case 0x11: return this.ack(id, pl.length ? BAD : S, 0);
         case 0x12: return this.ack(id, FAIL, 1);
         case 0x13: if (pl.length !== 1 || pl[0] > 4) return this.ack(id, BAD, this.streamMode); this.streamMode = pl[0]; if (this.extended) this.outputs.forEach((o) => { o.format = 2; o.legacyMode = pl[0]; }); return this.ack(id, S, this.streamMode);
-        case 0x1d: { const hz = pl[0] | (pl[1] << 8); if (pl.length !== 2 || !hz || hz > this.fusionHz || this.fusionHz % hz) return this.ack(id, BAD, this.outHz); if(this.configVersion===3 && this.failSave) return this.ack(id,FAIL,this.outHz); this.outHz = hz; if(this.configVersion===3) {this.savedOutputHz=hz;return Uint8Array.from([...this.ack(id,S,hz),...this.config()]);} return this.ack(id, S, hz); }
+        case 0x1d: { const hz = pl[0] | (pl[1] << 8); if (pl.length !== 2 || !hz || hz > this.fusionHz || this.fusionHz % hz) return this.ack(id, BAD, this.outHz); if(this.configVersion>=3 && this.failSave) return this.ack(id,FAIL,this.outHz); this.outHz = hz; if(this.configVersion>=3) {this.savedOutputHz=hz;return Uint8Array.from([...this.ack(id,S,hz),...this.config()]);} return this.ack(id, S, hz); }
         case 0x14: return frame(0x05, seq, le(16, (v) => { v.setUint32(0, this.fusionHz, true); v.setUint32(4, this.outHz, true); v.setUint16(8, this.fusionHz / this.outHz, true); v.setUint16(10, i16(this.pose.temp * 100), true); v.setUint8(12, this.extended && this.outputs[this.source].format !== 2 ? 255 : this.streamMode); v.setUint8(13, 1); }));
         case 0x17: this.settings = 1; return this.ack(id, S, 0);
         case 0x18: this.settings = 0; return this.ack(id, S, this.dirty);
@@ -103,7 +103,7 @@
           if (!this.extended) return this.ack(id, 1, 0);
           const duration = pl.length >= 5 ? pl[3] | (pl[4] << 8) : this.savedInitMs;
           const range = pl.length===7 ? pl[5]|(pl[6]<<8) : this.savedRangeDps;
-          if (![3, ...(this.configVersion >= 2 ? [5] : []), ...(this.configVersion===3 ? [7] : [])].includes(pl.length) || ![125,250,500,1000,2000,4000].includes(range) || duration < 100 || duration > 60000 || pl[0] > 2 || pl[1] > 1 || pl[2] > 1 || (!(this.capabilities & 1) && pl[0])) return this.ack(id, BAD, 0);
+          if (![3, ...(this.configVersion >= 2 ? [5] : []), ...(this.configVersion>=3 ? [7] : [])].includes(pl.length) || ![125,250,500,1000,2000,4000].includes(range) || duration < (this.configVersion>=4 ? 0 : 100) || duration > 60000 || pl[0] > 2 || pl[1] > 1 || pl[2] > 1 || (!(this.capabilities & 1) && pl[0])) return this.ack(id, BAD, 0);
           if (!this.settings || this.failSave) return this.ack(id, FAIL, 0);
           this.savedMode = pl[0]; this.savedFast = pl[1]; this.savedInitMs = duration; this.savedRangeDps=range; this.dirty = +(this.activeMode !== this.savedMode || this.activeFast !== this.savedFast || this.activeInitMs !== this.savedInitMs || this.activeRangeDps!==this.savedRangeDps);
           if (pl[2]) this.reboot();

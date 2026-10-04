@@ -14,7 +14,8 @@
 #error "Bootloader application erase range must be sector-aligned"
 #endif
 #define BL_UART_BAUD 2000000U
-#define BL_BOOT_TIMEOUT_MS 3000U
+/* Normal startup timeout is settings.gyro_init_ms (0..60000), default 2000.
+ * An explicit upgrade request or invalid application stays in recovery. */
 #define BL_PROTOCOL_VERSION 1U
 #define BL_MAX_CHUNK 256U
 #define BL_MAGIC0 0x42U

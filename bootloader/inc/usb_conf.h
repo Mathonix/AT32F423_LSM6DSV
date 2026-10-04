@@ -25,6 +25,15 @@
 #define USBD_EP5_TX_SIZE 20
 #define USBD_EP6_TX_SIZE 20
 #define USBD_EP7_TX_SIZE 20
+/* Bootloader USB identity: overrides the application defaults in
+ * middleware/usbd_class/cdc/cdc_desc.h. VID/PID, serial (chip UID), interfaces,
+ * endpoints, BOS and MS OS 2.0 descriptors are identical to the application.
+ * bcdDevice bit 7 (0x0080) marks bootloader mode; Windows caches MS OS
+ * descriptors per VID/PID/bcdDevice, so bump this when the BOS/MS OS 2.0
+ * content changes. See docs/bootloader-webusb.md. */
+#define USBD_CDC_BCD_DEVICE              0x0280U
+#define USBD_CDC_DESC_PRODUCT_STRING     "LSM6DSV Bootloader"
+#define USBD_CDC_DESC_INTERFACE_STRING   "LSM6DSV Bootloader WebUSB"
 #endif
 void usb_delay_ms(uint32_t ms);
 void usb_delay_us(uint32_t us);

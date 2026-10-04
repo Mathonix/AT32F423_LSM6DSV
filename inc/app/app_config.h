@@ -5,7 +5,7 @@
 
 /* Application label: YYYYMMDD and one letter. The first build of a day is
  * "a". Each later build on that same day uses the next letter. */
-#define APP_FIRMWARE_VERSION "20261002c"
+#define APP_FIRMWARE_VERSION "20261003e"
 
 #define APP_FUSION_HZ             2000U
 #define APP_GYR_LPF_CUTOFF_HZ    30.0f
@@ -36,7 +36,7 @@
 
 /* Normal boot averages a configurable stationary window (default 2 seconds). */
 #define APP_GYR_INIT_DEFAULT_MS   2000U
-#define APP_GYR_INIT_MIN_MS       100U
+#define APP_GYR_INIT_MIN_MS       0U
 #define APP_GYR_INIT_MAX_MS       60000U
 #define APP_CAL_REST_SECONDS      2.0f
 #define APP_CAL_DROP_MS           1000U
