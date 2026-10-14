@@ -1,0 +1,82 @@
+name: Build and deploy gyroa to Cloudflare
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - 'upper/gyroa/**'
+  pull_request:
+    branches: [master]
+    paths:
+      - 'upper/gyroa/**'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# Do not overlap production deployments.
+concurrency:
+  group: gyroa-cloudflare-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: upper/gyroa/package-lock.json
+
+      - name: Install pinned dependencies
+        working-directory: upper/gyroa
+        run: npm ci --no-audit --no-fund
+
+      - name: Build upper/gyroa
+        working-directory: upper/gyroa
+        run: npm run build
+
+      - name: Verify build output
+        working-directory: upper/gyroa
+        run: |
+          test -s dist/public/index.html
+          test -s dist/worker.js
+          test -s dist/asset-manifest.json
+
+      - name: Check Cloudflare credentials
+        if: github.event_name != 'pull_request' && github.ref == 'refs/heads/master'
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: |
+          if [ -z "$CLOUDFLARE_API_TOKEN" ]; then
+            echo "::error::Configure the CLOUDFLARE_API_TOKEN repository secret before deploying."
+            exit 1
+          fi
+
+      # Pages is the independently accessible preview/build output.
+      # Run from repository root to avoid loading the Worker's wrangler.jsonc.
+      - name: Deploy static site to Cloudflare Pages
+        if: github.event_name != 'pull_request' && github.ref == 'refs/heads/master'
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: e30118e3ed578608e54c16bd9de66929
+        run: |
+          upper/gyroa/node_modules/.bin/wrangler pages deploy upper/gyroa/dist/public \
+            --project-name=gyroa-upper \
+            --branch=master \
+            --commit-hash="$GITHUB_SHA"
+
+      # Production stays on the existing gyroa-233688 Worker and custom domain.
+      - name: Deploy existing Cloudflare Worker
+        if: github.event_name != 'pull_request' && github.ref == 'refs/heads/master'
+        working-directory: upper/gyroa
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: e30118e3ed578608e54c16bd9de66929
+        run: npx --no-install wrangler deploy --config wrangler.jsonc
