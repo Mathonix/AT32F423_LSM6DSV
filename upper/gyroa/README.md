@@ -23,3 +23,14 @@ npm run dev
 状态页显示真实板卡姿态；输出页配置 USB/UART/CAN；校准页提供六面加速度计校准、零偏历史及静置 VQF 初始化；设置页提供四档滤波和阈值。
 
 升级页读取型号 AT32 和应用版本，选择 APP BIN 后通过 USB/UART 更新。网页只更新 APP；首次新版 BL 安装需 SWD 配套烧录。`?mock=1` 为演示设备，不能视为实板结果。
+
+## Cloudflare 自动发布
+
+GitHub Actions 工作流位于 [`.github/workflows/deploy-gyroa.yml`](../../.github/workflows/deploy-gyroa.yml)。向 `master` 分支推送 `upper/gyroa/**` 的改动，或在 Actions 页面手动触发，即可在 Node.js 22 上执行 `npm ci`、`npm run build`，然后依次更新：
+
+- Cloudflare Pages 项目 `gyroa-upper`，预览/静态站点：`https://gyroa-upper.pages.dev/`。
+- 现有 Cloudflare Worker `gyroa-233688`，正式域名：`https://gyroa.233688.xyz/`。
+
+第一次部署前，在仓库 Settings → Secrets and variables → Actions 中设置 `CLOUDFLARE_API_TOKEN`（需具备 Cloudflare Pages Edit、Workers Scripts Edit 及目标域名所需权限）。Account ID 已由工作流配置；不要将 Token 提交至代码仓库。PR 仅验证构建，不更新生产环境。
+
+注意：同步线上 Worker 的更新到 `upper/gyroa/src/public/` 再发布，以免仓库旧版本覆盖线上较新功能。
