@@ -5,6 +5,7 @@ on:
     branches: [master]
     paths:
       - 'upper/gyroa/**'
+      - '.github/workflows/deploy-github-pages.yml'
   workflow_dispatch:
 
 permissions:
@@ -38,8 +39,61 @@ jobs:
         working-directory: upper/gyroa
         run: npm run build
 
-      - name: Add nojekyll marker
-        run: touch upper/gyroa/dist/public/.nojekyll
+      # GitHub Pages hosts this repository at /AT32F423_LSM6DSV/.
+      # Rewrite only the generated artifact; do not change Cloudflare's source.
+      - name: Adapt generated assets to GitHub Pages project path
+        run: |
+          python3 - <<'PY'
+          import os
+          import re
+          from pathlib import Path
+
+          output = Path('upper/gyroa/dist/public')
+          repository_name = os.environ['GITHUB_REPOSITORY'].split('/', 1)[1]
+          prefix = '/' + repository_name + '/'
+          html_url = re.compile(
+              r'(?P<attr>\b(?:href|src)=)(?P<quote>["\x27])/(?!/)(?P<path>[^"\x27]*)(?P=quote)'
+          )
+          asset_url = re.compile(
+              r'(?P<quote>["\x27])/(?P<path>(?:[A-Za-z0-9_-]+/)*[A-Za-z0-9_.-]+\.(?:js|css|glb|json|wasm|png|jpg|jpeg|svg|webp|woff2?|ico)(?:\?[^"\x27\n]*)?)(?P=quote)'
+          )
+
+          def rewrite_html(match):
+              return match.group('attr') + match.group('quote') + prefix + match.group('path') + match.group('quote')
+
+          def rewrite_asset(match):
+              path = match.group('path')
+              if path.startswith(repository_name + '/'):
+                  return match.group(0)
+              return match.group('quote') + prefix + path + match.group('quote')
+
+          rewritten = []
+          for file in output.rglob('*'):
+              if not file.is_file() or file.suffix not in ('.html', '.js', '.css'):
+                  continue
+              original = file.read_text(encoding='utf-8')
+              updated = asset_url.sub(rewrite_asset, original)
+              if file.suffix == '.html':
+                  updated = html_url.sub(rewrite_html, updated)
+              if updated != original:
+                  file.write_text(updated, encoding='utf-8')
+                  rewritten.append(str(file.relative_to(output)))
+
+          index = (output / 'index.html').read_text(encoding='utf-8')
+          if f'href="{prefix}style.css' not in index or f'src="{prefix}app.js' not in index:
+              raise RuntimeError('GitHub Pages asset URL rewrite did not complete')
+          print(f'GitHub Pages base path: {prefix}; adjusted {len(rewritten)} files: {rewritten}')
+          PY
+
+      - name: Verify generated website
+        run: |
+          test -s upper/gyroa/dist/public/index.html
+          test -s upper/gyroa/dist/public/pcb-view.js
+          test -s upper/gyroa/dist/public/models/pcb.glb
+          touch upper/gyroa/dist/public/.nojekyll
+
+      - name: Configure GitHub Pages
+        uses: actions/configure-pages@v5
 
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v3
