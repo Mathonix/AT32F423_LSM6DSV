@@ -42,6 +42,8 @@ SRCS := \
   $(SRC_DIR)/drivers/lsm6dsv.c \
   $(SRC_DIR)/drivers/ist8310.c \
   $(SRC_DIR)/calibration/gyro_bias_history.c \
+  $(SRC_DIR)/calibration/gyro_temp_comp.c \
+  $(SRC_DIR)/calibration/gyro_temp_learning.c \
   $(SRC_DIR)/calibration/gyro_startup_calibration.c \
   $(SRC_DIR)/calibration/boot_startup.c \
   $(SRC_DIR)/calibration/acc_calibration.c \
@@ -61,6 +63,8 @@ SRCS := \
   middleware/usbd_class/cdc/cdc_class.c \
   middleware/usbd_class/cdc/cdc_desc.c \
   $(SRC_DIR)/drivers/protocol.c \
+  $(SRC_DIR)/drivers/inertial_stream.c \
+  $(SRC_DIR)/drivers/data_capture.c \
   $(SRC_DIR)/drivers/user_bl_update.c \
   $(SRC_DIR)/bsp/at32f423_clock.c \
   $(SRC_DIR)/bsp/at32f423_int.c \
@@ -78,6 +82,7 @@ SRCS := \
   $(LIB)/libraries/drivers/src/at32f423_acc.c
 
 CPPSRCS := \
+  $(SRC_DIR)/fusion/ekf.cpp \
   $(SRC_DIR)/fusion/vqf_wrapper.cpp \
   $(SRC_DIR)/fusion/vqf_full.cpp
 

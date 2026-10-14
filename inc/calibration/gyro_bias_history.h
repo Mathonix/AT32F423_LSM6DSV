@@ -7,6 +7,11 @@ extern "C" {
 /* Version 3 holds 50 samples in each existing 2 KB slot. Version 2 records
  * of 15 samples stay readable; the next save keeps them and appends. */
 #define GYRO_BIAS_HISTORY_MAX 50U
+/* Read-only migration metadata. V2/V3 biases in this repository are nominal
+ * RAW rad/s (scale removed before the old writer). Never confirms bins.
+ * Returns 1 with data, 2 with a valid empty slot, or 0 with no valid slot. */
+int gyro_bias_history_legacy_metadata(float raw_bias_rad_s[3], float *temp_c,
+                                      uint32_t *sequence, uint8_t *slot);
 
 /* Newest record inside the temperature window; otherwise the caller may
  * fall back to load_nearest. Bias arrays are always in rad/s. */

@@ -8,6 +8,7 @@
 
 #include "lsm6dsv.h"
 #include "gyro_range.h"
+#include "acc_range.h"
 #include "spi_wait.h"
 #include "bsp.h"
 #include "at32f423_scfg.h"
@@ -50,7 +51,6 @@
 /* LSM6DSV: HM_MODE=0 selects high-performance mode. */
 #define CTRL6_XL_HM_MODE        0x10U
 #define CTRL7_G_HM_MODE         0x80U
-#define FS_XL_4G                0x01U
 #define HA01_2000HZ             0x1AU
 #define HAODR_SEL_HA01          0x01U
 #define STATUS_XLDA             0x01U
@@ -454,8 +454,15 @@ static int expect_reg(uint8_t reg, uint8_t mask, uint8_t want)
 
 int lsm6dsv_init_2khz(uint16_t gyro_range_dps)
 {
-  if(!gyro_range_valid(gyro_range_dps)) return -11;
+  /* Installed BLs initialize at +/-4 g for their startup gyro sampling. */
+  return lsm6dsv_init_2khz_ranges(gyro_range_dps, ACC_RANGE_DEFAULT_G);
+}
+
+int lsm6dsv_init_2khz_ranges(uint16_t gyro_range_dps, uint8_t acc_range_g)
+{
+  if(!gyro_range_valid(gyro_range_dps) || !acc_range_valid(acc_range_g)) return -11;
   const uint8_t fs_g = gyro_range_register(gyro_range_dps);
+  const uint8_t fs_xl = acc_range_register(acc_range_g);
   uint32_t guard;
   uint8_t who = 0U;
   uint8_t n;
@@ -509,7 +516,7 @@ int lsm6dsv_init_2khz(uint16_t gyro_range_dps)
   /* Explicitly force accelerometer high-performance mode. */
   if(write_reg_mask(REG_CTRL7, (uint8_t)(LPF1_G_EN | CTRL7_G_HM_MODE), 0x00U) != 0) return -9;
   /* Explicitly force gyroscope high-performance mode and keep LPF1 off. */
-  if(write_reg_mask(REG_CTRL8, 0x03U, FS_XL_4G) != 0) return -9;
+  if(write_reg_mask(REG_CTRL8, 0x03U, fs_xl) != 0) return -9;
   if(write_reg_mask(REG_HAODR_CFG, 0x03U, HAODR_SEL_HA01) != 0) return -9;
   /* Gyro DRDY is the sample beat; XLDA+GDA are checked before the burst. */
   if(lsm6dsv_write_reg(REG_INT1_CTRL, INT1_DRDY_G) != 0) return -9;
@@ -528,7 +535,7 @@ int lsm6dsv_init_2khz(uint16_t gyro_range_dps)
   if(expect_reg(REG_CTRL4, CTRL4_DRDY_MASK, CTRL4_DRDY_MASK) != 0) return -10;
   if(expect_reg(REG_CTRL6, (uint8_t)(0x0FU | CTRL6_XL_HM_MODE), fs_g) != 0) return -10;
   if(expect_reg(REG_CTRL7, (uint8_t)(LPF1_G_EN | CTRL7_G_HM_MODE), 0x00U) != 0) return -8;
-  if(expect_reg(REG_CTRL8, 0x03U, FS_XL_4G) != 0) return -10;
+  if(expect_reg(REG_CTRL8, 0x03U, fs_xl) != 0) return -10;
   if(expect_reg(REG_INT1_CTRL, 0xFFU, INT1_DRDY_G) != 0) return -10;
   if(lsm6dsv_wait_sample(5000U) != 0) return -7;
   return 0;

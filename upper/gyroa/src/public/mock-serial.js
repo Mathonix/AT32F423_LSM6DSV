@@ -11,9 +11,28 @@
     streamMode: 0, settings: 0, dirty: 0, outHz: 1000, fusionHz: 2000, canId: 1, emitting: true, seq: 0,
     pose: { yaw: 12.5, pitch: -3.25, roll: 45.5, gz: 1.5, az: 9.75, temp: 31.5, gx: 0.25, gy: -0.5, ax: 0.125, ay: -0.25 },
     commands: [], rx: [],
+    magCal: {valid:false,offset:[.561956977,-3.455820552,4.206353964],matrix:[[.978002793,-.009591232,.015064551],[-.009591232,1.067653364,.005627912],[.015064551,.005627912,.958047992]]}, magCalN:0,
+    magCalFrame(seq) {return frame(0x4a,seq,le(52,v=>{v.setUint8(0,1);v.setUint8(1,this.magCal.valid?1:0);[...this.magCal.offset,...this.magCal.matrix.flat()].forEach((x,i)=>v.setFloat32(4+i*4,x,true));}));},
+    magRejectionEnabled:true,magRejectionSaved:true,
+    restBiasEnabled:true,restBiasSaved:true,
+    scaleSaved:[1,1,1],scaleActive:[1,1,1],scaleUnsupported:false,scaleSkips:0,scaleClipped:0,
+    scaleFrame(seq){return frame(0x5f,seq,le(36,v=>{v.setUint8(0,1);v.setUint8(1,Number(this.scaleActive.some((x,i)=>x!==this.scaleSaved[i])));[...this.scaleActive,...this.scaleSaved].forEach((x,i)=>v.setFloat32(4+4*i,x,true));v.setUint32(28,this.scaleSkips,true);v.setUint32(32,this.scaleClipped,true);}));},
+    tuningDefaults:[2.5,4,.5,.035,.1,2,100,.5,1,.6,.15,.05,.1,10].map(Math.fround),
+    tuningSaved:null,tuningActive:null,tuningCustom:false,tuningActiveCustom:false,tuningUnsupported:false,
+    tuningFrames(seq) {
+      const active=this.tuningActive||this.tuningDefaults,saved=this.tuningSaved||active;
+      const flags=Number(this.tuningCustom)|(this.tuningCustom!==this.tuningActiveCustom||active.some((v,i)=>v!==saved[i])?2:0);
+      return Uint8Array.from([saved,this.tuningDefaults,active].flatMap((values,page)=>[...frame(0x5b,seq,le(60,v=>{
+        [1,page,flags,this.algorithm].forEach((x,i)=>v.setUint8(i,x));values.forEach((x,i)=>v.setFloat32(4+4*i,x,true));
+      }))]));
+    },
+    algorithm:0,savedAlgorithm:0,algorithmUnsupported:false,
+    algorithmFrame(seq){return frame(0x52,seq,Uint8Array.of(1,this.algorithm,this.savedAlgorithm,Number(this.algorithm!==this.savedAlgorithm)));},
+    wsEnabled: true, wsSaved: true,
+    wsFrame(seq) {return frame(0x46,seq,Uint8Array.of(1,this.wsEnabled?1:0,this.wsSaved?1:0,0));},
     extended: false, source: 1, capabilities: 7, activeMode: 1, savedMode: 1, activeFast: 0, savedFast: 0, failSave: false,
     configVersion: 1, activeInitMs: 2000, savedInitMs: 2000,
-    activeRangeDps:1000, savedRangeDps:1000, savedOutputHz:1000,
+    activeRangeDps:1000, savedRangeDps:1000, savedOutputHz:1000, activeAccRangeG:4, savedAccRangeG:4,
     outputs: [{ format: 2, legacyMode: 0, mask: 7 }, { format: 2, legacyMode: 0, mask: 7 }],
     savedOutputs: [{ format: 2, legacyMode: 0, mask: 7 }, { format: 2, legacyMode: 0, mask: 7 }],
     canExtended: false,
@@ -26,14 +45,15 @@
         [c.baud, c.active, c.mask, 0].forEach((x, k) => v.setUint8(o + 6 + k, x));
       });
     })); },
-    config() { return frame(7, this.seq++, le({1:18,2:22,3:28,4:28}[this.configVersion], (v) => {
+    config() { return frame(7, this.seq++, le({1:18,2:22,3:28,4:28,5:30}[this.configVersion], (v) => {
       [this.configVersion, this.source, this.activeMode, this.savedMode, this.activeFast, this.savedFast, this.capabilities, 0].forEach((x, i) => v.setUint8(i, x));
       v.setUint16(8, this.outHz, true);
       this.outputs.forEach((o, i) => { const at = 10 + 4 * i; v.setUint8(at, o.format); v.setUint8(at + 1, o.legacyMode); v.setUint16(at + 2, o.mask, true); });
       if (this.configVersion >= 2) { v.setUint16(18, this.activeInitMs, true); v.setUint16(20, this.savedInitMs, true); }
       if (this.configVersion >= 3) { v.setUint16(22,this.activeRangeDps,true); v.setUint16(24,this.savedRangeDps,true); v.setUint16(26,this.savedOutputHz,true); }
+      if (this.configVersion >= 5) { v.setUint8(28,this.activeAccRangeG); v.setUint8(29,this.savedAccRangeG); }
     })); },
-    reboot() { this.activeMode = this.savedMode; this.activeFast = this.savedFast; this.activeInitMs = this.savedInitMs; if(this.configVersion>=3) {this.activeRangeDps=this.savedRangeDps;this.outHz=this.savedOutputHz;} this.outputs = this.savedOutputs.map((o) => ({ ...o })); this.can = { ...this.savedCan }; this.dirty = 0; this.settings = 0; },
+    reboot() { if(this.configVersion>=5)this.activeAccRangeG=this.savedAccRangeG; this.scaleActive=this.scaleSaved.slice(); if(this.tuningSaved)this.tuningActive=this.tuningSaved.slice(); this.tuningActiveCustom=this.tuningCustom; this.restBiasEnabled=this.restBiasSaved; this.algorithm=this.savedAlgorithm; this.magRejectionEnabled=this.magRejectionSaved; this.wsEnabled=this.wsSaved; this.activeMode = this.savedMode; this.activeFast = this.savedFast; this.activeInitMs = this.savedInitMs; if(this.configVersion>=3) {this.activeRangeDps=this.savedRangeDps;this.outHz=this.savedOutputHz;} this.outputs = this.savedOutputs.map((o) => ({ ...o })); this.can = { ...this.savedCan }; this.dirty = 0; this.settings = 0; },
     ack(cmd, status, detail) { return frame(0x90, this.seq++, le(4, (v) => { v.setUint8(0, cmd); v.setUint8(1, status); v.setUint16(2, detail, true); })); },
     telemetry() {
       const p = this.pose;
@@ -119,7 +139,60 @@
           return Uint8Array.from([...this.ack(id, S, 0), ...this.canConfig()]);
         }
         case 0x10: return this.ack(id, S, 0);
+        case 0x49:
+          return this.magCalUnsupported?this.seqAck(id,seq,1,0):pl.length?this.seqAck(id,seq,BAD,0):this.magCalFrame(seq);
+        case 0x47: {
+          if(this.magCalUnsupported)return this.seqAck(id,seq,1,0);
+          if(pl.length)return this.seqAck(id,seq,BAD,0);
+          const n=++this.magCalN,z=1-2*((n*137)%720+.5)/720,a=n*Math.PI*(3-Math.sqrt(5)),h=Math.sqrt(1-z*z),u=[h*Math.cos(a),h*Math.sin(a),z];
+          const b=u.map((x,i)=>45*x*[1.15,.9,1.05][i]+[8,-6,4][i]),body=[u[1],u[0],-u[2]],w=Math.sqrt((1+body[2])/2),q=w>1e-6?[w,body[1]/(2*w),-body[0]/(2*w),0]:[0,1,0,0];
+          return frame(0x48,seq,le(40,v=>{v.setUint8(0,1);v.setUint8(1,this.activeMode && !this.magInvalid?1:0);v.setUint32(4,n,true);v.setUint32(8,Math.floor(performance.now()),true);[...b,...q].forEach((x,i)=>v.setFloat32(12+i*4,x,true));}));
+        }
+        case 0x4b:
+        case 0x4c: {
+          if(this.magCalUnsupported)return this.seqAck(id,seq,1,0);
+          let status=S;
+          if(id===0x4b && (pl.length!==52 || pl[0]!==1 || pl[1]!==1 || pl[2] || pl[3]) || id===0x4c && pl.length)status=BAD;
+          else if(this.failSave || this.acc.status===1)status=FAIL;
+          else if(id===0x4b){const v=new DataView(pl.buffer,pl.byteOffset,pl.byteLength),x=Array.from({length:12},(_,i)=>v.getFloat32(4+i*4,true)),c={valid:true,offset:x.slice(0,3),matrix:[x.slice(3,6),x.slice(6,9),x.slice(9,12)]};if(!globalThis.GyroMagCal?.valid(c))status=BAD;else this.magCal=c;}
+          else this.magCal={valid:false,offset:[.561956977,-3.455820552,4.206353964],matrix:[[.978002793,-.009591232,.015064551],[-.009591232,1.067653364,.005627912],[.015064551,.005627912,.958047992]]};
+          return Uint8Array.from([...this.seqAck(id,seq,status,0),...this.magCalFrame(seq)]);
+        }
+        case 0x4d:
+          return pl.length?this.seqAck(id,seq,2):frame(0x4f,seq,Uint8Array.of(1,+this.magRejectionEnabled,+this.magRejectionSaved,0));
+        case 0x4e: {
+          const status=pl.length!==1||pl[0]>1?2:this.failSave?3:0;
+          if(!status)this.magRejectionEnabled=this.magRejectionSaved=!!pl[0];
+          return Uint8Array.from([...this.seqAck(id,seq,status),...frame(0x4f,seq,Uint8Array.of(1,+this.magRejectionEnabled,+this.magRejectionSaved,0))]);
+        }
+        case 0x44:
+          return this.wsUnsupported ? this.seqAck(id,seq,1,0) : pl.length ? this.seqAck(id,seq,BAD,0) : this.wsFrame(seq);
+        case 0x45: {
+          if(this.wsUnsupported)return this.seqAck(id,seq,1,0);
+          let status=S;
+          if(pl.length!==1 || pl[0]>1)status=BAD;
+          else if(this.failSave || this.acc.status===1)status=FAIL;
+          else this.wsSaved=this.wsEnabled=!!pl[0];
+          return Uint8Array.from([...this.seqAck(id,seq,status,this.wsEnabled?1:0),...this.wsFrame(seq)]);
+        }
+        case 0x42: {
+          if (pl.length) return this.seqAck(id, seq, BAD, 0);
+          if (this.magUnsupported) return this.seqAck(id, seq, 1, 0);
+          const at = Math.floor(performance.now() / 20) * 20;
+          return frame(0x43,seq,le(24,v => {
+            v.setUint8(0,1); v.setUint8(1,this.activeMode && !this.magInvalid ? (this.magDisturbed ? 3 : 1) : 0); v.setUint8(2,this.activeMode);
+            v.setUint32(4,at/20,true); v.setUint32(8,at,true);
+            (this.mag || [25+Math.sin(at/900)*3,-12+Math.cos(at/1100)*2,38+Math.sin(at/1300)]).forEach((x,i)=>v.setFloat32(12+i*4,x,true));
+          }));
+        }
         case 0x11: return this.ack(id, pl.length ? BAD : S, 0);
+        case 0x15: {
+          if (pl.length || this.resetStatus) return this.seqAck(id, seq, pl.length ? BAD : this.resetStatus, 0);
+          this.resets = (this.resets || 0) + 1;
+          this.reboot(); this.pose.yaw = 0;
+          if (cfg.transport === 'usb') reenumerate(cfg.usbBoot, false);
+          return this.dropResetAck ? null : this.seqAck(id, seq, S, 0);
+        }
         case 0x12: return this.ack(id, FAIL, 1);
         case 0x13: if (pl.length !== 1 || pl[0] > 4) return this.ack(id, BAD, this.streamMode); this.streamMode = pl[0]; if (this.extended) this.outputs.forEach((o) => { o.format = 2; o.legacyMode = pl[0]; }); return this.ack(id, S, this.streamMode);
         case 0x1d: { const hz = pl[0] | (pl[1] << 8); if (pl.length !== 2 || !hz || hz > this.fusionHz || this.fusionHz % hz) return this.ack(id, BAD, this.outHz); if(this.configVersion>=3 && this.failSave) return this.ack(id,FAIL,this.outHz); this.outHz = hz; if(this.configVersion>=3) {this.savedOutputHz=hz;return Uint8Array.from([...this.ack(id,S,hz),...this.config()]);} return this.ack(id, S, hz); }
@@ -134,6 +207,48 @@
           const r = this.sysinfoFrame(seq);
           if (this.sysinfoDelayMs) r.delayMs = this.sysinfoDelayMs;
           return r;
+        }
+        case 0x55: return this.restBiasUnsupported?this.seqAck(id,seq,1,0):pl.length?this.seqAck(id,seq,BAD,0):frame(0x57,seq,Uint8Array.of(1,+this.restBiasEnabled,+this.restBiasSaved,0));
+        case 0x56: {
+          if(this.restBiasUnsupported)return this.seqAck(id,seq,1,0);
+          if(pl.length!==1||pl[0]>1)return this.seqAck(id,seq,BAD,0);
+          if(this.failSave||this.acc.status===1||this.insActive)return this.seqAck(id,seq,FAIL,0);
+          this.restBiasEnabled=this.restBiasSaved=!!pl[0];
+          return Uint8Array.from([...this.seqAck(id,seq,S,0),...frame(0x57,seq,Uint8Array.of(1,+this.restBiasEnabled,+this.restBiasSaved,0))]);
+        }
+        case 0x5c:
+          return this.scaleUnsupported?this.seqAck(id,seq,1,0):pl.length?this.seqAck(id,seq,BAD,0):this.scaleFrame(seq);
+        case 0x5d:
+        case 0x5e: {
+          if(this.scaleUnsupported)return this.seqAck(id,seq,1,0);
+          let values=[1,1,1];
+          if(id===0x5d){if(pl.length!==16||pl[0]!==1||pl[1]||pl[2]||pl[3])return this.seqAck(id,seq,BAD,0);const v=new DataView(pl.buffer,pl.byteOffset,pl.byteLength);values=[4,8,12].map(o=>v.getFloat32(o,true));if(values.some(x=>!Number.isFinite(x)||x<Math.fround(.95)||x>Math.fround(1.05)))return this.seqAck(id,seq,BAD,0);}else if(pl.length)return this.seqAck(id,seq,BAD,0);
+          if(this.failSave||this.acc.status===1||this.insActive)return this.seqAck(id,seq,FAIL,0);
+          this.scaleSaved=values;return Uint8Array.from([...this.seqAck(id,seq,S,0),...this.scaleFrame(seq)]);
+        }
+        case 0x58:
+          return this.tuningUnsupported?this.seqAck(id,seq,1,0):pl.length?this.seqAck(id,seq,BAD,0):this.tuningFrames(seq);
+        case 0x59:
+        case 0x5a: {
+          if(this.tuningUnsupported)return this.seqAck(id,seq,1,0);
+          let values=this.tuningDefaults.slice();
+          if(id===0x59) {
+            if(pl.length!==60||pl[0]!==1||pl[1]||pl[2]||pl[3])return this.seqAck(id,seq,BAD,0);
+            const v=new DataView(pl.buffer,pl.byteOffset,pl.byteLength);values=values.map((_,i)=>v.getFloat32(4+i*4,true));
+            const lo=[.1,.2,.001,.001,.001,.1,1,.01,.1,.01,.01,.01,.01,1].map(Math.fround);
+            const hi=[100,100,10,10,10,20,10000,10,60,20,10,10,.5,90];
+            if(values.some((x,i)=>!Number.isFinite(x)||x<lo[i]||x>hi[i])||values[3]>values[2]||values[4]>values[2]||values[2]>values[5])return this.seqAck(id,seq,BAD,0);
+          } else if(pl.length)return this.seqAck(id,seq,BAD,0);
+          if(this.failSave||this.algorithm!==0||this.acc.status===1||this.insActive||this.vqf?.state>=1&&this.vqf?.state<=4)return this.seqAck(id,seq,FAIL,0);
+          this.tuningSaved=values;this.tuningCustom=true;
+          return Uint8Array.from([...this.seqAck(id,seq,S,0),...this.tuningFrames(seq)]);
+        }
+        case 0x50: return this.algorithmUnsupported?this.seqAck(id,seq,1,0):pl.length?this.seqAck(id,seq,BAD,0):this.algorithmFrame(seq);
+        case 0x51: {
+          if(this.algorithmUnsupported)return this.seqAck(id,seq,1,0);
+          if(pl.length!==1||pl[0]>1)return this.seqAck(id,seq,BAD,0);
+          if(this.failSave||this.acc.status===1||this.insActive)return this.seqAck(id,seq,FAIL,0);
+          this.savedAlgorithm=pl[0];return Uint8Array.from([...this.seqAck(id,seq,S,0),...this.algorithmFrame(seq)]);
         }
         case 0x17: this.settings = 1; return this.ack(id, S, 0);
         case 0x18: this.settings = 0; return this.ack(id, S, this.dirty);
@@ -159,10 +274,12 @@
         case 0x1e: {
           if (!this.extended) return this.ack(id, 1, 0);
           const duration = pl.length >= 5 ? pl[3] | (pl[4] << 8) : this.savedInitMs;
-          const range = pl.length===7 ? pl[5]|(pl[6]<<8) : this.savedRangeDps;
-          if (![3, ...(this.configVersion >= 2 ? [5] : []), ...(this.configVersion>=3 ? [7] : [])].includes(pl.length) || ![125,250,500,1000,2000,4000].includes(range) || duration < (this.configVersion>=4 ? 0 : 100) || duration > 60000 || pl[0] > 2 || pl[1] > 1 || pl[2] > 1 || (!(this.capabilities & 1) && pl[0])) return this.ack(id, BAD, 0);
+          const range = pl.length>=7 ? pl[5]|(pl[6]<<8) : this.savedRangeDps;
+          const accRange = pl.length===8 ? pl[7] : this.savedAccRangeG;
+          if (![2,4,8,16].includes(accRange)) return this.ack(id, BAD, 0);
+          if (![3, ...(this.configVersion >= 2 ? [5] : []), ...(this.configVersion>=3 ? [7] : []), ...(this.configVersion>=5 ? [8] : [])].includes(pl.length) || ![125,250,500,1000,2000,4000].includes(range) || duration < (this.configVersion>=4 ? 0 : 100) || duration > 60000 || pl[0] > 2 || pl[1] > 1 || pl[2] > 1 || (!(this.capabilities & 1) && pl[0])) return this.ack(id, BAD, 0);
           if (!this.settings || this.failSave) return this.ack(id, FAIL, 0);
-          this.savedMode = pl[0]; this.savedFast = pl[1]; this.savedInitMs = duration; this.savedRangeDps=range; this.dirty = +(this.activeMode !== this.savedMode || this.activeFast !== this.savedFast || this.activeInitMs !== this.savedInitMs || this.activeRangeDps!==this.savedRangeDps);
+          this.savedMode = pl[0]; this.savedFast = pl[1]; this.savedInitMs = duration; this.savedRangeDps=range; this.savedAccRangeG=accRange; this.dirty = +(this.activeMode !== this.savedMode || this.activeFast !== this.savedFast || this.activeInitMs !== this.savedInitMs || this.activeRangeDps!==this.savedRangeDps || this.activeAccRangeG!==this.savedAccRangeG);
           if (pl[2]) this.reboot();
           const ack = this.ack(id, S, pl[0]); const cfg = this.config(); return Uint8Array.from([...ack, ...cfg]);
         }
@@ -393,4 +510,42 @@
   const reboot = dev.reboot.bind(dev);
   dev.reboot = function () { reboot(); f.active = f.saved; };
   m.filter = f;
+})();
+
+// timestamped capture mock — real firmware never uses this simulation.
+(() => {
+  const m=window.__mock,d=m.dev,rates=[1,5,10,20,50,100,200,500];
+  const crc=b=>{let c=65535;for(const x of b){c^=x<<8;for(let k=0;k<8;k++)c=c&32768?((c<<1)^0x1021)&65535:(c<<1)&65535;}return c;};
+  const frame=(id,seq,p)=>{const f=new Uint8Array(p.length+7);f.set([170,85,id,p.length,seq]);f.set(p,5);const c=crc(f.slice(2,-2));f[f.length-2]=c&255;f[f.length-1]=c>>8;return f;};
+  const le=(n,fn)=>{const p=new Uint8Array(n);fn(new DataView(p.buffer));return p;};
+  const ack=(seq,status)=>frame(0x90,seq,Uint8Array.of(0x60,status,0,0));
+  const cat=(a,b)=>{const p=new Uint8Array(a.length+b.length);p.set(a);p.set(b,a.length);return p;};
+  d.capture={token:0,hz:0,seq:0,ts:0,deadline:0,next:0,values:null};
+  d.captureUnsupported=false;
+  const config=seq=>frame(0x63,seq,le(12,v=>{v.setUint8(0,1);v.setUint8(1,d.capture.token?1:0);v.setUint32(4,d.capture.token,true);v.setUint16(8,d.capture.hz,true);v.setUint16(10,500,true);}));
+  const original=d.handle.bind(d);
+  d.handle=function(id,seq,pl){
+    if(id===0x23&&!this.captureUnsupported)return frame(0x32,seq,le(16,v=>{v.setUint8(0,1);v.setUint8(1,9);[...new TextEncoder().encode('20261012b')].forEach((b,i)=>v.setUint8(i+2,b));}));
+    if(id===0x35&&!this.captureUnsupported)return frame(0x36,seq,Uint8Array.of(65,84,51,50));
+    if(id!==0x60&&id!==0x62)return original(id,seq,pl);
+    this.commands.push({id,seq,payload:[...pl]});
+    if(this.captureUnsupported)return frame(0x90,seq,Uint8Array.of(id,1,0,0));
+    if(id===0x62)return config(seq);
+    if(pl.length!==7||pl[0]>1)return ack(seq,2);
+    const v=new DataView(pl.buffer,pl.byteOffset,pl.length),hz=v.getUint16(1,true),token=v.getUint32(3,true),now=performance.now();
+    if(!token||(pl[0]&&!rates.includes(hz)))return ack(seq,2);
+    if(pl[0]&&(this.settings||this.capture.token&&(this.capture.token!==token||this.capture.hz!==hz)))return cat(ack(seq,3),config(seq));
+    if(pl[0]){if(!this.capture.token)Object.assign(this.capture,{token,hz,seq:0,ts:0,next:now});this.capture.deadline=now+10000;}
+    else if(this.capture.token===token)Object.assign(this.capture,{token:0,hz:0});
+    return cat(ack(seq,0),config(seq));
+  };
+  const reboot=d.reboot.bind(d);d.reboot=function(){Object.assign(this.capture,{token:0,hz:0});reboot();};
+  setInterval(()=>{
+    const c=d.capture,now=performance.now();if(!c.token||d.boot||!m.port.ctrl||m.port.dead)return;
+    if(now>=c.deadline){c.token=c.hz=0;return;}
+    let n=0;while(now>=c.next&&n++<500){const p=d.pose,values=c.values||[p.ax/9.80665,p.ay/9.80665,p.az/9.80665,p.gx,p.gy,p.gz,p.yaw,p.pitch,p.roll];
+      const seq=c.seq++,packet=frame(0x61,seq&255,le(56,v=>{v.setUint8(0,1);v.setUint32(4,c.token,true);v.setUint32(8,seq,true);v.setUint32(12,c.ts>>>0,true);v.setUint32(16,1e6/c.hz,true);values.forEach((x,i)=>v.setFloat32(20+i*4,x,true));}));
+      c.ts+=1e6/c.hz;c.next+=1000/c.hz;m.port.push(packet);
+    }
+  },10);
 })();

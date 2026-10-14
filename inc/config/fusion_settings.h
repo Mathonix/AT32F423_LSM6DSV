@@ -4,6 +4,10 @@
 #include "protocol.h"
 #include "can_protocol.h"
 #include "zaru_heading_hold.h"
+#include "fusion_algorithm.h"
+#include "vqf_tuning.h"
+#include "../calibration/gyro_scale.h"
+#include "../calibration/mag_calibration.h"
 typedef enum {
   FUSION_MODE_6AXIS = 0,
   FUSION_MODE_9AXIS = 1,
@@ -14,7 +18,10 @@ typedef struct {
   fusion_mode_t mode;
   uint16_t can_node_id;
   uint8_t fast_start;
-  uint8_t reserved;
+  uint8_t ws2812_enabled;
+  uint8_t mag_rejection_enabled;
+  uint8_t fusion_algorithm;
+  uint8_t rest_bias_enabled;
   output_config_t outputs[2];
   can_config_t can;
   uint16_t gyro_init_ms;
@@ -22,6 +29,11 @@ typedef struct {
   uint16_t output_hz;
   uint8_t filter_profile;
   zaru_limits_t zaru;
+  mag_cal_parameters_t mag_cal;
+  uint8_t vqf_tuning_enabled;
+  vqf_tuning_t vqf_tuning;
+  gyro_scale_t gyro_scale;
+  uint8_t acc_range_g;
 } device_settings_t;
 void device_settings_defaults(device_settings_t *settings);
 int device_settings_load(device_settings_t *settings);

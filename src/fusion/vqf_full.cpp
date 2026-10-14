@@ -73,8 +73,9 @@ VQF::VQF(const VQFParams &params, vqf_real_t gyrTs, vqf_real_t accTs, vqf_real_t
 
 void VQF::updateGyr(const vqf_real_t gyr[3])
 {
-    // rest detection
-    if (params.restBiasEstEnabled || params.magDistRejectionEnabled) {
+    // Rest detection also serves status and heading hold, independently of
+    // stationary bias estimation and magnetic rejection switches.
+    {
         filterVec(gyr, 3, params.restFilterTau, coeffs.gyrTs, coeffs.restGyrLpB, coeffs.restGyrLpA,
                   state.restGyrLpState, state.restLastGyrLp);
 
@@ -112,10 +113,9 @@ void VQF::updateAcc(const vqf_real_t acc[3])
         return;
     }
 
-    // Keep rest status available when magnetic disturbance rejection needs
-    // the gyro rest filter, even if stationary bias updates are disabled.
-    // The bias Kalman update below is still gated by restBiasEstEnabled.
-    if (params.restBiasEstEnabled || params.magDistRejectionEnabled) {
+    // Keep detection running even when both optional features are disabled.
+    // Bias updates below remain gated by restBiasEstEnabled.
+    {
         filterVec(acc, 3, params.restFilterTau, coeffs.accTs, coeffs.restAccLpB, coeffs.restAccLpA,
                   state.restAccLpState, state.restLastAccLp);
 

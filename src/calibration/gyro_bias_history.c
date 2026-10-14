@@ -1,4 +1,5 @@
 #include "gyro_bias_history.h"
+#include "gyro_temp_comp.h"
 #include "app_config.h"
 #include "at32f423_flash.h"
 #include <math.h>
@@ -158,7 +159,7 @@ static int newer(const gyro_bias_record_t *a, const gyro_bias_record_t *b)
   return (int32_t)(a->sequence - b->sequence) > 0;
 }
 
-static int load_records(gyro_bias_record_t *best, uint8_t *any_corrupt, uint8_t *flash_version)
+static int load_legacy_records(gyro_bias_record_t *best, uint8_t *any_corrupt, uint8_t *flash_version, uint32_t *selected_address)
 {
   gyro_bias_record_t a, b;
   int va, vb, ca, cb;
@@ -174,14 +175,28 @@ static int load_records(gyro_bias_record_t *best, uint8_t *any_corrupt, uint8_t 
   if(va && (!vb || newer(&a, &b)))
   {
     *best = a;
+    if(selected_address) *selected_address=BIAS_SLOT0_ADDR;
     if(flash_version != NULL) *flash_version = ver_a;
   }
   else
   {
     *best = b;
+    if(selected_address) *selected_address=BIAS_SLOT1_ADDR;
     if(flash_version != NULL) *flash_version = ver_b;
   }
   return 1;
+}
+
+static int load_records(gyro_bias_record_t *best, uint8_t *corrupt, uint8_t *version, uint32_t *address)
+{
+  /* Once V4 is committed, legacy telemetry returns a legal empty history.
+   * It must not interpret temperature bins as old startup samples. */
+  if(gyro_temp_comp_has_v4()) {
+    if(corrupt) *corrupt=0U;
+    if(version) *version=0U;
+    return 0;
+  }
+  return load_legacy_records(best,corrupt,version,address);
 }
 
 static uint32_t chrono_index(const gyro_bias_record_t *record, uint32_t logical)
@@ -194,6 +209,20 @@ static uint32_t latest_index(const gyro_bias_record_t *record)
 {
   return (record->count < GYRO_BIAS_HISTORY_MAX) ? (record->count - 1U) :
          ((record->next + GYRO_BIAS_HISTORY_MAX - 1U) % GYRO_BIAS_HISTORY_MAX);
+}
+
+int gyro_bias_history_legacy_metadata(float raw_bias_rad_s[3],float *temp_c,
+                                      uint32_t *sequence,uint8_t *slot)
+{
+  gyro_bias_record_t record;
+  uint32_t address;
+  if(!load_legacy_records(&record,NULL,NULL,&address)) return 0;
+  *sequence=record.sequence; *slot=(uint8_t)(address==BIAS_SLOT1_ADDR);
+  if(!record.count) { memset(raw_bias_rad_s,0,12U); *temp_c=25.f; return 2; }
+  uint32_t i=latest_index(&record);
+  memcpy(raw_bias_rad_s,record.bias[i],12U);
+  *temp_c=record.temperature_c[i];
+  return 1;
 }
 
 int gyro_bias_history_load_for_temp(float latest[3], float average[3],
@@ -212,7 +241,7 @@ int gyro_bias_history_load_for_temp(float latest[3], float average[3],
   if(nearest_valid != NULL) *nearest_valid = 0U;
   if(count != NULL) *count = 0U;
   if(corrupt != NULL) *corrupt = 0U;
-  if(!load_records(&record, corrupt, NULL) || record.count == 0U) return 0;
+  if(!load_records(&record, corrupt, NULL, NULL) || record.count == 0U) return 0;
 
   n = record.count;
   li = latest_index(&record);
@@ -264,7 +293,7 @@ int gyro_bias_history_load_recent_for_temp(float latest[3], float average[3],
   if(selected_valid != NULL) *selected_valid = 0U;
   int valid = gyro_bias_history_load(latest, average, count, corrupt);
   if(!valid || !isfinite(current_temp_c) || !isfinite(temp_window_c) ||
-     temp_window_c < 0.0f || !load_records(&record, NULL, NULL)) return valid;
+     temp_window_c < 0.0f || !load_records(&record, NULL, NULL, NULL)) return valid;
   for(uint32_t logical = record.count; logical > 0U; --logical) {
     uint32_t physical = chrono_index(&record, logical - 1U);
     if(fabsf(record.temperature_c[physical] - current_temp_c) <= temp_window_c) {
@@ -282,7 +311,7 @@ int gyro_bias_history_load_nearest(float bias[3], float temperature_c, float *ma
   gyro_bias_record_t record;
   float best_distance=INFINITY;
   uint32_t best=0U;
-  if(!bias || !isfinite(temperature_c) || !load_records(&record,NULL,NULL) || !record.count) return 0;
+  if(!bias || !isfinite(temperature_c) || !load_records(&record,NULL,NULL,NULL) || !record.count) return 0;
   for(uint32_t logical=0;logical<record.count;++logical) {
     uint32_t physical=chrono_index(&record,logical);
     float distance=fabsf(record.temperature_c[physical]-temperature_c);
@@ -295,68 +324,9 @@ int gyro_bias_history_load_nearest(float bias[3], float temperature_c, float *ma
 
 int gyro_bias_history_save_at_temp(const float bias[3], float temperature_c)
 {
-  gyro_bias_record_t old_record, next_record, verify_record;
-  uint32_t old_addr, new_addr, i;
-  flash_status_type status;
-  if(bias == NULL || !isfinite(bias[0]) || !isfinite(bias[1]) ||
-     !isfinite(bias[2]) || !isfinite(temperature_c)) return -1;
-
-  if(load_records(&old_record, NULL, NULL))
-  {
-    old_addr = (old_record.sequence & 1U) ? BIAS_SLOT1_ADDR : BIAS_SLOT0_ADDR;
-    new_addr = (old_addr == BIAS_SLOT0_ADDR) ? BIAS_SLOT1_ADDR : BIAS_SLOT0_ADDR;
-    next_record = old_record;
-    next_record.sequence++;
-    if(next_record.count < GYRO_BIAS_HISTORY_MAX)
-    {
-      next_record.bias[next_record.count][0] = bias[0];
-      next_record.bias[next_record.count][1] = bias[1];
-      next_record.bias[next_record.count][2] = bias[2];
-      next_record.temperature_c[next_record.count] = temperature_c;
-      next_record.count++;
-      next_record.next = next_record.count % GYRO_BIAS_HISTORY_MAX;
-    }
-    else
-    {
-      next_record.bias[next_record.next][0] = bias[0];
-      next_record.bias[next_record.next][1] = bias[1];
-      next_record.bias[next_record.next][2] = bias[2];
-      next_record.temperature_c[next_record.next] = temperature_c;
-      next_record.next = (next_record.next + 1U) % GYRO_BIAS_HISTORY_MAX;
-    }
-  }
-  else
-  {
-    old_addr = BIAS_SLOT0_ADDR;
-    new_addr = BIAS_SLOT0_ADDR;
-    memset(&next_record, 0, sizeof(next_record));
-    next_record.magic = BIAS_MAGIC;
-    next_record.version = BIAS_VERSION;
-    next_record.sequence = 1U;
-    next_record.count = 1U;
-    next_record.next = 1U;
-    memcpy(next_record.bias[0], bias, sizeof(float) * 3U);
-    next_record.temperature_c[0] = temperature_c;
-  }
-  (void)old_addr;
-  next_record.magic = BIAS_MAGIC;
-  next_record.version = BIAS_VERSION;
-  next_record.crc = bias_crc_bytes((const uint8_t *)&next_record,
-                                   (uint32_t)(sizeof(next_record) - sizeof(next_record.crc)));
-
-  flash_unlock();
-  status = flash_sector_erase(new_addr);
-  if(status != FLASH_OPERATE_DONE) { flash_lock(); return -2; }
-  for(i = 0U; i < (uint32_t)(sizeof(next_record) / 4U); ++i)
-  {
-    uint32_t word;
-    memcpy(&word, ((const uint8_t *)&next_record) + i * 4U, sizeof(word));
-    status = flash_word_program(new_addr + i * 4U, word);
-    if(status != FLASH_OPERATE_DONE) { flash_lock(); return -3; }
-  }
-  flash_lock();
-  memcpy(&verify_record, (const void *)(uintptr_t)new_addr, sizeof(verify_record));
-  return v3_valid(&verify_record) ? 0 : -4;
+  /* The sole writer is the queued V4 maintenance service. This compatibility
+   * API accepts nominal RAW rad/s and never writes flash in a callback. */
+  return gyro_temp_comp_queue_fallback_rad(bias,temperature_c);
 }
 
 int gyro_bias_history_save(const float bias[3])
@@ -379,7 +349,7 @@ int gyro_bias_history_read(uint32_t offset, uint32_t limit,
   if(sequence != NULL) *sequence = 0U;
   if(record_version != NULL) *record_version = 0U;
   if(corrupt != NULL) *corrupt = 0U;
-  if(!load_records(&record, corrupt, &version) || record.count == 0U) return 0;
+  if(!load_records(&record, corrupt, &version, NULL) || record.count == 0U) return 0;
   if(count != NULL) *count = record.count;
   if(sequence != NULL) *sequence = record.sequence;
   if(record_version != NULL) *record_version = version;

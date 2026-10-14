@@ -1,0 +1,196 @@
+/* gyroa · 20261007layout2: consistent spacing and natural page flow. */
+:root{--pad:24px}
+.view{gap:16px;scrollbar-gutter:stable;scroll-padding-top:18px}
+.view>*{flex-shrink:0}
+.page-h{min-height:36px;flex-wrap:wrap;gap:8px 12px}
+.page-h h1{font-size:22px;line-height:30px}
+.card{padding:20px}
+.card-h{align-items:flex-start;flex-wrap:wrap;gap:8px 12px}
+.card-h h2,.view-test h2{font-size:17px;line-height:24px}
+.card p,.card small{overflow-wrap:anywhere}
+.actions,.filter-actions,.zaru-line{gap:8px;flex-wrap:wrap}
+.actions .fill:empty{min-width:0}
+.status-line,.aux,.bh-msg,.vqf-lead,.lead{line-height:1.65}
+.view-output>.form-card,.view-upgrade>.form-card,.settings-grid,.view-settings>.adv{width:100%;max-width:1240px}
+/* Status: always give model and plots a real size; do not compress graphs to fit height. */
+.view-status .home-grid,.view-status .home-grid.has-charts{flex:none;grid-template-columns:minmax(0,1.45fr) minmax(320px,1fr);grid-template-rows:auto;gap:16px;align-items:start}
+.view-status .home-main,.view-status .home-side{gap:14px;align-self:start}
+.view-status .home-main{align-items:stretch}
+.view-status .home-side{display:flex;flex-direction:column}
+.view-status .stage-wrap{width:100%;max-width:none}
+.view-status .ypr{padding:14px 18px}
+.view-status .ypr-item strong{font-size:clamp(25px,2.6vw,34px);line-height:1.25}
+.view-status .ypr-item em{font-size:17px;top:-9px}
+.view-status .ypr-item+.ypr-item{padding-left:16px}
+.view-status .quick-set{padding:16px 18px}
+.view-status .quick-grid{grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}
+.view-status .quick{min-height:64px;padding:12px 14px;flex-direction:row;align-items:center;justify-content:flex-start;gap:10px;font-size:14px}
+.view-status .dev-card{padding:10px 16px;gap:0}
+.view-status .dev-row{height:36px}
+.view-status .dev-row:has(#statusRestartBtn){height:auto;margin-top:8px;padding-top:10px;border-top:1px solid var(--border);justify-content:flex-end}
+.view-status .charts{flex:none;gap:12px}
+.view-status .chart{flex:none;min-height:180px;padding:12px 14px}
+.view-status .plot{flex:none;height:140px}
+.chart-h{gap:8px;align-items:flex-start}
+.chart-tools{max-width:100%;flex-wrap:wrap}
+.legend{flex-wrap:wrap;gap:6px 10px}
+.legend b{min-width:5ch}
+/* Output: format and persistence on left, channel selection on right. */
+.view-output .form-card{gap:20px}
+.out-form{display:grid;grid-template-columns:minmax(200px,.65fr) minmax(0,1.35fr);column-gap:28px;row-gap:14px}
+.out-form>.field:first-child{grid-column:1;grid-row:1;max-width:none}
+.out-form>div.field{grid-column:2;grid-row:1/3}
+.out-form>.switch-row{grid-column:1;grid-row:2;align-self:start;border-top:1px solid var(--border);padding-top:12px}
+.out-serial{display:flex;flex-direction:row;align-items:end;justify-content:space-between;gap:16px;flex-wrap:wrap;padding-top:16px;border-top:1px solid var(--border)}
+.out-serial>.actions{flex:1;min-width:0;justify-content:flex-end;padding:0}
+.out-serial>.actions>details{margin-right:auto}
+.out-serial>.actions>details[open]{flex-basis:100%}
+.view-output .checks{gap:8px}
+.view-output #canPanel{max-width:none}
+/* Calibration: processes left; parameter state and bounded history right. */
+.calib-grid{grid-template-columns:minmax(0,1.18fr) minmax(0,1fr);gap:16px;max-width:1240px;width:100%}
+.calib-main,.calib-side{display:flex;flex-direction:column;gap:16px;min-width:0}
+.calib-grid:not(:has(.calib-side>.card:not([hidden]))){grid-template-columns:minmax(0,1fr);max-width:960px}
+.calib-side:not(:has(>.card:not([hidden]))){display:none}
+.calib-main>.card,.calib-side>.card{display:flex;flex-direction:column;gap:14px;padding:20px}
+.acc-faces{gap:8px}
+.acc-faces span{height:64px;font-size:17px}
+.calib-grid .progress-row{margin:0;gap:10px}
+#magCalPanel .mag-cal-actions{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}
+#magCalPanel .mag-cal-actions button{width:100%;min-width:0;white-space:normal;height:auto;min-height:38px;padding:8px 10px}
+#magCalPanel .mag-cal-actions #magCalRead{grid-column:1/-1;justify-self:start;width:auto}
+#startupBiasPanel{display:grid;gap:8px;padding:12px;border-radius:8px;background:var(--weak-bg)}
+#startupBiasPanel b{display:block;font-size:13px;overflow-wrap:anywhere}
+#startupBiasPanel button{justify-self:start}
+.bh-wrap{max-height:260px;overflow:auto;overscroll-behavior:contain}
+.bh-tbl thead{position:sticky;top:0;z-index:1;background:var(--weak-bg)}
+.bh-tbl th,.bh-tbl td{padding:9px 8px;white-space:nowrap}
+.bh-card .bh-lead{display:none}
+.vqf-actions{padding-top:12px;border-top:1px solid var(--border)}
+/* Test: primary drift workflow left, INS and magnetic charts in the right column. */
+.test-workspace{display:grid;grid-template-columns:minmax(0,1.3fr) minmax(320px,1fr);gap:16px;width:100%;max-width:1480px;align-items:start}
+.test-session,.test-aux{display:flex;flex-direction:column;gap:16px;min-width:0}
+.view-test .card{margin:0;padding:20px;display:flex;flex-direction:column;gap:12px}
+.view-test .drift-actions{margin:0;gap:8px;align-items:end}
+.view-test .drift-actions .field{min-width:130px}
+.view-test .drift-actions .fill{display:none}
+.view-test .drift-actions button{padding:0 12px}
+.view-test .drift-config{margin:0!important;font-size:13px;line-height:1.7}
+.view-test .drift-timer{margin:0;gap:12px;padding:12px 16px;background:var(--weak-bg);border-radius:8px;font-size:13px}
+.view-test .drift-timer b{font-size:24px;display:block;margin:2px 0 0}
+.view-test #driftProgress{margin:0}
+.view-test .drift-warning{margin:0!important}
+.view-test .drift-table-wrap{margin:0;min-width:0;overscroll-behavior:contain}
+.view-test .drift-results th,.view-test .drift-results td{padding:10px 12px;font-size:13px}
+.view-test .drift-results p{margin:0;font-size:13px}
+.view-test .drift-method{margin:0}
+.view-test #driftChart{height:250px}
+.view-test .drift-plot-h{margin:0;flex-wrap:wrap}
+.view-test .ins-position td{font-size:clamp(18px,1.8vw,25px);padding:12px 8px}
+.view-test .ins-card .drift-actions{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));align-items:stretch}
+.view-test .ins-card .drift-actions button{white-space:normal;height:auto;min-height:38px;padding:8px}
+.view-test .ins-card .drift-actions label{grid-column:1/-1;display:flex;align-items:center;gap:8px;font-size:13px;min-height:32px}
+.view-test .ins-card>p{font-size:13px;line-height:1.65}
+.view-test .ins-card>p:empty{display:none}
+.view-test .mag-chart{min-height:300px;gap:12px}
+.view-test .mag-chart .plot{height:220px;min-height:220px}
+/* Upgrade: status visible, two metadata cells, clearly separated action row. */
+.view-upgrade>.form-card{max-width:960px;gap:18px}
+.fw-card>.list-row{height:auto;min-height:34px;padding:0}
+.fw-card>.file-pick{min-height:112px;padding:20px;background:var(--weak-bg)}
+.fw-card .progress-row{margin:0}
+.fw-card> .actions{padding-top:16px;border-top:1px solid var(--border)}
+.fw-card #firmwareStatus{padding:12px 14px;border-radius:8px;background:var(--primary-soft);color:var(--primary);font-size:14px}
+.fw-card #firmwareLink{font-size:13px!important}
+/* Settings: independent columns and one consistent form rhythm. */
+.settings-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px;align-items:start}
+.settings-column{display:flex;flex-direction:column;gap:16px;min-width:0}
+.settings-column>.card{display:flex;flex-direction:column;gap:14px;padding:20px}
+.settings-column #startupControls{gap:14px;padding:20px}
+.settings-column .connection-card{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px}
+.connection-card>.card-h{grid-column:1/-1}
+.connection-card select{height:var(--ctl)}
+.settings-column .filter-card{display:flex;gap:14px}
+.filter-card .card-h{align-items:flex-start}
+.filter-state{font-size:12px;line-height:1.6}
+.filter-hint{display:flex;flex-direction:column;gap:4px}
+.filter-note{display:none}
+.filter-actions{display:flex;flex-wrap:wrap;justify-content:flex-end;gap:8px}
+.filter-actions .filter-persist{margin-right:auto}
+.filter-actions .fill{display:none}
+.settings-column .seg.radios{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));align-self:stretch}
+.settings-column .seg.radios label{display:flex;justify-content:center;min-height:38px;padding:8px 10px;text-align:center}
+#modeField .seg.radios{grid-template-columns:repeat(3,minmax(0,1fr))}
+#ws2812Panel{border-top:1px solid var(--border);padding-top:12px}
+#ws2812Panel .inline-form{align-items:center;gap:8px}
+#ws2812Message,#magRejectionMessage{font-size:13px;color:var(--tx2)}
+#magRejectionPanel>p{font-size:13px;color:var(--tx2);line-height:1.7}
+#algorithmPanel>p{font-size:13px;color:var(--tx2);line-height:1.7}
+#algorithmPanel .filter-state{flex-basis:100%}
+#magRejectionPanel .switch-row{padding:10px 12px;background:var(--weak-bg);border-radius:8px}
+.view-settings .page-foot{max-width:1240px;width:100%;margin-top:0;padding:14px 0;background:var(--bg);position:sticky;bottom:-24px;z-index:3}
+.view-settings .adv{max-width:1240px}
+@media(max-width:1099px){
+  .view-status .home-grid,.view-status .home-grid.has-charts{grid-template-columns:minmax(0,1.2fr) minmax(280px,1fr)}
+  .test-workspace{grid-template-columns:minmax(0,1fr)}
+  .test-aux{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));align-items:start}
+  .settings-column .card,.calib-main>.card,.calib-side>.card{padding:18px}
+}
+@media(max-width:899px){
+  .view-status .home-grid,.view-status .home-grid.has-charts,.calib-grid{grid-template-columns:minmax(0,1fr)}
+  .view-status .home-side{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));align-items:start}
+  .view-status .charts{grid-column:1/-1;display:grid;grid-template-columns:repeat(2,minmax(0,1fr))}
+  .view-status .chart{min-height:180px}
+  .calib-main,.calib-side{gap:14px}
+  .out-form{grid-template-columns:minmax(0,1fr)}
+  .out-form>.field:first-child,.out-form>div.field,.out-form>.switch-row{grid-column:auto;grid-row:auto}
+  .view-output .checks{grid-template-columns:repeat(3,minmax(0,1fr))}
+  .settings-grid{grid-template-columns:minmax(0,1fr)}
+  .test-aux{grid-template-columns:minmax(0,1fr)}
+}
+@media(max-width:768px){
+  .view{padding:14px 12px 20px;gap:14px;scroll-padding-top:14px}
+  .card,.view-test .card,.settings-column>.card,.settings-column #startupControls,.calib-main>.card,.calib-side>.card{padding:16px}
+  .page-h h1{font-size:20px;line-height:28px}
+  .page-h button{padding:0 12px;min-height:44px}
+  .page-h>.fill{min-width:0}
+  .page-h .chip{max-width:45%;white-space:normal}
+  .view-status .home-side{display:flex}
+  .view-status .charts{display:flex}
+  .view-status .quick{min-height:56px}
+  .view-status .ypr{padding:12px}
+  .view-status .ypr-item+.ypr-item{padding-left:10px}
+  .view-status .ypr-item strong{font-size:clamp(20px,6vw,28px)}
+  .view-status .ypr-item em{font-size:14px;top:-7px}
+  .view-status .quick-set{padding:14px}
+  .view-status .qs-row{flex-wrap:wrap;gap:8px}
+  .view-status .qs-k{width:100%;flex:auto}
+  .view-status .qs-body .seg{max-width:100%;flex-wrap:wrap}
+  .view-status .qs-body .seg button{padding:0 9px}
+  .settings-column .connection-card{grid-template-columns:minmax(0,1fr)}
+  .connection-card>.card-h{grid-column:auto}
+  .settings-column .seg.radios label{min-height:44px;padding:10px 8px}
+  .filter-actions button,.mag-cal-actions button,.vqf-actions button{min-height:44px}
+  .filter-actions .filter-persist{width:100%}
+  .zaru-line .zaru-saved{flex-basis:100%;overflow-wrap:anywhere}
+  .settings-column .form-2col{grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
+  .acc-faces{grid-template-columns:repeat(3,minmax(0,1fr))}
+  .bh-wrap{max-height:300px}
+  .view-test .drift-actions .field{width:100%;min-width:0}
+  .view-test .drift-actions button{min-height:44px;flex:1 1 auto}
+  .view-test .ins-card .drift-actions button{min-height:44px}
+  .view-test .drift-timer{padding:12px}
+  .chart-tools{width:100%;justify-content:space-between}
+  .chart-h .legend{gap:6px;font-size:11px}
+  .legend b{font-size:11px;min-width:4ch}
+  .view-output .out-serial>.actions{flex-basis:100%}
+  .view-output .field-narrow{max-width:none;width:100%}
+  .out-serial>.actions>.fill{display:none}
+  .out-serial>.actions>button{min-height:44px}
+  .view-settings .page-foot{bottom:-20px;padding-bottom:12px}
+  .fw-card>.file-pick{padding:16px;flex-wrap:wrap}
+  .fw-card .file-meta{min-width:0;overflow-wrap:anywhere}
+  .fw-card>.actions>.fill{display:none}
+  .fw-card>.actions{justify-content:space-between}
+}
+@media(prefers-reduced-motion:reduce){.view{scroll-behavior:auto}}

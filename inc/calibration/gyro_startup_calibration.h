@@ -10,6 +10,10 @@ typedef struct {
   uint32_t block_start_ms, block_last_ms, block_samples, rejected_windows;
   float gyro_mean[3], gyro_m2[3], acc_mean[3], acc_m2[3], gravity_reference[3];
   uint8_t gravity_reference_valid, rejection_reason, block_active, block_bad, last_block_reason;
+  /* Temperature has the same accepted-sample/block weights as RAW gyro.
+   * Caller sets input_temperature_c before push; standalone callers default
+   * to 25 C. These fields do not change the 64-byte boot mailbox ABI. */
+  float input_temperature_c, block_temperature_c, mean_temperature_c;
 } gyro_startup_calibration_t;
 
 void gyro_startup_calibration_init(gyro_startup_calibration_t *state, uint16_t duration_ms);

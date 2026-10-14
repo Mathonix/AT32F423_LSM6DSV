@@ -3,7 +3,9 @@
 <head>
   <link rel="icon" href="data:,">
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
-<title>AT32 AHRS</title><link rel="stylesheet" href="/style.css?v=20261004startup1">
+<title>AT32 AHRS</title><link rel="stylesheet" href="/style.css?v=20261011vqftune1">
+<link rel="stylesheet" href="/layout.css?v=20261007ekf1">
+<link rel="stylesheet" href="/data-capture.css?v=20261012capture1">
 </head>
 <body>
 <svg class="sprite" aria-hidden="true" xmlns="http://www.w3.org/2000/svg">
@@ -30,6 +32,9 @@
     <a class="nav-item" href="#/status" data-nav="status" title="状态"><svg class="ic"><use href="#i-gauge"/></svg><span>状态</span></a>
     <a class="nav-item" href="#/output" data-nav="output" title="输出"><svg class="ic"><use href="#i-cable"/></svg><span>输出</span></a>
     <a class="nav-item" href="#/calib" data-nav="calib" title="校准"><svg class="ic"><use href="#i-crosshair"/></svg><span>校准</span></a>
+    <a class="nav-item" href="#/tuning" data-nav="tuning" title="调参"><svg class="ic"><use href="#i-settings"/></svg><span>调参</span></a>
+    <a class="nav-item" href="#/test" data-nav="test" title="测试"><svg class="ic"><use href="#i-activity"/></svg><span>测试</span></a>
+    <a class="nav-item" href="#/capture" data-nav="capture" title="数据采集"><svg class="ic"><use href="#i-file"/></svg><span>采集</span></a>
     <a class="nav-item" href="#/upgrade" data-nav="upgrade" title="升级"><svg class="ic"><use href="#i-upload"/></svg><span>升级</span></a>
     <div class="nav-fill"></div>
     <a class="nav-item" href="#/settings" data-nav="settings" title="设置"><svg class="ic"><use href="#i-settings"/></svg><span>设置</span></a>
@@ -52,6 +57,7 @@
     <main class="views">
       <!-- ============ 状态 ============ -->
       <section class="view view-status" data-view="status">
+        <header class="page-h"><h1>状态</h1></header>
         <div class="home-grid">
           <div class="home-main">
             <div class="stage-wrap">
@@ -78,6 +84,7 @@
               <div class="dev-row" title="温度：10 Hz 轮询（0x14 状态查询）；超过 1 秒未更新显示 --"><svg class="ic"><use href="#i-thermometer"/></svg><span class="k">温度</span><span class="v"><b id="temp">--</b> °C</span></div>
               <div class="dev-row"><svg class="ic"><use href="#i-activity"/></svg><span class="k">数据速率</span><span class="v"><b id="rate">--</b> 帧/s</span></div>
               <div class="dev-row"><svg class="ic"><use href="#i-plug"/></svg><span class="k">数据</span><span class="v"><span id="dataState" class="badge">无数据</span></span></div>
+              <div class="dev-row"><button id="statusRestartBtn" disabled><svg class="ic sm"><use href="#i-rotate"/></svg><span class="lbl">重启设备</span></button></div>
             </div>
             <div class="quick-grid">
               <a class="quick" href="#/output"><svg class="ic"><use href="#i-cable"/></svg><span>数据输出</span></a>
@@ -99,6 +106,46 @@
             </div>
           </aside>
         </div>
+      </section>
+
+      <section class="view view-test" data-view="test" hidden>
+        <header class="page-h"><h1>测试</h1><span id="driftState" class="chip" role="status">未开始</span><span class="fill"></span><button id="testRestartBtn" disabled><svg class="ic sm"><use href="#i-rotate"/></svg><span class="lbl">重启设备</span></button></header>
+
+
+
+
+
+      <div class="test-workspace"><div class="test-session"><div class="card drift-controls" id="driftControlsPanel">
+          <h2>零漂测试</h2>
+          <div class="drift-actions"><label class="field">测试时长<select id="driftDuration"><option value="60">一分钟</option><option value="300" selected>五分钟</option><option value="600">十分钟</option><option value="1800">三十分钟</option><option value="3600">一小时</option></select></label>
+          <button id="driftStart" class="primary" disabled>开始测试</button><button id="driftStop" hidden>停止测试</button><span class="fill"></span><button id="driftCsv" disabled>导出 CSV</button><button id="driftJson" disabled>导出报告 JSON</button></div>
+          <p id="driftConfig" class="drift-config"></p>
+          <p id="driftHoldWarning" class="drift-warning" hidden>当前启用零角速保持：航向被锁定，测到的是保持后的输出稳定性，不能代表陀螺仪自身零漂。</p>
+          <p id="driftNineWarning" class="drift-warning" hidden>九轴航向受磁力计修正；结果包含磁场影响，不能与六轴零漂直接比较。</p>
+          <div class="drift-timer"><span>已测 <b id="driftElapsed">00:00</b></span><span>剩余 <b id="driftRemaining">05:00</b></span></div>
+          <progress id="driftProgress" max="100" value="0" aria-label="测试进度"></progress>
+          <p id="driftMessage" role="status">请先连接设备。</p>
+          <label id="driftReplaceBox" class="drift-replace" hidden><input id="driftReplace" type="checkbox">覆盖上次结果（请先导出）</label>
+        </div><div class="card drift-plot"><div class="drift-plot-h"><h2>角度变化</h2><span class="drift-legend"><i>Yaw</i><i>Pitch</i><i>Roll</i></span></div><canvas id="driftChart" role="img" aria-label="相对首十秒均值的三轴角度变化曲线"></canvas></div><div class="card drift-results"><h2>测试结果</h2><div class="drift-table-wrap"><table><thead><tr><th>角度</th><th>首尾均值变化 / °</th><th>首末帧变化 / °</th><th>峰峰值 / °</th><th>最大偏离 / °</th><th>趋势 / °/min</th></tr></thead><tbody><tr><th scope="row">Yaw</th><td id="drift-yaw-meanChangeDeg">—</td><td id="drift-yaw-netDeg">—</td><td id="drift-yaw-peakToPeakDeg">—</td><td id="drift-yaw-maxDeviationDeg">—</td><td id="drift-yaw-slopeDegPerMin">—</td></tr><tr><th scope="row">Pitch</th><td id="drift-pitch-meanChangeDeg">—</td><td id="drift-pitch-netDeg">—</td><td id="drift-pitch-peakToPeakDeg">—</td><td id="drift-pitch-maxDeviationDeg">—</td><td id="drift-pitch-slopeDegPerMin">—</td></tr><tr><th scope="row">Roll</th><td id="drift-roll-meanChangeDeg">—</td><td id="drift-roll-netDeg">—</td><td id="drift-roll-peakToPeakDeg">—</td><td id="drift-roll-maxDeviationDeg">—</td><td id="drift-roll-slopeDegPerMin">—</td></tr></tbody></table></div>
+          <p id="driftFrames">0 帧</p><p id="driftTemp">无有效温度数据</p><p id="driftRest">静置检测：无诊断数据</p>
+          <details class="drift-method"><summary>统计口径</summary><p>首尾均值变化：最后 10 秒均值减最初 10 秒均值；峰峰值：全部姿态帧的最大值减最小值；最大偏离：相对最初 10 秒均值；趋势：每秒均值线性拟合。Yaw / Roll 跨 ±180° 连续展开。曲线和 CSV 保存每秒统计，JSON 包含配置与结果。测试只测量当前输出，不做归零或校准。</p><p>测试中不要移动板卡。断线、数据中断超过 2 秒或设备配置变化会结束测试并保留部分结果。网页刷新会丢失未导出的结果；长时间测试请保持电脑运行及页面打开。模拟设备数据仅用于演示。</p></details>
+        </div></div><aside class="test-aux"><div class="card ins-card" id="insPanel">
+          <h2>惯导运动估计</h2>
+          <div class="drift-actions"><button id="insStart" class="primary" disabled>建立 / 重置原点</button><button id="insStop" disabled>停止估计</button><button id="insStationary" disabled>确认静止，归零速度</button><label><input id="insZupt" type="checkbox">停靠模式（可能误判匀速）</label></div>
+          <div class="drift-table-wrap"><table class="cs-table ins-position"><thead><tr><th>X / cm</th><th>Y / cm</th><th>Z / cm</th></tr></thead><tbody><tr><td id="insX">—</td><td id="insY">—</td><td id="insZ">—</td></tr></tbody></table></div>
+          <p id="insMessage" role="status">请先连接设备。</p>
+          <p id="insDiagnostics"></p>
+          <p id="insVelocity"></p>
+          <p id="insQuality">数据质量：等待数据</p>
+          <p>建立原点后静止 2 秒。X 向初始前方、Y 向初始左方、Z 向上；纯惯导会累积漂移。</p>
+          <details><summary>估计说明</summary><p>固件将已校准加速度按同采样时刻的六轴融合四元数旋转，再按输出周期平均以减少降采样混叠；独立数据含微秒时间和帧序号，按 200 Hz 输出。显示滤波和航向归零不参与位置计算。原点初始化只确认静止并建立坐标，不把单姿态残差当成加速度标定。默认自由运动保留匀速速度；板卡确实停止时可确认归零速度。停靠模式会自动归零，但可能误判匀速和缓慢平移。纯惯导仍会累积漂移，六轴航向也会漂移；cm 是单位而非精度承诺。丢帧、姿态跳变、配置变化和断线会停止积分并保留部分结果。</p></details>
+        </div><section class="card chart mag-chart" id="magChart" hidden aria-label="三轴磁力计波形">
+          <div class="chart-h"><span class="chart-t">磁力计<em>µT</em></span>
+            <span class="chart-tools"><span class="legend"><i class="lg-x">Bx<b id="bxLive">--</b></i><i class="lg-y">By<b id="byLive">--</b></i><i class="lg-z">Bz<b id="bzLive">--</b></i></span><button type="button" class="chart-zoom-btn" id="magZoomBtn" title="放大" aria-label="放大磁力计波形"><svg class="ic xs" aria-hidden="true"><use href="#i-zoom-in"/></svg></button></span>
+          </div>
+          <div class="plot"><canvas role="img" aria-label="Bx、By、Bz 磁场强度实时曲线"></canvas></div>
+          <p id="magChartMessage" role="status"></p>
+        </section></aside></div>
       </section>
 
       <!-- ============ 输出 ============ -->
@@ -197,26 +244,29 @@
               <button id="acc6Btn" type="button" class="primary" disabled>开始校准</button>
             </div>
           </section>
-          <!-- biashist1：启动零偏历史（只读，0x33 → 0x34）；旧固件 ACK 0x01 / 3 s 无回复 → 隐藏 -->
-          <section class="card bh-card" id="bhPanel" aria-labelledby="bhTitle">
-            <div class="card-h"><h2 id="bhTitle">启动零偏历史</h2><span id="bhMeta" class="chip" title="count · record_version · sequence">--</span></div>
-            <p class="bh-lead">启动零偏历史（只读，最多 50 条）。</p>
-            <div id="startupBiasPanel" hidden>
-              <p id="startupBiasSource"></p>
-              <p>本次启动初值（dps）：<b id="startupBiasInitial" class="num">--</b></p>
-              <p>当前实际补偿（dps）：<b id="startupBiasCurrent" class="num">--</b></p>
-              <button id="startupBiasRead" type="button" class="sm">读取本次初值与补偿</button>
+          <section class="card" id="magCalPanel" aria-labelledby="magCalTitle">
+            <div class="card-h"><h2 id="magCalTitle">磁力计校准</h2><span id="magCalSource" class="chip">尚未读取</span></div>
+            <p class="lead">先固定线缆并选好采集位置，再慢速转动、侧倾和翻面，覆盖各个朝向。转动时保持线缆与板卡的相对位置稳定。</p>
+            <p id="magCalMode" class="warn-line" hidden>请先切换到九轴模式，再采集磁场。</p>
+            <div class="progress-row"><progress id="magCalProgress" max="100" value="0" aria-label="磁校准方向覆盖度"></progress><span id="magCalCount" class="num">0 样本 · 0/32 方向</span></div>
+            <p id="magCalMessage" class="status-line" role="status" aria-live="polite">请先连接设备</p>
+            <p id="magCalQuality" class="status-line">采集 → 拟合 → 新数据验证 → 保存</p>
+            <p id="magCalParams" class="aux mono"></p>
+            <div class="actions mag-cal-actions">
+              <button id="magCalRead" type="button" class="sm" disabled>读取</button>
+              <button id="magCalStart" type="button" class="primary" disabled>开始采集</button>
+              <button id="magCalStop" type="button" hidden>结束并拟合</button>
+              <button id="magCalCancel" type="button" hidden>停止采集</button>
+              <button id="magCalVerify" type="button" disabled>采集验证数据</button>
+              <button id="magCalSave" type="button" class="primary" disabled>保存到板卡</button>
             </div>
-            <p id="bhCorrupt" class="warn-line" hidden>有一个记录槽读不出来，下面列出的是仍可读的那一槽。</p>
-            <div id="bhWrap" class="bh-wrap" hidden>
-              <table class="bh-tbl" aria-label="启动零偏历史，最新在上">
-                <thead><tr><th title="设备序号，0 = 最旧">#</th><th>X °/s</th><th>Y °/s</th><th>Z °/s</th><th>温度 °C</th></tr></thead>
-                <tbody id="bhBody"></tbody>
-              </table>
-            </div>
-            <p id="bhEmpty" class="bh-msg" hidden>还没有记录。</p>
-            <div class="actions bh-actions"><span id="bhMsg" class="bh-msg" role="status" aria-live="polite"></span><span class="fill"></span><button id="bhRead" type="button" class="sm" disabled>读取</button></div>
+            <details class="disclosure"><summary>校准详情<svg class="ic xs"><use href="#i-chevron"/></svg></summary>
+              <p class="aux">软硬铁校准在原始磁轴完成；安装轴向沿用板卡映射，验证时检查磁倾角一致性。拟合可剔除模长误差超过10%的少量异常样本，采集和留出数据均最多5%，剔除后仍需至少600个有效样本和24/32方向。再用至少300个新样本完整验证；未保存前板卡校准不变。</p>
+              <div class="actions"><button id="magCalExport" type="button" class="sm" disabled>导出数据</button><button id="magCalRestore" type="button" class="sm" disabled>恢复试用系数</button></div>
+            </details>
           </section>
+          <!-- biashist1：启动零偏历史（只读，0x33 → 0x34）；旧固件 ACK 0x01 / 3 s 无回复 → 隐藏 -->
+
           </div>
           <div class="calib-side">
           <section class="card vqf-card" id="vqfPanel" data-state="idle" aria-labelledby="vqfTitle">
@@ -237,6 +287,50 @@
               <button id="vqfStart" type="button" class="primary" disabled title="0x2A：需设置模式（自动进入）">开始静置</button>
             </div>
           </section>
+<section class="card bh-card" id="bhPanel" aria-labelledby="bhTitle">
+            <div class="card-h"><h2 id="bhTitle">启动零偏历史</h2><span id="bhMeta" class="chip" title="count · record_version · sequence">--</span></div>
+            <p class="bh-lead">启动零偏历史（只读，最多 50 条）。</p>
+            <div id="startupBiasPanel" hidden>
+              <p id="startupBiasSource"></p>
+              <p>本次启动初值（dps）：<b id="startupBiasInitial" class="num">--</b></p>
+              <p>当前实际补偿（dps）：<b id="startupBiasCurrent" class="num">--</b></p>
+              <button id="startupBiasRead" type="button" class="sm">读取本次初值与补偿</button>
+            </div>
+            <p id="bhCorrupt" class="warn-line" hidden>有一个记录槽读不出来，下面列出的是仍可读的那一槽。</p>
+            <p id="bhUsedNote" class="bh-msg" role="status">尚未确认本次启动采用的零偏。</p>
+            <div id="bhWrap" class="bh-wrap" hidden>
+              <table class="bh-tbl" aria-label="启动零偏历史，最新在上">
+                <thead><tr><th title="设备序号，0 = 最旧">#</th><th>X °/s</th><th>Y °/s</th><th>Z °/s</th><th>温度 °C</th><th>状态</th></tr></thead>
+                <tbody id="bhBody"></tbody>
+              </table>
+            </div>
+            <p id="bhEmpty" class="bh-msg" hidden>还没有记录。</p>
+            <div class="actions bh-actions"><span id="bhMsg" class="bh-msg" role="status" aria-live="polite"></span><span class="fill"></span><button id="bhRead" type="button" class="sm" disabled>读取</button></div>
+          </section>
+          </div>
+        </div>
+      </section>
+
+      <!-- ============ 数据采集 ============ -->
+      <section class="view view-capture" data-view="capture" hidden>
+        <header class="page-h"><h1>数据采集</h1><span id="captureState" class="chip">未开始</span></header>
+        <div class="capture-layout">
+          <div class="card capture-controls">
+            <h2>运动数据记录</h2>
+            <label class="field">采集频率<select id="captureHz"><option value="1">1 Hz</option><option value="5">5 Hz</option><option value="10">10 Hz</option><option value="20">20 Hz</option><option value="50">50 Hz</option><option value="100" selected>100 Hz</option><option value="200">200 Hz</option><option value="500">500 Hz</option></select></label>
+            <p id="captureEstimate"></p>
+            <div class="capture-actions"><button id="captureStart" class="primary" disabled>开始采集</button><button id="captureStop" disabled>停止采集</button><button id="captureCsv" disabled>导出 CSV</button><button id="captureClear" disabled>清空数据</button></div>
+            <p id="captureMessage" role="status" aria-live="polite">请先连接设备。</p>
+            <div class="capture-stats"><div><small>记录行数</small><b id="captureRows">0</b></div><div><small>采集时长</small><b id="captureElapsed">0.0 s</b></div><div><small>文件大小</small><b id="captureSize">0 B</b></div></div>
+            <p id="captureQuality"></p><p id="captureConfig"></p>
+            <p>加速度含重力，单位 g；角速度为 °/s，姿态为 °（±180°）。CSV 记录电脑接收时间（UTC）和板卡采样时间，分析间隔请使用 elapsed_s。低频记录可减小文件，快速运动请提高频率。</p>
+            <p>停止后导出 CSV，再清空数据开始下一轮。页面关闭或刷新会清除尚未导出的数据。</p>
+            <button id="captureRead" class="sm" disabled>读取采集状态</button>
+          </div>
+          <div class="capture-plots">
+            <div class="card"><h2>加速度 <small>g</small></h2><div class="capture-legend"><span>ax <b id="captureValue0">—</b></span><span>ay <b id="captureValue1">—</b></span><span>az <b id="captureValue2">—</b></span></div><canvas id="captureAccChart" aria-label="最近15秒的三轴加速度"></canvas></div>
+            <div class="card"><h2>角速度 <small>°/s</small></h2><div class="capture-legend"><span>gx <b id="captureValue3">—</b></span><span>gy <b id="captureValue4">—</b></span><span>gz <b id="captureValue5">—</b></span></div><canvas id="captureGyroChart" aria-label="最近15秒的三轴角速度"></canvas></div>
+            <div class="card"><h2>姿态 <small>°</small></h2><div class="capture-legend"><span>yaw <b id="captureValue6">—</b></span><span>pitch <b id="captureValue7">—</b></span><span>roll <b id="captureValue8">—</b></span></div><canvas id="capturePoseChart" aria-label="最近15秒的航向俯仰横滚"></canvas></div>
           </div>
         </div>
       </section>
@@ -254,11 +348,12 @@
             <span class="btn-like">选择文件</span>
           </label>
           <div class="progress-row"><progress id="firmwareProgress" max="100" value="0" aria-label="固件已确认上传进度"></progress><span id="fwPct" class="num">0%</span></div>
+          <p id="firmwareStatus" class="status-line" role="status" aria-live="polite">先连接设备，再选择固件。</p>
           <p class="warn-line"><svg class="ic sm"><use href="#i-alert"/></svg>升级期间请勿断开设备。</p>
           <p id="firmwareLink" class="firmware-link" data-transport="" style="margin:0;font-size:13px;color:var(--tx2)">当前链路：未连接</p>
           <div id="fwResult" class="result" hidden></div>
           <details class="disclosure" id="fwDetails"><summary>查看详情<svg class="ic xs"><use href="#i-chevron"/></svg></summary>
-            <div class="kv"><small id="firmwareStatus" role="status" aria-live="polite">先连接设备，再选择固件。</small><small id="firmwareInfo" class="mono">尚未选择固件。</small></div>
+            <div class="kv"><small id="firmwareInfo" class="mono">尚未选择固件。</small></div>
           </details>
           <div class="actions">
             <button type="button" id="fwRecoveryLink" class="link weak-link">设备无法升级？ 恢复模式</button>
@@ -274,17 +369,67 @@
       </section>
 
       <!-- ============ 设置 ============ -->
+      <section class="view view-tuning" data-view="tuning" hidden>
+        <header class="page-h"><h1>调参</h1><span id="vqfTuningState" class="chip">--</span></header>
+        <div class="card tuning-card">
+          <div class="card-h"><h2>VQF 参数</h2></div>
+          <p class="tuning-note">保存后自动重启并重连，参数在重启后生效。自定义参数优先于滤波档位和静置初始化参数。</p>
+          <div class="tuning-toolbar">
+            <button id="vqfTuningApply" class="primary" disabled>保存并应用</button>
+            <button id="vqfTuningRestore" disabled>恢复默认参数</button>
+            <button id="vqfTuningRead" disabled>读取设备参数</button>
+            <button id="vqfTuningDiscard" disabled>撤销修改</button>
+            <span id="vqfTuningDirty" class="chip warn" hidden>未保存</span>
+          </div>
+          <p id="vqfTuningMessage" class="tuning-message" role="status" aria-live="polite">请先连接设备</p>
+          <div id="vqfTuningFields" class="tuning-grid"></div>
+        </div>
+        <div class="card tuning-card" id="gyroScalePanel" data-fw-inert>
+          <div class="card-h"><h2>陀螺仪比例因子校准</h2><span id="gyroScaleStatus" class="chip">—</span></div>
+          <p class="tuning-note">先热机并完成静止零偏校准，再使用六轴模式采集。固定所选转轴，标记起始位置，单向转满指定圈数后回到标记；保存后再反向转动复测。平放转航向选 Z 轴。</p>
+          <div class="tuning-grid">
+            <label class="field">转轴<select id="gyroScaleAxis"><option value="2">Z（航向）</option><option value="0">X</option><option value="1">Y</option></select></label>
+            <label class="field">实际圈数<input id="gyroScaleCircles" type="number" value="10" min="1" max="100" step="1"></label>
+          </div>
+          <div class="tuning-toolbar"><button id="gyroScalePrepare" disabled>准备采集</button><button id="gyroScaleBegin" disabled>开始转动</button><button id="gyroScaleEnd" disabled>结束转动</button><button id="gyroScaleCancel" disabled>取消采集</button></div>
+          <p id="gyroScaleAngle">累计角度：—</p>
+          <details><summary>使用已有测量结果</summary><div class="form-2col"><label class="field">测得累计角度（°，10 圈例如 3585）<input id="gyroScaleMeasured" type="number" step="any" inputmode="decimal"></label><label class="field">测量时比例系数<input id="gyroScaleMeasuredFactor" type="number" value="1" min="0.95" max="1.05" step="any" inputmode="decimal"></label></div><button id="gyroScaleCalculate" disabled>按输入计算系数</button><p class="tuning-note">手动输入默认按未补偿角度计算，测量时系数填 1：10 圈测得 3600°，系数为 1。若测量已应用比例补偿，请填写测量当时的系数。自动采集会填入该基准。填写完整累计角度，不能只填最后的偏差。</p></details>
+          <div class="tuning-grid gyro-scale-factors">
+            <label class="field">X 轴系数<input id="gyroScaleFactor0" type="number" min="0.95" max="1.05" step="0.000001" disabled><small>当前 <span id="gyroScaleActive0">—</span></small></label>
+            <label class="field">Y 轴系数<input id="gyroScaleFactor1" type="number" min="0.95" max="1.05" step="0.000001" disabled><small>当前 <span id="gyroScaleActive1">—</span></small></label>
+            <label class="field">Z 轴系数<input id="gyroScaleFactor2" type="number" min="0.95" max="1.05" step="0.000001" disabled><small>当前 <span id="gyroScaleActive2">—</span></small></label>
+          </div>
+          <div class="tuning-toolbar"><button id="gyroScaleApply" class="primary" disabled>保存并应用</button><button id="gyroScaleRestore" disabled>恢复系数为 1</button><button id="gyroScaleRead" disabled>读取设备系数</button><button id="gyroScaleDiscard" disabled>撤销修改</button></div>
+          <p id="gyroScaleMessage" class="tuning-message" role="status" aria-live="polite">请先连接设备</p>
+          <p class="tuning-note">系数保存到板卡，自动重启后对 VQF／EKF、六轴／九轴生效。</p>
+        </div>
+      </section>
+
       <section class="view view-settings" data-view="settings" hidden>
         <header class="page-h"><h1>设置</h1></header>
-        <div class="settings-grid">
-          <section class="card" data-fw-inert>
+        <div class="settings-grid"><div class="settings-column"><section class="card connection-card" data-fw-inert>
             <div class="card-h"><h2>连接</h2></div>
-            <label class="field">连接方式<select id="connKind" disabled><option>USB / UART 串口</option></select></label>
+            <label class="field">连接方式<select id="connKind"><option value="serial">Web Serial（USB / UART 串口）</option><option value="webusb">WebUSB（板卡 USB 直连）</option></select></label>
             <label class="field">波特率<select id="baud"><option>2000000</option><option>115200</option><option>921600</option></select></label>
             <label class="field">解析模式<select id="parseMode"><option value="auto">自动（JustFloat 优先）</option><option value="justfloat">JustFloat</option><option value="binary">二进制 AA55</option></select></label>
             <label class="field">JustFloat 通道<select id="justChannels"><option value="3" selected>3（Yaw / Pitch / Roll）</option><option value="6">6（Yaw / Pitch / Roll / Gz / Az / Temp）</option></select></label>
-          </section>
-          <section class="card" id="startupControls" data-fw-inert>
+          </section><section class="card" id="algorithmPanel" data-fw-inert>
+            <div class="card-h"><h2>融合算法</h2><span class="filter-state" id="algorithmState">当前 -- · 已保存 --</span></div>
+            <label class="field">算法<select id="algorithmSelect" disabled><option value="0">VQF</option><option value="1">EKF（扩展卡尔曼）</option></select></label>
+            <p>六轴、九轴及九轴相对角均可使用。保存后自动重启设备，并重新连接原 USB / 串口。</p>
+            <div class="filter-actions"><button id="algorithmRead" type="button" disabled>读取</button><button id="algorithmApply" type="button" class="primary" disabled>保存并重启</button></div>
+            <p id="algorithmMessage" role="status" aria-live="polite">请先连接设备</p>
+          </section><section class="card" id="restBiasPanel" data-fw-inert>
+            <div class="card-h"><h2>静置零偏估计</h2></div>
+            <label class="switch-row"><span>静置零偏估计（VQF / EKF）</span><input type="checkbox" class="switch" id="restBiasEnable" disabled></label>
+            <p>静止时更新陀螺仪零偏。立即生效并保存；关闭后保留已有补偿和运动零偏估计。</p>
+            <div class="inline-form"><p id="restBiasMessage" role="status" aria-live="polite">请先连接设备</p><span class="fill"></span><button id="restBiasRead" type="button" class="sm" disabled>读取</button></div>
+          </section><section class="card" id="magRejectionPanel" data-fw-inert>
+            <div class="card-h"><h2>磁干扰拒绝</h2></div>
+            <label class="switch-row"><span>拒磁保护（VQF / EKF）</span><input type="checkbox" class="switch" id="magRejectionEnable" disabled></label>
+            <p>开启时拒绝异常磁场；关闭后持续使用磁力计纠正航向，磁干扰可能导致航向偏移。立即生效并保存，六轴模式不使用磁力计。</p>
+            <div class="inline-form"><p id="magRejectionMessage" role="status">请先连接设备</p><span class="fill"></span><button id="magRejectionRead" type="button" class="sm" disabled>读取</button></div>
+          </section></div><div class="settings-column"><section class="card" id="startupControls" data-fw-inert>
             <div class="card-h"><h2>设备</h2></div>
             <fieldset id="modeField" class="field seg-field" disabled>
               <legend>融合模式</legend>
@@ -297,16 +442,21 @@
             <label class="switch-row" id="fastStartRow"><span>快速启动</span><input type="checkbox" class="switch" id="fastStart" disabled></label>
             <div class="form-2col">
               <div id="gyroInitRow"><label class="field" for="gyroInitSeconds"><span id="gyroInitLabel">启动窗口</span><span class="suffix"><input id="gyroInitSeconds" type="number" value="2" min="0" max="60" step="0.1" required disabled><i>s</i></span></label></div>
-              <label class="field">量程<span class="suffix"><select id="gyroRange" disabled><option value="125">±125</option><option value="250">±250</option><option value="500">±500</option><option value="1000" selected>±1000</option><option value="2000">±2000</option><option value="4000">±4000</option></select><i>dps</i></span></label>
+              <label class="field">陀螺仪量程<span class="suffix"><select id="gyroRange" disabled><option value="125">±125</option><option value="250">±250</option><option value="500">±500</option><option value="1000" selected>±1000</option><option value="2000">±2000</option><option value="4000">±4000</option></select><i>dps</i></span></label>
             </div>
+            <label class="field">加速度计量程<span class="suffix"><select id="accRange" disabled><option value="2">±2</option><option value="4" selected>±4</option><option value="8">±8</option><option value="16">±16</option></select><i>g</i></span></label>
+            <p id="accRangeHint" class="startup-help">加速度计量程保存后在重启时生效。</p>
             <label class="switch-row"><span>保存后重启</span><input type="checkbox" class="switch" id="restartNow"></label>
+            <div id="ws2812Panel">
+              <label class="switch-row"><span>WS2812 指示灯</span><input id="ws2812Enable" class="switch" type="checkbox" disabled aria-label="WS2812 指示灯"></label>
+              <div class="inline-form"><p id="ws2812Message" role="status">请先连接设备</p><span class="fill"></span><button id="ws2812Read" type="button" class="sm" disabled>读取</button></div>
+            </div>
             <p id="gyroInitHint" class="startup-help">0～60 秒，默认 2 秒；0 秒使用历史零偏直接启动。</p>
             <p id="restartHint" class="warn-line"></p>
-          </section>
-          <section class="card filter-card" id="filterPanel" data-fw-inert>
+          </section><section class="card filter-card" id="filterPanel" data-fw-inert>
             <div class="card-h"><h2>姿态稳定性</h2><span class="filter-state" id="filterState">当前：-- · 已保存：-- · 内部 -- Hz</span></div>
             <div class="seg radios" role="radiogroup" aria-label="姿态稳定性"><label><input type="radio" name="filterProfile" value="0" disabled><span>响应优先</span></label><label><input type="radio" name="filterProfile" value="1" checked disabled><span>均衡</span></label><label><input type="radio" name="filterProfile" value="2" disabled><span>静态稳定</span></label><label title="ZARU / Stationary Heading Hold：静止时锁定航向，检测到运动后立即恢复更新"><input type="radio" name="filterProfile" value="3" disabled><span>零角速保持</span></label></div>
-            <p class="filter-hint" title="只改变输出平滑和磁航向收敛时间，立即生效，无需重启。"><span id="filterHint">均衡：兼顾响应与静态平滑。</span><span class="filter-note">只改变输出平滑和磁航向收敛时间，立即生效，无需重启。</span></p>
+            <p class="filter-hint" title="只改变输出平滑和磁航向收敛时间，立即生效，无需重启。"><span id="filterHint">均衡：兼顾响应与静态平滑。</span><span class="filter-note">立即生效，无需重启。</span></p>
             <div class="filter-actions"><label class="filter-persist"><input type="checkbox" class="switch" id="filterPersist" checked disabled><span>重启后保留</span></label><span class="fill"></span><button id="filterRead" type="button" disabled>读取</button><button id="filterDiscard" type="button" disabled>撤销修改</button><button id="filterApply" type="button" class="primary" disabled>应用模式</button></div>
             <p id="filterMsg" class="filter-msg" role="status" aria-live="polite"></p>
             <details class="zaru-box" id="zaruPanel">
@@ -316,8 +466,7 @@
               <div class="zaru-line"><label class="filter-persist"><input type="checkbox" class="switch" id="zaruPersist" checked disabled><span>重启后保留</span></label><span id="zaruSaved" class="zaru-saved">已保存 --</span><button id="zaruRead" type="button" disabled>读取</button><button id="zaruDiscard" type="button" disabled>撤销</button><button id="zaruRestore" type="button" disabled title="恢复为固件编译默认值并写入 Flash（0x31）；只替换这六个阈值，需再点一次确认">恢复默认</button><button id="zaruSave" type="button" class="primary" disabled>保存</button></div>
               <p id="zaruMsg" class="zaru-msg" role="status" aria-live="polite"></p>
             </details>
-          </section>
-        </div>
+          </section></div></div>
         <details class="card disclosure adv" id="advPanel">
           <summary>高级设置<svg class="ic xs"><use href="#i-chevron"/></svg></summary>
           <div class="adv-grid">
@@ -341,7 +490,8 @@
                   <tr data-k="mode"><th>融合模式</th><td>--</td><td>--</td></tr>
                   <tr data-k="fast"><th>快速启动</th><td>--</td><td>--</td></tr>
                   <tr data-k="init"><th>零偏时间</th><td>--</td><td>--</td></tr>
-                  <tr data-k="range"><th>量程</th><td>--</td><td>--</td></tr>
+                  <tr data-k="range"><th>陀螺仪量程</th><td>--</td><td>--</td></tr>
+                  <tr data-k="accRange"><th>加速度计量程</th><td>--</td><td>--</td></tr>
                   <tr data-k="rate"><th>输出频率</th><td>--</td><td>--</td></tr>
                 </tbody>
               </table>
@@ -408,18 +558,41 @@
 </div>
 <div id="toasts" class="toasts" aria-live="polite"></div>
 
-<script src="/mobile-mock.js?v=20261004startup1"></script>
+<script src="/mobile-mock.js?v=20261008rest1"></script>
 <script src="/firmware-upgrade.js?v=20261001fw1-app4"></script>
 <script src="/filter-profile.js?v=20261002zaru1"></script>
 <script src="/zaru-limits.js?v=20261002restore1"></script>
 <script src="/motion-bias.js?v=20261002bias1"></script>
-<script src="/vqf-init.js?v=20261002vqfinit1"></script>
-<script src="/bias-history.js?v=20261004biasfix1"></script>
-<script src="/app.js?v=20261004biasfix1"></script>
-  <script src="/ui-shell.js?v=20261004startup1"></script>
+<script src="/vqf-init.js?v=20261004drift2"></script>
+<script src="/bias-history.js?v=20261004drift2"></script>
+<script src="/drift-test.js?v=20261007ekf1"></script>
+<script src="/inertial-test.js?v=20261005ins4"></script>
+<script src="/magnetometer.js?v=20261005mag1"></script>
+<script src="/ws2812.js?v=20261007ekf1"></script>
+<script src="/mag-calibration.js?v=20261011magfit1"></script>
+<script src="/webusb.js?v=20261007ekf1"></script>
+<script src="/mag-rejection.js?v=20261007ekf1"></script>
+<script src="/fusion-algorithm.js?v=20261007ekf1"></script>
+<script src="/rest-bias.js?v=20261008rest1"></script>
+<script src="/vqf-tuning.js?v=20261011vqftune1"></script>
+<script src="/gyro-scale.js?v=20261012scale2"></script>
+<script src="/data-capture.js?v=20261012capture1"></script>
+<script src="/app.js?v=20261012capture1"></script>
+<script src="/ui-data-capture.js?v=20261012capture1"></script>
+<script src="/ui-inertial.js?v=20261007ekf1"></script>
+  <script src="/ui-shell.js?v=20261012capture1"></script>
 <script src="/ui-pages.js?v=20261001fw1-app4"></script>
-<script src="/ui-chart.js?v=20261002vqfinit1"></script>
-<script src="/ui-adv.js?v=20261004startup1"></script>
+<script src="/ui-mag.js?v=20261005mag1"></script>
+<script src="/ui-chart.js?v=20261005mag1"></script>
+<script src="/ui-adv.js?v=20261012acc1"></script>
 <script src="/quick-settings.js?v=20261002quick2"></script>
+<script src="/ui-test.js?v=20261011vqftune1"></script>
+<script src="/ui-ws2812.js?v=20261007ekf1"></script>
+<script src="/ui-mag-calibration.js?v=20261011magfit1"></script>
+<script src="/ui-mag-rejection.js?v=20261007ekf1"></script>
+<script src="/ui-fusion-algorithm.js?v=20261007ekf1"></script>
+<script src="/ui-rest-bias.js?v=20261008rest1"></script>
+<script src="/ui-vqf-tuning.js?v=20261011vqftune1"></script>
+<script src="/ui-gyro-scale.js?v=20261012scale2"></script>
 </body>
 </html>

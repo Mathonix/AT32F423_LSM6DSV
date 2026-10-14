@@ -81,13 +81,14 @@ int main(void)
   mailbox->magic=0U;
   bl_io_init();
   boot_timer_init();
-  /* Initialise the shared PA8 RGB driver before IMU setup and capture. */
+  device_settings_t settings;
+  (void)device_settings_load(&settings);
+  ws2812_set_enabled(settings.ws2812_enabled);
+  /* Read the saved enable before initial colour: disabled boots never flash blue. */
   ws2812_init();
   bl_protocol_reset();
 
   const int force = boot_requested();
-  device_settings_t settings;
-  (void)device_settings_load(&settings);
   int capture=!force && bl_protocol_can_boot() && settings.gyro_init_ms!=0U;
   if(capture) {
     acc_calibration_load();

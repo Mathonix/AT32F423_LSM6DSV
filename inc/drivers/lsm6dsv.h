@@ -25,6 +25,7 @@ int lsm6dsv_probe_whoami(uint8_t who_mode[4]);
 int lsm6dsv_read_reg(uint8_t reg, uint8_t *value);
 int lsm6dsv_write_reg(uint8_t reg, uint8_t value);
 int lsm6dsv_init_2khz(uint16_t gyro_range_dps);
+int lsm6dsv_init_2khz_ranges(uint16_t gyro_range_dps, uint8_t acc_range_g);
 int lsm6dsv_read_sflp_gbias(float gbias_dps[3], uint32_t settle_ms);
 int lsm6dsv_data_ready(void);
 int lsm6dsv_wait_sample(uint32_t timeout_us);

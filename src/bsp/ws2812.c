@@ -14,6 +14,14 @@ static uint32_t ws_last_ms;
 static uint16_t ws_phase;
 static uint16_t ws_dither;
 static uint8_t ws_rgb_valid, ws_red, ws_green, ws_blue;
+static uint8_t ws_enabled=1U, ws_initialized;
+
+uint8_t ws2812_get_enabled(void) { return ws_enabled; }
+void ws2812_set_enabled(uint8_t enabled)
+{
+  ws_enabled=enabled ? 1U : 0U;
+  if(!ws_enabled && ws_initialized) ws2812_set_rgb(0U,0U,0U);
+}
 
 static inline void wait_until(uint32_t deadline)
 {
@@ -41,6 +49,7 @@ static void send_byte(uint8_t value, uint32_t t0h, uint32_t t1h, uint32_t period
 
 void ws2812_set_rgb(uint8_t red, uint8_t green, uint8_t blue)
 {
+  if(!ws_enabled) red=green=blue=0U;
   /* A repeated setting-mode colour needs no new WS2812 waveform. Each
    * waveform masks IRQs for ~30 us, enough to lose several 2-Mbaud RX bytes. */
   if(ws_rgb_valid && red == ws_red && green == ws_green && blue == ws_blue) return;
@@ -85,6 +94,7 @@ void ws2812_init(void)
   gpio_init(WS_GPIO, &gpio_init_struct);
   WS_GPIO->clr = WS_PIN;
   delay_us(100U);
+  ws_initialized=1U;
 
   /* Blue means firmware startup / stationary calibration. */
   ws2812_set_rgb(0U, 0U, 12U);
@@ -121,6 +131,7 @@ static uint8_t breathing_level(uint16_t phase)
 
 void ws2812_normal_task(uint32_t now_ms, ws2812_mode_t mode, uint8_t calibration_failed, uint8_t mag_rejected, uint8_t settings_pending_reboot, uint8_t history_error)
 {
+  if(!ws_enabled) return;
   uint8_t level;
   uint8_t red = 0U;
   uint8_t green = 0U;
@@ -198,6 +209,7 @@ void ws2812_normal_task(uint32_t now_ms, ws2812_mode_t mode, uint8_t calibration
 }
 void ws2812_show_error(uint8_t code)
 {
+  if(!ws_enabled) return;
   /* Red is fatal IMU/VQF startup failure; amber identifies mag failure. */
   if(code == 2U)
   {
@@ -214,6 +226,7 @@ void ws2812_show_error(uint8_t code)
 
 void ws2812_settings_task(uint32_t now_ms, ws2812_mode_t mode)
 {
+  if(!ws_enabled) return;
   if((uint32_t)(now_ms - ws_last_ms) < WS_PERIOD_MS) return;
   ws_last_ms = now_ms;
   if(mode == WS2812_MODE_9AXIS)
@@ -224,6 +237,7 @@ void ws2812_settings_task(uint32_t now_ms, ws2812_mode_t mode)
 
 void ws2812_calibration_task(uint32_t now_ms)
 {
+  if(!ws_enabled) return;
   if((uint32_t)(now_ms - ws_last_ms) < WS_PERIOD_MS) return;
   ws_last_ms = now_ms;
   /* Two 80-ms blue pulses per second, separated by 100 ms of darkness.
@@ -235,6 +249,7 @@ void ws2812_calibration_task(uint32_t now_ms)
 
 void ws2812_acc_calibration_task(uint32_t now_ms, uint8_t face, uint8_t active, uint8_t failed)
 {
+  if(!ws_enabled) return;
   uint8_t on = 0U;
   uint8_t i;
   static uint32_t last_ms;

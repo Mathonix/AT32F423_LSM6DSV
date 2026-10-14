@@ -9,6 +9,8 @@ extern "C" {
 
 /* One WS2812B-4020: PA8 -> DIN, byte order on wire is GRB. */
 void ws2812_init(void);
+void ws2812_set_enabled(uint8_t enabled);
+uint8_t ws2812_get_enabled(void);
 void ws2812_set_rgb(uint8_t red, uint8_t green, uint8_t blue);
 typedef enum
 {

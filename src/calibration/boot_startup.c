@@ -30,6 +30,7 @@ void boot_startup_push(boot_startup_t *s, uint32_t now, const float gyro[3], con
 {
   if(s->calibration.duration_ms && (uint32_t)(now-s->start_ms)<s->calibration.duration_ms) {
     s->temperature_c=temp;
+    s->calibration.input_temperature_c=temp;
     (void)gyro_startup_calibration_push(&s->calibration,now,gyro,acc);
   }
 }
@@ -47,7 +48,8 @@ void boot_startup_finish(const boot_startup_t *s, uint32_t now, int allow_fresh,
   out->temperature_c=s->temperature_c;
   if(allow_fresh && gyro_startup_calibration_finish_window(&s->calibration, now, s->start_ms,
                                                         out->bias_rad_s,out->gravity_ms2))
-    { out->status=BOOT_STARTUP_FRESH; out->rejection_reason=0; }
+    { out->status=BOOT_STARTUP_FRESH; out->rejection_reason=0;
+      out->temperature_c=s->calibration.mean_temperature_c; }
   else if(out->duration_ms) out->rejection_reason = allow_fresh ?
       gyro_startup_calibration_window_reason(&s->calibration,now,s->start_ms) : 14U;
   out->crc=checksum(out);

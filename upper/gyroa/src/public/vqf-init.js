@@ -4,7 +4,8 @@
 //   0x2B 取消（空，不需设置模式）→ ACK + 0x0D       0x2C 查询参数（空）→ 0x0E 52 B（不回 ACK）
 //   0x2D 恢复默认（空，需设置模式）→ ACK + 0x0E（采集中 ACK 0x03/0x0703 时不回 0x0E）
 // 采集中设备约每 200 ms 主动推 0x0D（seq 0），成功结束再推 0x0E（seq 0）；结束以 0x0D 的 state 为准，不只看 ACK。
-// 默认值只来自 0x0E 的 default_*：本文件不保存任何默认数字。旧固件 ACK 0x01 或 3 s 内无数据帧 → 整个功能隐藏。
+// 默认值只来自 0x0E 的 default_*：本文件不保存任何默认数字。旧固件 ACK 0x01 → 整个功能隐藏。
+// calfix1：3 s 内无数据帧不是确定性答复（固件回复队列满会丢帧、上电启动窗口内可能不回）→ 只提示未收到并自动重查（最多 PROBE_RETRIES 次），卡片保留。
 (function (root) {
   'use strict';
   const CMD = { QUERY_STATUS: 0x29, START: 0x2a, CANCEL: 0x2b, QUERY_SETTINGS: 0x2c, RESTORE: 0x2d };
@@ -12,7 +13,7 @@
   const LEN_STATUS = 28, LEN_SETTINGS = 52, VERSION = 1;
   const ST = { OK: 0, UNSUPPORTED: 1, BAD: 2, FAIL: 3 };
   const DETAIL = { BUSY: 0x0701, NOT_READY: 0x0702, ACTIVE: 0x0703 };
-  const PROBE_MS = 3000, ACK_TIMEOUT_MS = 3000, RESTORE_CONFIRM_MS = 4000, STALE_MS = 1000;
+  const PROBE_MS = 3000, ACK_TIMEOUT_MS = 3000, RESTORE_CONFIRM_MS = 4000, STALE_MS = 1000, PROBE_RETRIES = 3, RETRY_MS = 1000;
   const STATE = { IDLE: 0, WAIT: 1, PRE: 2, COLLECT: 3, CHECK: 4, DONE: 5, FAILED: 6 };
   const STATE_TEXT = ['空闲', '等待放稳', '预稳定计时中', '正在采集', '正在检查', '成功', '失败'];
   const ERROR_TEXT = {
@@ -22,6 +23,7 @@
   };
   const SOURCE_TEXT = ['默认参数', '静置初始化'];
   const UNSUPPORTED_TEXT = '当前固件不支持静置初始化 VQF（旧固件）';
+  const NO_REPLY_TEXT = '未收到设备回复（可能仍在启动或回复被丢弃），可点「读取」重试';
   const RESTORE_CONFIRM_TEXT = '再次点击「确认恢复」：恢复后，这次静置结果会清除（两个 σ 与两个静止门限回到默认值）';
   const ACTIVE_TEXT = '静置初始化进行中，设备未执行（ACK 0x03 / 0x0703）';
   // 参数行：key → 0x0E 偏移（当前值 / default_*）
@@ -73,12 +75,12 @@
   function createController(io) {
     const s = { supported: null, status: null, settings: null, statusAt: 0, settingsAt: 0, pending: null, message: '', result: null,
       restoreArmed: false, collectTotal: 0, last: null, dropped: 0, quietSent: 0 };
-    let probe = null, ackTimer = null, armTimer = null, polling = false;
+    let probe = null, ackTimer = null, armTimer = null, retry = null, tries = 0, polling = false;
     const changed = () => io.changed?.();
     const note = (text, ok = null, kind = null) => { s.message = text; if (ok !== null) s.result = { ok, text, kind: kind || (ok ? 'ok' : 'fail') }; changed(); };
     function finish(ok, text, kind) { clearTimeout(ackTimer); ackTimer = null; s.pending = null; note(text, ok, kind); if (text) io.say?.(text); }
     function markUnsupported() {
-      clearTimeout(probe); probe = null; s.supported = false; s.restoreArmed = false;
+      clearTimeout(probe); clearTimeout(retry); probe = retry = null; s.supported = false; s.restoreArmed = false;
       if (s.pending) { clearTimeout(ackTimer); ackTimer = null; s.pending = null; }
       s.message = ''; s.result = null; io.log?.(UNSUPPORTED_TEXT); changed();
     }
@@ -90,11 +92,23 @@
         finish(false, `未确认：未收到${what}的应答 / 回读，请点「读取」核对设备状态`, 'unconfirmed');
       }, ACK_TIMEOUT_MS);
     }
-    async function query({ quiet = false } = {}) {
+    // 只有 ACK 0x01 是确定性的「不支持」；3 s 无数据帧只算未确认：保留卡片、提示、有限次静默重查
+    function onProbeTimeout() {
+      probe = null;
+      if (s.supported !== null) return;
+      s.message = NO_REPLY_TEXT; s.result = null;
+      io.log?.(`静置初始化：3 s 内无 0x0D / 0x0E（未确认，不按旧固件处理）${tries < PROBE_RETRIES ? `，${RETRY_MS / 1000} s 后自动重查（${tries + 1}/${PROBE_RETRIES}）` : ''}`);
+      if (tries < PROBE_RETRIES) { tries++; clearTimeout(retry); retry = setTimeout(() => { retry = null; if (s.supported === null) void query({ quiet: true, auto: true }); }, RETRY_MS); }
+      changed();
+    }
+    function confirmed() { clearTimeout(probe); clearTimeout(retry); probe = retry = null; if (s.message === NO_REPLY_TEXT) s.message = ''; }
+    async function query({ quiet = false, auto = false } = {}) {
       if (s.supported === false) return false;
-      if (s.supported !== true && !probe) probe = setTimeout(() => { probe = null; if (s.supported !== true) markUnsupported(); }, PROBE_MS);
+      if (!auto) { clearTimeout(retry); retry = null; }
+      if (s.supported !== true && !probe) probe = setTimeout(onProbeTimeout, PROBE_MS);
       const a = await io.send(CMD.QUERY_SETTINGS, [], { quiet });
       const b = await io.send(CMD.QUERY_STATUS, [], { quiet });
+      if (auto && !(a && b) && s.supported === null) { clearTimeout(probe); probe = null; } // 自动重查时已断开：不再计时
       return !!(a && b);
     }
     async function command(kind, cmd, needEdit) {
@@ -134,7 +148,7 @@
       return true;
     }
     function onStatus(m) {
-      clearTimeout(probe); probe = null;
+      confirmed();
       const prev = s.status; s.supported = true; s.status = m; s.statusAt = Date.now(); polling = false;
       if (m.state === STATE.COLLECT && (!prev || prev.state !== STATE.COLLECT)) s.collectTotal = m.remainingMs;
       if (m.state === STATE.COLLECT) s.collectTotal = Math.max(s.collectTotal, m.remainingMs);
@@ -151,7 +165,7 @@
       changed();
     }
     function onSettings(m) {
-      clearTimeout(probe); probe = null;
+      confirmed();
       s.supported = true; s.settings = m; s.settingsAt = Date.now();
       if (m.source !== 1) disarmRestore(false);
       const p = s.pending;
@@ -174,7 +188,7 @@
       return true;
     }
     function reset() {
-      clearTimeout(probe); clearTimeout(ackTimer); clearTimeout(armTimer); probe = ackTimer = armTimer = null; polling = false;
+      clearTimeout(probe); clearTimeout(ackTimer); clearTimeout(armTimer); clearTimeout(retry); probe = ackTimer = armTimer = retry = null; tries = 0; polling = false;
       Object.assign(s, { supported: null, status: null, settings: null, statusAt: 0, settingsAt: 0, pending: null, message: '', result: null, restoreArmed: false, collectTotal: 0, dropped: 0 });
       changed();
     }
@@ -244,5 +258,5 @@
   }
 
   root.GyroVqf = { CMD, MSG, LEN_STATUS, LEN_SETTINGS, VERSION, ST, DETAIL, STATE, STATE_TEXT, ERROR_TEXT, SOURCE_TEXT, PARAMS, PROBE_MS, ACK_TIMEOUT_MS, RESTORE_CONFIRM_MS,
-    UNSUPPORTED_TEXT, RESTORE_CONFIRM_TEXT, ACTIVE_TEXT, decode, sameParams, startFailText, detailText, createController, bindDom };
+    PROBE_RETRIES, RETRY_MS, NO_REPLY_TEXT, UNSUPPORTED_TEXT, RESTORE_CONFIRM_TEXT, ACTIVE_TEXT, decode, sameParams, startFailText, detailText, createController, bindDom };
 })(typeof globalThis !== 'undefined' ? globalThis : this);

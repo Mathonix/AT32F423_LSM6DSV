@@ -1,3 +1,5 @@
+const webusbAPI = globalThis.GyroWebUSB?.create(navigator.usb);
+function connectionAPI() { return document.getElementById('connKind')?.value === 'webusb' ? webusbAPI : navigator.serial; }
 const $ = (id) => document.getElementById(id);
 
 // ==== GYRO-CORE BEGIN ====
@@ -31,6 +33,9 @@ const MSG = {
   FW_VERSION: 0x32,    // fwver1：应用固件版本 16 B（format=1, len, char[14] 以 0 结尾）
   BIAS_HISTORY: 0x34,  // biashist1：启动零偏历史 60 B（bias-history.js 解码，只读）
   STARTUP_BIAS: 0x38,
+  INERTIAL: 0x41,
+  MAGNETOMETER: 0x43,
+  WS2812: 0x46,
   ACK: 0x90,        // cmd_id, status, detail
 };
 // #pragma pack(1) 结构体 sizeof：payload 长度必须严格相等，否则丢弃
@@ -50,6 +55,13 @@ const PAYLOAD_LEN = {
   [MSG.STARTUP_BIAS]: 60,
 };
 const CMD = {
+  INERTIAL: 0x40,
+  QUERY_MAGNETOMETER: 0x42,
+  QUERY_MAG_REJECTION: 0x4d, SET_MAG_REJECTION: 0x4e,
+  QUERY_ALGORITHM:0x50, SET_ALGORITHM:0x51,
+  QUERY_REST_BIAS:0x55, SET_REST_BIAS:0x56,
+  QUERY_WS2812: 0x44,
+  SET_WS2812: 0x45,
   PING: 0x10,
   ZERO: 0x11,
   CAL: 0x12,
@@ -88,6 +100,7 @@ const CMD = {
 };
 const CAN_RATES = [1000000, 500000, 400000, 250000, 200000, 100000, 50000, 25000];
 const GYRO_RANGES = [125,250,500,1000,2000,4000];
+const ACC_RANGES = [2,4,8,16];
 function canPeriodFromHz(value) {
   const hz = Number(value);
   return Number.isFinite(hz) && hz >= .1 && hz <= 1000 ? Math.round(1000 / hz) : null;
@@ -187,6 +200,16 @@ function validateOutputHz(text, fusionHz) {
 
 // 二进制 payload 解码（严格长度）；未知 MSG 返回 unknown，长度不符返回 badLength
 function decodePayload(id, payload) {
+  if([0x48,0x4a].includes(id) && globalThis.GyroMagCal) return GyroMagCal.decode(id,payload);
+  if(id===0x4f && globalThis.GyroMagRejection) return globalThis.GyroMagRejection.decode(payload);
+  if([0x61,0x63].includes(id) && globalThis.GyroCapture) return GyroCapture.decode(id,payload);
+  if(id===0x5f && globalThis.GyroScale) return globalThis.GyroScale.decode(payload);
+  if(id===0x5b && globalThis.GyroVqfTuning) return globalThis.GyroVqfTuning.decode(payload);
+  if(id===0x52 && globalThis.GyroFusionAlgorithm) return globalThis.GyroFusionAlgorithm.decode(payload);
+  if(id===0x57 && globalThis.GyroRestBias) return globalThis.GyroRestBias.decode(payload);
+  if(id===MSG.WS2812 && globalThis.GyroWs2812) return globalThis.GyroWs2812.decode(payload);
+  if (id === MSG.MAGNETOMETER && globalThis.GyroMag) return globalThis.GyroMag.decode(payload);
+  if (id === MSG.INERTIAL && globalThis.GyroInertial) return globalThis.GyroInertial.decode(id, payload);
   if ((id === MSG.FILTER_CONFIG || id === MSG.FILTER_DIAG) && globalThis.GyroFilter) return globalThis.GyroFilter.decode(id, payload);
   if (id === MSG.ZARU_LIMITS && globalThis.GyroZaru) return globalThis.GyroZaru.decode(id, payload);
   if ((id === MSG.VQF_STATUS || id === MSG.VQF_SETTINGS) && globalThis.GyroVqf) return globalThis.GyroVqf.decode(id, payload);
@@ -199,7 +222,7 @@ function decodePayload(id, payload) {
     const values = Array.from({ length: selectedCount(mask) }, (_, i) => view.getFloat32(4 + 4 * i, true));
     return { type: 'selected', mask, values, ts: view.getUint16(2, true) };
   }
-  const expected = id === MSG.CONFIG ? ({1:18,2:22,3:28,4:28}[payload[0]] ?? PAYLOAD_LEN[id]) : PAYLOAD_LEN[id];
+  const expected = id === MSG.CONFIG ? ({1:18,2:22,3:28,4:28,5:30}[payload[0]] ?? PAYLOAD_LEN[id]) : PAYLOAD_LEN[id];
   if (expected === undefined) return { type: 'unknown', id, length: payload.length };
   if (payload.length !== expected) return { type: 'badLength', id, length: payload.length, expected };
   const view = new DataView(payload.buffer, payload.byteOffset, payload.length);
@@ -249,10 +272,11 @@ function decodePayload(id, payload) {
       return { type: 'canConfig', ready: !!payload[1], active, saved, busOff: !!payload[22] };
     }
     case MSG.CONFIG:
-      if (![1, 2, 3, 4].includes(payload[0]) || payload[1] > 1 || payload[2] > 2 || payload[3] > 2 || payload[4] > 1 || payload[5] > 1 ||
+      if (![1, 2, 3, 4, 5].includes(payload[0]) || payload[1] > 2 || payload[2] > 2 || payload[3] > 2 || payload[4] > 1 || payload[5] > 1 ||
           (payload[0] >= 2 && [18, 20].some((offset) => view.getUint16(offset, true) < (payload[0] >= 4 ? 0 : 100) || view.getUint16(offset, true) > 60000)) ||
           (payload[0] >= 3 && (!GYRO_RANGES.includes(view.getUint16(22,true)) || !GYRO_RANGES.includes(view.getUint16(24,true)) ||
-            !validateOutputHz(view.getUint16(26,true),DEFAULT_FUSION_HZ).ok))) return { type: 'unknown', id, length: payload.length };
+            !validateOutputHz(view.getUint16(26,true),DEFAULT_FUSION_HZ).ok)) ||
+          (payload[0] >= 5 && (!ACC_RANGES.includes(payload[28]) || !ACC_RANGES.includes(payload[29])))) return { type: 'unknown', id, length: payload.length };
       return {
         type: 'config', version: payload[0], source: payload[1], activeMode: payload[2], savedMode: payload[3],
         activeFast: payload[4], savedFast: payload[5], capabilities: payload[6], outHz: view.getUint16(8, true),
@@ -262,6 +286,8 @@ function decodePayload(id, payload) {
         activeRangeDps: payload[0] >= 3 ? view.getUint16(22,true) : null,
         savedRangeDps: payload[0] >= 3 ? view.getUint16(24,true) : null,
         savedOutputHz: payload[0] >= 3 ? view.getUint16(26,true) : null,
+        activeAccRangeG: payload[0] >= 5 ? payload[28] : null,
+        savedAccRangeG: payload[0] >= 5 ? payload[29] : null,
       };
     case MSG.ACK:
       return { type: 'ack', cmd: payload[0], status: payload[1], detail: view.getUint16(2, true) };
@@ -652,11 +678,21 @@ let justChannels = 3;
 let parseModeValue = 'auto';
 let pose = { yaw: null, pitch: null, roll: null, temp: null };
 let tempAt = 0;                   // temp1：pose.temp 最近一次更新时间（performance.now）；超过 TEMP_POLL.STALE_MS 显示 --
+let driftStartup = null, driftDiag = null, driftDiagAt = 0;
+function driftSample(yaw, pitch, roll, at = performance.now()) {
+  if (!globalThis.GyroDrift?.session?.active) return;
+  const freshGyro = ['gx','gy','gz'].every(k => at - imuStamp[k] < 1000);
+  globalThis.GyroDrift.session.ingest({ yaw, pitch, roll,
+    temp: at - tempAt <= 1000 ? pose.temp : null,
+    gyro: freshGyro ? [imu.gx, imu.gy, imu.gz] : null,
+    bias: at - driftDiagAt <= 500 ? driftDiag?.bias : null }, at);
+}
 let imu = { gx: null, gy: null, gz: null, ax: null, ay: null, az: null };
 let quat = null;
 let lastQuatAt = 0;
 let drawPending = false;
 let pendingImmediateReset = false;
+let pendingDeviceReset = null;
 let startupFormDirty = false, startupFormRevision = 0, pendingStartup = null, startupAckTimer = null;
 let pendingExitAfterMode = false;
 let lastPoseAt = 0;
@@ -701,11 +737,11 @@ const FW_USB_TIMEOUT_TEXT = 'USB 重新枚举后未连上同一块板子。应�
 const FW_USB_MULTI_TEXT = '检测到多块相同的 USB 设备，已停止。请只连接当前板子后再升级。';
 const FW_UNCONFIRMED_TEXT = '固件已完整校验，但尚未确认应用启动。请保持供电并重新连接检查；上传完成不代表应用已运行。固件已写完，不要断电，不要再点升级；刷新后重连即可。';
 const FW_RECONNECT_OPEN_MS = 2000, FW_RESTORE_MS = 90000;
-// restoreAfterFirmware 期间由 navigator.serial 'connect' 事件采纳的重新枚举端口；有界打开每 50 ms 检查它
+// restoreAfterFirmware 期间由 connectionAPI() 'connect' 事件采纳的重新枚举端口；有界打开每 50 ms 检查它
 let firmwareReconnectPort = null, firmwareOpenBoundedCalls = 0, firmwareLastBoundedAbort = null;
-// 只用于升级后的重连（connect({firmware:true})）。open() 与超时赛跑：超时或发现新端口时立即失败，
+// 用于升级入口、设备重启及升级后的重连。open() 与超时赛跑：停止、超时或发现新端口时立即失败，
 // 迟到成功的 open 立刻 close。普通用户点击连接仍直接 port.open()，不加超时。
-function openPortBounded(p, options, ms = FW_RECONNECT_OPEN_MS) {
+function openPortBounded(p, options, ms = FW_RECONNECT_OPEN_MS, watchFirmwarePort = true, shouldStop = () => false) {
   firmwareOpenBoundedCalls++;
   return new Promise((resolve, reject) => {
     let settled = false, timer = null, watch = null;
@@ -719,7 +755,8 @@ function openPortBounded(p, options, ms = FW_RECONNECT_OPEN_MS) {
       (error) => finish(error));
     timer = setTimeout(() => finish(new Error(`打开串口超时（${ms} ms）`)), ms);
     watch = setInterval(() => {
-      if (firmwareReconnectPort && firmwareReconnectPort !== p) finish(new Error('已发现重新枚举的 USB 端口'));
+      if (shouldStop()) { finish(new Error('已停止进入升级模式；应用尚未擦除。')); return; }
+      if (watchFirmwarePort && firmwareReconnectPort && firmwareReconnectPort !== p) finish(new Error('已发现重新枚举的 USB 端口'));
     }, 50);
   });
 }
@@ -746,14 +783,14 @@ const motionBias = globalThis.GyroBias ? globalThis.GyroBias.createController({
   canAuto: () => tempPollAllowed(), log: (text) => log(text), changed: () => biasView?.render(),
 }) : null;
 
-// vqfinit1：静置初始化 VQF（vqf-init.js）：连接后 0x2C + 0x29；开始 / 恢复默认由 ui-shell.js 自动设置模式门包装；ACK 0x01 或 3 s 无数据 → 隐藏
+// vqfinit1：静置初始化 VQF（vqf-init.js）：连接后 0x2C + 0x29；开始 / 恢复默认由 ui-shell.js 自动设置模式门包装；ACK 0x01 → 隐藏；3 s 无数据只提示并重试
 let vqfView = null;
 const vqfInit = globalThis.GyroVqf ? globalThis.GyroVqf.createController({
   send: (cmd, payload, { quiet = false } = {}) => (quiet ? sendQuiet(cmd, payload) : send(cmd, payload)),
   editable: () => settingEditable(), say: (text) => say(text), log: (text) => log(text), changed: () => { vqfView?.render(); globalThis.GyroUI?.vqfChanged?.(); },
 }) : null;
 
-// biashist1：启动零偏历史（bias-history.js，只读）：连上后自动整表读一次（静默翻页）；ACK 0x01 / 3 s 无 0x34 → 隐藏卡片
+// biashist1：启动零偏历史（bias-history.js，只读）：连上后自动整表读一次（静默翻页）；ACK 0x01 → 隐藏卡片；超时保留并重试
 let biasHistView = null;
 const biasHist = globalThis.GyroBiasHist ? globalThis.GyroBiasHist.createController({
   send: (cmd, payload) => sendQuiet(cmd, payload), log: (text) => log(text), changed: () => biasHistView?.render(),
@@ -819,7 +856,69 @@ async function send(cmd, payload = []) {
 // app1 UI glue: ui-shell.js enters settings mode automatically right before a write and exits afterwards,
 // so settings-gated controls stay editable whenever the device is connected (protocol unchanged).
 let autoSettingsMode = true;
-function settingEditable() { return setting || (autoSettingsMode && running && !firmwareBusy); }
+let ws2812View=null;
+const ws2812Context=()=>({connected:running,busy:GyroDriftIO.context().busy ||
+  !!globalThis.GyroDrift?.session?.active || !!globalThis.GyroInertial?.session?.state?.().active ||
+  !!globalThis.GyroUI?.gate?.busy});
+const ws2812Control=globalThis.GyroWs2812?.createController({
+  connected:()=>running,busy:()=>ws2812Context().busy,nextSeq:()=>seq&255,
+  send:(cmd,payload)=>sendQuiet(cmd,payload),changed:()=>{ws2812View?.render();updateSettingUI();},
+});
+if(ws2812Control)GyroWs2812.control=ws2812Control;
+let magRejectionView=null;
+const magRejectionContext=()=>({connected:running,busy:ws2812Context().busy || !!ws2812Control?.state.pending || !!globalThis.GyroMagCal?.control?.busy()});
+const magRejectionControl=globalThis.GyroMagRejection?.createController({
+  connected:()=>running,busy:()=>magRejectionContext().busy,nextSeq:()=>seq&255,
+  send:(cmd,payload)=>sendQuiet(cmd,payload),changed:()=>{magRejectionView?.render();updateSettingUI();},
+});
+if(magRejectionControl)GyroMagRejection.control=magRejectionControl;
+let fusionAlgorithmView=null;
+const fusionAlgorithmContext=()=>({connected:running,
+  dirty:startupFormDirty||canFormDirty||rateFormDirty||!!filterProfile?.state.dirty||!!zaruLimits?.state.dirty,
+  busy:!deviceRestartAllowed()||startupFormDirty||canFormDirty||rateFormDirty||!!filterProfile?.state.dirty||!!zaruLimits?.state.dirty||!!globalThis.GyroInertial?.session?.state?.().active});
+const fusionAlgorithmControl=globalThis.GyroFusionAlgorithm?.createController({
+  connected:()=>running,busy:()=>fusionAlgorithmContext().busy,nextSeq:()=>seq&255,
+  send:sendQuiet,changed:()=>{fusionAlgorithmView?.render();updateSettingUI();},
+  restart:async()=>{if(!deviceRestartAllowed())return false;await restartDevice();return !!reconnectPlan;},
+});
+if(fusionAlgorithmControl)GyroFusionAlgorithm.control=fusionAlgorithmControl;
+let vqfTuningView=null;
+const vqfTuningContext=()=>({connected:running,
+  busy: !deviceRestartAllowed() || startupFormDirty || canFormDirty || rateFormDirty ||
+    !!filterProfile?.state.dirty || !!zaruLimits?.state.dirty ||
+    !!globalThis.GyroInertial?.session?.state?.().active});
+const vqfTuningControl=globalThis.GyroVqfTuning?.createController({
+  connected:()=>running,busy:()=>vqfTuningContext().busy,nextSeq:()=>seq&255,
+  send:sendQuiet,changed:()=>{vqfTuningView?.render();updateSettingUI();},
+  restart:async()=>{if(!deviceRestartAllowed())return false;await restartDevice();return !!reconnectPlan;},
+});
+if(vqfTuningControl)GyroVqfTuning.control=vqfTuningControl;
+const gyroScaleControl=globalThis.GyroScale?.createController({
+  connected:()=>running,busy:()=>gyroScaleContext().busy||!!globalThis.GyroScale?.busy?.(),nextSeq:()=>seq&255,
+  send:sendQuiet,changed:()=>updateSettingUI(),restart:async()=>{if(!deviceRestartAllowed())return false;await restartDevice();return !!reconnectPlan;},
+});
+if(gyroScaleControl)GyroScale.control=gyroScaleControl;
+const captureControl=globalThis.GyroCapture?.createController({
+  connected:()=>running,nextSeq:()=>seq&255,send:sendQuiet,
+  changed:()=>{updateSettingUI();globalThis.GyroCapture?.render?.();},
+});
+if(captureControl)GyroCapture.control=captureControl;
+let restBiasView=null;
+const restBiasContext=()=>({connected:running,busy:ws2812Context().busy});
+const restBiasControl=globalThis.GyroRestBias?.createController({
+  connected:()=>running,busy:()=>restBiasContext().busy,nextSeq:()=>seq&255,
+  send:sendQuiet,changed:()=>updateSettingUI(),
+});
+if(restBiasControl)GyroRestBias.control=restBiasControl;
+const magCalContext=()=>({connected:running,mode:deviceConfig?.activeMode,hidden:document.hidden,
+  busy:!!globalThis.GyroCapture?.busy?.() || !!globalThis.GyroScale?.busy?.() || connecting || setting || firmwareBusy || firmwareRestoring || !!reconnectPlan || !!pendingDeviceReset ||
+    !!pendingStartup || !!pendingOutput || !!pendingCan || !!pendingRate || !!accStartPending || accCalibration?.status===1 ||
+    !!filterProfile?.state.pending || !!zaruLimits?.state.pending || !!vqfInit?.state.pending || !!vqfInit?.busy?.() ||
+    (!!(globalThis.GyroRestBias?.control?.state.pending || globalThis.GyroWs2812?.control?.state.pending || (globalThis.GyroMagRejection?.control?.state.pending || (globalThis.GyroVqfTuning?.control?.state.pending || globalThis.GyroFusionAlgorithm?.control?.state.pending))) || !!(globalThis.GyroMagRejection?.control?.state.pending || (globalThis.GyroVqfTuning?.control?.state.pending || globalThis.GyroFusionAlgorithm?.control?.state.pending))) || !!globalThis.GyroUI?.gate?.busy ||
+    !!globalThis.GyroDrift?.session?.active || !!globalThis.GyroInertial?.session?.state?.().active});
+const magCalControl=globalThis.GyroMagCal?.createController({context:magCalContext,nextSeq:()=>seq&255,send:sendQuiet,changed:()=>{globalThis.GyroMagCal?.render?.();updateSettingUI();}});
+if(magCalControl)GyroMagCal.control=magCalControl;
+function settingEditable() { return !globalThis.GyroCapture?.busy?.() && !globalThis.GyroScale?.busy?.() && !globalThis.GyroMagCal?.control?.busy() && !(globalThis.GyroRestBias?.control?.state.pending || globalThis.GyroWs2812?.control?.state.pending || (globalThis.GyroMagRejection?.control?.state.pending || (globalThis.GyroVqfTuning?.control?.state.pending || globalThis.GyroFusionAlgorithm?.control?.state.pending))) && (setting || (autoSettingsMode && running && !firmwareBusy)); }
 
 // temp1：温度轮询专用静默发送（不写日志、失败不提示）；固件升级期间一律不发
 async function sendQuiet(cmd, payload = []) {
@@ -829,9 +928,9 @@ async function sendQuiet(cmd, payload = []) {
 }
 // 轮询门控：已连接且空闲。连接中 / 升级（含选端口、升级后恢复）/ 重启重连 / 任何“应用 + 回读核对”进行中 / gyro3 自动设置模式门 / 页面不可见 → 暂停
 function tempPollAllowed() {
-  return running && !!writer && !connecting && !firmwareBusy && !firmwareRestoring && !firmwareChoosingPort && !reconnectPlan &&
+  return !globalThis.GyroScale?.busy?.() && !globalThis.GyroMagCal?.control?.busy() && running && !!writer && !connecting && !firmwareBusy && !firmwareRestoring && !firmwareChoosingPort && !reconnectPlan &&
     !pendingStartup && !pendingOutput && !pendingCan && !pendingRate && !pendingImmediateReset && !accStartPending &&
-    !filterProfile?.state.pending && !zaruLimits?.state.pending && !vqfInit?.state.pending && !biasHist?.state.reading && !globalThis.GyroUI?.gate?.busy && document.visibilityState === 'visible';
+    !filterProfile?.state.pending && !zaruLimits?.state.pending && !vqfInit?.state.pending && !(globalThis.GyroRestBias?.control?.state.pending || globalThis.GyroWs2812?.control?.state.pending || (globalThis.GyroMagRejection?.control?.state.pending || (globalThis.GyroVqfTuning?.control?.state.pending || globalThis.GyroFusionAlgorithm?.control?.state.pending))) && !biasHist?.state.reading && !globalThis.GyroUI?.gate?.busy && document.visibilityState === 'visible';
 }
 const tempPoller = createTempPoller({
   now: () => performance.now(), canPoll: tempPollAllowed, nextSeq: () => seq & 0xff, send: () => sendQuiet(CMD.QUERY),
@@ -849,6 +948,7 @@ setInterval(() => { if (running && !firmwareBusy) vqfInit?.tick(); }, 250); // v
 function setConnected(connected) {
   if ($('startupBiasRead')) $('startupBiasRead').disabled = !connected || firmwareBusy;
   if (!connected) { clearTimeout(accAckTimer); accStartPending = false; }
+  if ($('connKind')) $('connKind').disabled = connected || connecting || firmwareBusy || firmwareChoosingPort || !!reconnectPlan;
   $('connectBtn').disabled = firmwareBusy || connected || connecting || !!reconnectPlan;
   $('disconnectBtn').disabled = firmwareBusy || (!connected && !reconnectPlan);
   $('linkState').textContent = connected ? '串口已连接' : reconnectPlan ? '等待原串口重连' : '未连接';
@@ -960,6 +1060,7 @@ function flagsText(flags) {
   if (flags & FLAGS.MAG_DISTURBED) parts.push('磁扰动');
   if (flags & FLAGS.CALIB_DONE) parts.push('已标定');
   if (flags & FLAGS.SENSOR_ERROR) parts.push('传感器异常');
+  if (flags & 32) parts.push('数据限幅');
   return parts.length ? parts.join('/') : '-';
 }
 
@@ -977,12 +1078,13 @@ function updatePose(yaw, pitch, roll) {
   pose.roll = roll;
   lastFrames += 1;
   lastPoseAt = performance.now();
+  driftSample(yaw, pitch, roll, lastPoseAt);
   for (const key of ['yaw', 'pitch', 'roll']) poseTimes[key] = lastPoseAt;
   scheduleDraw();
   return true;
 }
 
-function updateImu(values) {
+function updateImu(values, ts = null) {
   if (!values.every(Number.isFinite)) return;
   [imu.gx, imu.gy, imu.gz, imu.ax, imu.ay, imu.az] = values;
   stampImu(['gx', 'gy', 'gz', 'ax', 'ay', 'az']);
@@ -1031,7 +1133,7 @@ function syncParserToStream(mode, { force = true } = {}) {
   return true;
 }
 
-function handleSelected(values, mask) {
+function handleSelected(values, mask, ts = null) {
   const fields = selectedFields(values, mask);
   if (!fields) return;
   for (const key of FIELD_NAMES) {
@@ -1046,6 +1148,7 @@ function handleSelected(values, mask) {
   for (const key of ['yaw', 'pitch', 'roll']) poseTimes[key] = key in fields ? now : 0;
   lastPoseAt = (mask & 7) === 7 ? now : 0;
   lastImuAt = now;
+  if ((mask & 7) === 7) driftSample(fields.yaw, fields.pitch, fields.roll, now);
   scheduleDraw();
 }
 
@@ -1059,6 +1162,7 @@ function updateOutputControls() {
   $('fastStart').disabled = !settingEditable() || !deviceConfig || !(deviceConfig.capabilities & 2) || !!pendingStartup;
   $('gyroInitSeconds').disabled = !settingEditable() || !(deviceConfig?.version >= 2) || !(deviceConfig.capabilities & 16) || (deviceConfig.version < 4 && $('fastStart').checked) || !!pendingStartup;
   $('gyroRange').disabled = !settingEditable() || !(deviceConfig?.version >= 3) || !(deviceConfig.capabilities & 32) || !!pendingStartup;
+  $('accRange').disabled = !settingEditable() || !(deviceConfig?.version >= 5) || !!pendingStartup;
   $('rateApplyBtn').disabled = !running || !!pendingRate;
   $('canPanel').disabled = !running || !settingEditable() || !(deviceConfig?.capabilities & 8) || !canConfig || !canConfig.ready || !!pendingCan;
 }
@@ -1068,6 +1172,7 @@ function fillStartupForm(message) {
   $('gyroInitSeconds').min = message.version >= 4 ? '0' : '0.1';
   $('gyroInitSeconds').value = (message.savedInitMs ?? 2000) / 1000;
   $('gyroRange').value = String(message.savedRangeDps ?? 1000);
+  $('accRange').value = String(message.savedAccRangeG ?? 4);
   const radio = document.querySelector(`input[name="fusion"][value="${message.savedMode}"]`);
   if (radio) radio.checked = true;
 }
@@ -1082,6 +1187,9 @@ function updateStartupDraftUI() {
     : combined ? '0～60 秒，默认 2 秒；升级等待和零偏采集同时进行。到期不合格使用历史零偏，0 秒直接使用历史启动。'
       : '重启后保持设备静止，完成此时长的零偏采样后开始输出姿态。';
   $('startupDiscard').disabled = !startupFormDirty || !deviceConfig || !!pendingStartup;
+  $('accRangeHint').textContent = deviceConfig?.version >= 5
+    ? `加速度计：当前 ±${deviceConfig.activeAccRangeG} g · 已保存 ±${deviceConfig.savedAccRangeG} g；重启后生效。`
+    : deviceConfig ? '加速度计量程需升级配套固件后才能调节。' : '加速度计量程保存后在重启时生效。';
   $('gyroRangeHint').textContent = deviceConfig?.version >= 3 && (deviceConfig.capabilities & 32)
     ? `当前 ±${deviceConfig.activeRangeDps} dps · 已保存 ±${deviceConfig.savedRangeDps} dps；量程在重启时生效。`
     : deviceConfig ? '当前固件固定量程，需升级配套固件才能调节。' : '量程保存后在设备重启时生效。';
@@ -1095,12 +1203,13 @@ function configureDevice(message) {
   deviceConfig = message;
   filterProfile?.setFusion(message.activeMode); // 第 4 档说明按 0x07 运行融合模式（不看 LED）
   zaruLimits?.setFusion(message.activeMode);    // 阈值说明：九轴不锁磁力计航向
-  $('configState').textContent = `已读取 · 当前连接 ${message.source ? 'USB' : 'UART'}`;
+  $('configState').textContent = `已读取 · 当前连接 ${message.source === 2 ? 'WebUSB' : message.source ? 'USB' : 'UART'}`;
   $('configState').className = 'badge on';
   $('startupState').textContent = `当前：${startupSummary(message.activeMode, message.activeFast, message.activeInitMs)} · 已保存：${startupSummary(message.savedMode, message.savedFast, message.savedInitMs)}`;
   if (pendingStartup?.acked && message.savedMode === pendingStartup.mode && message.savedFast === pendingStartup.fast &&
       (pendingStartup.initMs === null || message.savedInitMs === pendingStartup.initMs) &&
-      (pendingStartup.rangeDps === null || message.savedRangeDps === pendingStartup.rangeDps)) {
+      (pendingStartup.rangeDps === null || message.savedRangeDps === pendingStartup.rangeDps) &&
+      (pendingStartup.accRangeG === null || message.savedAccRangeG === pendingStartup.accRangeG)) {
     const request = pendingStartup;
     clearTimeout(startupAckTimer); pendingStartup = null;
     if (startupFormRevision === request.revision) startupFormDirty = false;
@@ -1109,7 +1218,7 @@ function configureDevice(message) {
   }
   if (!startupFormDirty && !pendingStartup) fillStartupForm(message);
   document.querySelectorAll('input[name="fusion"]').forEach((node) => { node.disabled = !(message.capabilities & 1) && node.value !== '0'; });
-  fusionPendingRestart = message.activeMode !== message.savedMode || message.activeFast !== message.savedFast || message.activeInitMs !== message.savedInitMs || message.activeRangeDps !== message.savedRangeDps;
+  fusionPendingRestart = message.activeMode !== message.savedMode || message.activeFast !== message.savedFast || message.activeInitMs !== message.savedInitMs || message.activeRangeDps !== message.savedRangeDps || message.activeAccRangeG !== message.savedAccRangeG;
   $('rateState').textContent = message.version >= 3 && (message.capabilities & 64)
     ? `USB / UART：当前 ${message.outHz} Hz · 断电恢复 ${message.savedOutputHz} Hz（设置后自动保存）`
     : '旧固件输出频率仅本次运行有效；升级配套固件后支持重启保留。';
@@ -1126,7 +1235,7 @@ function configureDevice(message) {
     document.querySelectorAll(`#outputFields${i} input`).forEach((node) => { node.checked = !!(output.mask & (1 << Number(node.value))); });
     $('outputSummary' + i).textContent = output.format === 2 ? `设备当前：兼容预设 · ${streamModeName(output.legacyMode)}` : output.mask === 0 ? '设备当前：数据输出已关闭' : `设备当前：${output.format ? 'AA55 自定义协议' : 'JustFloat'} · ${FIELD_LABELS.filter((_, bit) => output.mask & (1 << bit)).join('、')}`;
   }
-  const current = message.outputs[message.source];
+  const current = message.outputs[message.source === 0 ? 0 : 1];
   if (current.format === 2) syncParserToStream(current.legacyMode, { force: false });
   else {
     const mode = current.format || !current.mask ? 'binary' : 'justfloat';
@@ -1144,7 +1253,7 @@ function configureDevice(message) {
     if (!option) { option = document.createElement('option'); option.id = 'selectedChannels'; $('justChannels').append(option); }
     option.value = `selected:${channels}`; option.textContent = `${channels}（设备自选通道）`;
     $('justChannels').value = option.value;
-    $('streamLabel').textContent = `${message.source ? 'USB' : 'UART'}：${current.mask ? (current.format ? '自定义协议' : 'JustFloat') : '输出已关闭'}`;
+    $('streamLabel').textContent = `${message.source === 2 ? 'WebUSB' : message.source ? 'USB' : 'UART'}：${current.mask ? (current.format ? '自定义协议' : 'JustFloat') : '输出已关闭'}`;
   }
   $('parseMode').disabled = selectionMask !== null;
   $('justChannels').disabled = selectionMask !== null;
@@ -1228,6 +1337,19 @@ async function applyOutput(portIndex) {
 }
 
 function handleAck({ cmd: command, status, detail, seq: ackSeq }) {
+  if(command === CMD.INERTIAL) { globalThis.GyroInertial?.onAck?.(status,ackSeq); globalThis.GyroScale?.onStreamAck?.(status,ackSeq); return; }
+  if (command === CMD.RESET && pendingDeviceReset?.seq === ackSeq) {
+    clearTimeout(pendingDeviceReset.timer); pendingDeviceReset = null;
+    if (status === 0) {
+      say('设备重启中，请保持静止；将重新执行启动流程并自动重连原串口');
+      beginRestartReconnect();
+    } else {
+      cancelRestartReconnect();
+      say(`设备重启失败（${ACK_STATUS[status] || status}）`);
+    }
+    globalThis.GyroUI?.refresh();
+    return;
+  }
   if (tempPoller.onAck(command, status, ackSeq)) return; // 轮询 0x14 的 ACK：静默处理（0x01 → 停止轮询）
   const statusText = ACK_STATUS[status] || `0x${status.toString(16)}`;
   const reason = ackDetailText(command, status, detail);
@@ -1389,12 +1511,50 @@ function handleAck({ cmd: command, status, detail, seq: ackSeq }) {
 }
 
 function handleMessage(message) {
+  if(message.type==='ack' && [0x60,0x62].includes(message.cmd)){captureControl?.onAck(message.cmd,message.status,message.seq);return;}
+  if(message.type==='captureConfig'){captureControl?.onConfig(message,message.seq);return;}
+  if(message.type==='captureData'){globalThis.GyroCapture?.onData?.(message);return;}
+  if(['unknown','badLength'].includes(message.type) && message.id===0x61)globalThis.GyroCapture?.onDropped?.();
+  if(message.type==='ack' && [0x5c,0x5d,0x5e].includes(message.cmd)){gyroScaleControl?.onAck(message.cmd,message.status,message.seq);return;}
+  if(message.type==='gyroScale'){gyroScaleControl?.onState(message,message.seq);return;}
+  if(message.type==='ack' && [0x58,0x59,0x5a].includes(message.cmd)){vqfTuningControl?.onAck(message.cmd,message.status,message.seq);return;}
+  if(message.type==='vqfTuning'){vqfTuningControl?.onState(message,message.seq);return;}
+  if(message.type==='ack' && [CMD.QUERY_REST_BIAS,CMD.SET_REST_BIAS].includes(message.cmd)) {restBiasControl?.onAck(message.cmd,message.status,message.seq);return;}
+  if(message.type==='ack' && [0x47,0x49,0x4b,0x4c].includes(message.cmd)){magCalControl?.onAck(message.cmd,message.status,message.seq);return;}
+  if(message.type==='magCalRaw'){magCalControl?.onRaw(message,message.seq);return;}
+  if(message.type==='magCalState'){magCalControl?.onState(message,message.seq);return;}
+  if(message.type==='ack' && [CMD.QUERY_MAG_REJECTION,CMD.SET_MAG_REJECTION].includes(message.cmd)) {magRejectionControl?.onAck(message.cmd,message.status,message.seq);return;}
+  if(message.type==='ack' && [CMD.QUERY_ALGORITHM,CMD.SET_ALGORITHM].includes(message.cmd)) {fusionAlgorithmControl?.onAck(message.cmd,message.status,message.seq);return;}
+  if(message.type==='ack' && [CMD.QUERY_WS2812,CMD.SET_WS2812].includes(message.cmd)) {ws2812Control?.onAck(message.cmd,message.status,message.seq);return;}
+  if (message.type === 'ack' && message.cmd === CMD.QUERY_MAGNETOMETER) { globalThis.GyroMag?.onAck?.(message.status, message.seq); return; }
+  if (message.type === 'filterDiag') {
+    driftDiag = message; driftDiagAt = performance.now();
+    globalThis.GyroDrift?.session?.diagnostic(message);
+  }
+  if (message.type === 'ack' && message.cmd === CMD.QUERY_FILTER_DIAG && message.status === 1) globalThis.GyroDrift?.unsupportedDiag?.();
   switch (message.type) {
+    case 'restBias':
+      restBiasControl?.onState(message,message.seq);
+      if(!restBiasControl?.state.pending)void motionBias?.query({quiet:true});
+      break;
+    case 'magRejection':
+      magRejectionControl?.onState(message,message.seq); break;
+    case 'fusionAlgorithm':
+      fusionAlgorithmControl?.onState(message,message.seq); break;
+    case 'ws2812':
+      ws2812Control?.onState(message,message.seq);
+      break;
+    case 'magnetometer':
+      globalThis.GyroMag?.onFrame?.(message, message.seq);
+      break;
     case 'startupBias': {
+      driftStartup = message;
+      biasHistView?.render();
       if (!$('startupBiasPanel')) break;
       $('startupBiasPanel').hidden = false;
       const source = {1:'本次启动采集',2:'历史回退',3:'默认零偏'}[message.source];
-      const reason = {0:'采集未完成',1:'采样异常',2:'检测到移动',3:'采样中断',4:'噪声超限',5:'重力方向变化',6:'启动交接信息缺失'}[message.reason] || '采集不合格';
+      const reason = {0:'采集未完成',1:'采样异常',2:'角速度或加速度模长越限',3:'采样中断',4:'噪声超限',5:'重力方向变化',6:'启动交接信息缺失',
+        7:'角速度越限',8:'加速度模长越限',9:'加速度噪声超限',10:'采样数量不足',11:'首个样本过晚',12:'末个样本过旧',13:'未覆盖完整启动窗口',14:'BL 未执行采集'}[message.reason] || `采集不合格（原因 ${message.reason}）`;
       $('startupBiasSource').textContent = `${source} · ${message.samples} 样本 · ${message.duration/1000} s · ±${message.range} dps · 采集温度 ${message.selectedTemp.toFixed(2)}℃${message.source !== 1 && message.duration ? ` · ${reason}` : ''}`;
       const format = a => a.map(v => `${v>=0?'+':''}${v.toFixed(6)}`).join(' / ');
       $('startupBiasInitial').textContent = format(message.initial);
@@ -1446,7 +1606,11 @@ function handleMessage(message) {
       configureDevice(message);
       break;
     case 'selected':
-      handleSelected(message.values, message.mask);
+      handleSelected(message.values, message.mask, message.ts);
+      break;
+    case 'inertial':
+      globalThis.GyroScale?.onFrame?.(message);
+      globalThis.GyroInertial?.onFrame?.(message);
       break;
     case 'sysinfo': {
       if (tempPoller.onSysinfo(message)) break; // 10 Hz 轮询回复：只更新温度（onTemp），不写日志、不同步解析器、不改标签
@@ -1458,7 +1622,7 @@ function handleMessage(message) {
       if (!syncParserToStream(message.streamMode, { force: false })) {
         $('streamLabel').textContent = `数据流：${streamModeName(message.streamMode)}${canOk ? ' · CAN 就绪' : ''}`;
       }
-      log(`状态：融合 ${message.fusionHz}Hz，输出 ${message.outHz}Hz，skip ${message.skipN}，温度 ${message.temp.toFixed(2)}°C，流 ${streamModeName(message.streamMode)}${canOk ? '，CAN 就绪' : ''}`);
+      log(`状态：融合目标 ${message.fusionHz}Hz，输出目标 ${message.outHz}Hz，skip ${message.skipN === 65535 ? '≥65535' : message.skipN}，温度 ${message.temp.toFixed(2)}°C，流 ${streamModeName(message.streamMode)}${canOk ? '，CAN 就绪' : ''}`);
       scheduleDraw();
       break;
     }
@@ -1473,7 +1637,7 @@ function handleMessage(message) {
       break;
     case 'imu':
       if (Number.isFinite(message.temp)) { pose.temp = message.temp; tempAt = performance.now(); }
-      updateImu([message.gx, message.gy, message.gz, message.ax, message.ay, message.az]);
+      updateImu([message.gx, message.gy, message.gz, message.ax, message.ay, message.az], message.ts);
       break;
     case 'quat': {
       if (![message.qw, message.qx, message.qy, message.qz].every(Number.isFinite)) break;
@@ -1484,12 +1648,14 @@ function handleMessage(message) {
       break;
     }
     case 'unknown':
+      if(message.id === MSG.INERTIAL) {globalThis.GyroInertial?.onDropped?.();globalThis.GyroScale?.onDropped?.();}
       if (message.id === MSG.ZARU_LIMITS) zaruLimits?.onDropped(message); // 版本 / 范围 / 非有限数 → 整帧丢弃
       if (message.id === MSG.MOTION_BIAS) motionBias?.onDropped(message);
       if (message.id === MSG.VQF_STATUS || message.id === MSG.VQF_SETTINGS) vqfInit?.onDropped(message);
       if (message.id === MSG.BIAS_HISTORY) biasHist?.onDropped(message);
       break;
     case 'badLength':
+      if(message.id === MSG.INERTIAL) {globalThis.GyroInertial?.onDropped?.();globalThis.GyroScale?.onDropped?.();}
       if (message.id === MSG.ZARU_LIMITS) zaruLimits?.onDropped(message);
       if (message.id === MSG.MOTION_BIAS) motionBias?.onDropped(message);
       if (message.id === MSG.VQF_STATUS || message.id === MSG.VQF_SETTINGS) vqfInit?.onDropped(message);
@@ -1556,9 +1722,11 @@ async function shutdownPort(p, r, w, pendingWrites, closeBudgetMs = 0) {
 }
 
 function teardown(closeBudgetMs = 0) {
+  if (globalThis.GyroInertial?.session.state().active) globalThis.GyroInertial.session.stop('连接已断开，请重新建立原点');
   const p = port;
   if (!p) return portClosing;
   running = false;
+  globalThis.GyroCapture?.onDisconnect?.();
   tempPoller.reset(); tempAt = 0;
   const r = reader;
   const w = writer;
@@ -1594,7 +1762,7 @@ function handlePortGone(reason) {
   if (!port) return;
   if (firmwareBusy) { void teardown(portTransport(port) === 'usb' ? 700 : 0); return; }
   if (!reconnectPlan && rememberedConnection) armRestartReconnect();
-  void teardown();
+  void teardown(portTransport(port) === 'usb' ? 700 : 0);
   if (reconnectPlan) {
     if (reconnectPlan.phase === 'armed') beginRestartReconnect();
     else { reconnectPlan.phase = 'waiting'; queueRestartReconnect(reconnectPlan, 500); }
@@ -1603,13 +1771,47 @@ function handlePortGone(reason) {
 }
 
 function cancelRestartReconnect() {
+  clearTimeout(pendingDeviceReset?.timer); pendingDeviceReset = null;
   ++connectionGeneration; clearTimeout(reconnectTimer); reconnectTimer = null; reconnectPlan = null;
+}
+function deviceRestartAllowed(ignoreGyroScale=false,ignoreCapture=false) {
+  if(!ignoreCapture && globalThis.GyroCapture?.busy?.())return false;
+  if(!ignoreGyroScale && globalThis.GyroScale?.busy?.())return false;
+  if(globalThis.GyroMagCal?.control?.busy())return false;
+  return running && !!writer && !setting && !connecting && !reconnectPlan && !pendingDeviceReset &&
+    !firmwareBusy && !firmwareRestoring && !firmwareChoosingPort && !pendingStartup && !pendingImmediateReset &&
+    !pendingOutput && !pendingRate && !pendingCan && !accStartPending && accCalibration?.status !== 1 &&
+    !vqfInit?.busy() && !vqfInit?.state.pending && !filterProfile?.state.pending && !zaruLimits?.state.pending &&
+    !(globalThis.GyroRestBias?.control?.state.pending || globalThis.GyroWs2812?.control?.state.pending || (globalThis.GyroMagRejection?.control?.state.pending || (globalThis.GyroVqfTuning?.control?.state.pending || globalThis.GyroFusionAlgorithm?.control?.state.pending))) &&
+    !globalThis.GyroUI?.gate?.busy && !globalThis.GyroDrift?.session?.active;
+}
+async function restartDevice() {
+  if (!deviceRestartAllowed()) return;
+  armRestartReconnect();
+  const plan = reconnectPlan;
+  if (!plan) return;
+  const request = pendingDeviceReset = { seq: seq & 255, timer: null };
+  globalThis.GyroUI?.refresh();
+  // SYSTEM_RESET (0x15) performs NVIC reset without setting the forced-upgrade flag:
+  // the user BL and normal startup bias window run again, using saved configuration.
+  if (!await send(CMD.RESET)) {
+    if (reconnectPlan === plan) { cancelRestartReconnect(); globalThis.GyroUI?.refresh(); }
+    return;
+  }
+  if (pendingDeviceReset !== request || reconnectPlan !== plan) return;
+  request.timer = setTimeout(() => {
+    if (pendingDeviceReset !== request || reconnectPlan !== plan) return;
+    pendingDeviceReset = null;
+    say('未收到重启确认，正在尝试恢复原串口连接');
+    beginRestartReconnect();
+  }, 1000);
 }
 function armRestartReconnect() {
   cancelRestartReconnect();
   if (!rememberedConnection) return;
   reconnectPlan = { ...rememberedConnection, parseMode: parseModeValue, justChannels,
-    generation: connectionGeneration, phase: 'armed', deadline: performance.now() + 90000 };
+    generation: connectionGeneration, phase: 'armed', deadline: performance.now() + 90000,
+    startupDelayMs: Math.max(500, Math.min(60500, (deviceConfig?.savedInitMs ?? 2000) + 500)) };
 }
 function queueRestartReconnect(plan, delay) {
   if (reconnectPlan !== plan) return;
@@ -1619,11 +1821,13 @@ function queueRestartReconnect(plan, delay) {
 function beginRestartReconnect() {
   const plan = reconnectPlan;
   if (!plan || plan.phase !== 'armed') return;
+  clearTimeout(pendingDeviceReset?.timer); pendingDeviceReset = null;
   plan.phase = 'waiting';
+  plan.startupReadyAt = performance.now() + plan.startupDelayMs;
   clearTimeout(reconnectTimer);
   reconnectTimer = setTimeout(async () => {
     if (reconnectPlan !== plan) return;
-    await teardown();
+    await teardown(700);
     if (reconnectPlan === plan) queueRestartReconnect(plan, 500);
   }, 150);
 }
@@ -1634,8 +1838,19 @@ async function retryRestartConnection(plan) {
     say(port ? '原串口已重连，但设备未响应，请检查设备启动状态' : '原串口重连超时，请检查设备后重新连接');
     return;
   }
+  if (performance.now() < plan.startupReadyAt) { queueRestartReconnect(plan, plan.startupReadyAt - performance.now()); return; }
   if (connecting) { queueRestartReconnect(plan, 500); return; }
   if (!port) {
+    if (plan.usbInfo && plan.usbSeen) {
+      try {
+        plan.port = await usbUpgradePort(plan.port, plan.usbInfo, plan.usbSeen, plan.origin);
+      } catch {
+        cancelRestartReconnect(); setConnected(false);
+        say('发现多个新 USB 端口，自动重连已停止，请手动选择原板卡');
+        return;
+      }
+      if (reconnectPlan !== plan) return;
+    }
     await connect(plan);
     if (reconnectPlan !== plan) return;
     if (!port) { queueRestartReconnect(plan, 700); return; }
@@ -1644,16 +1859,32 @@ async function retryRestartConnection(plan) {
   if (deviceConfig || fusionHz !== null) {
     cancelRestartReconnect(); setConnected(true);
     say('已自动重连原串口，并重新读取设备状态');
+    refreshRestartMetadata();
     return;
   }
   await send(CMD.QUERY_CONFIG); await send(CMD.QUERY);
   if (reconnectPlan === plan) queueRestartReconnect(plan, 700);
 }
 
+// A USB handle opened during the user bootloader's startup window can become
+// stale at the BL -> APP handoff. Open after that window, then rediscover any
+// metadata whose first query was lost during USB enumeration.
+function refreshRestartMetadata() {
+  if (!deviceConfig) void send(CMD.QUERY_CONFIG);
+  for (const control of [globalThis.GyroWs2812?.control, globalThis.GyroMagRejection?.control,
+    globalThis.GyroFusionAlgorithm?.control, globalThis.GyroVqfTuning?.control,
+    globalThis.GyroRestBias?.control, globalThis.GyroScale?.control, globalThis.GyroCapture?.control]) {
+    if (!control || (control.state.pending && control.state.pending.kind !== 'query')) continue;
+    if (control.state.pending) control.reset();
+    control.query();
+  }
+  void queryFwVersion();
+}
+
 async function connect(autoConnection = null) {
   if (firmwareBusy && !autoConnection?.firmware) return false;
-  if (!('serial' in navigator)) {
-    say('当前浏览器不支持 Web Serial，请使用最新版 Chrome/Edge');
+  if (!connectionAPI()) {
+    say('当前浏览器不支持所选连接方式，请使用 Chrome/Edge 或切换连接方式');
     return;
   }
   if (port || connecting) return false;
@@ -1663,26 +1894,37 @@ async function connect(autoConnection = null) {
   setConnected(false);
   let picked = null;
   try {
-    await portClosing; // 上一次断开/拔出的关闭流程完成后才能重开
+    if(autoConnection) await firmwareBounded(portClosing, 1000, '等待关闭原串口超时');
+    else await portClosing; // 上一次断开/拔出的关闭流程完成后才能重开
     if (generation !== connectionGeneration) return false;
-    // Reuse the exact granted SerialPort object; never select by VID/PID or
-    // choose another device, and never reopen the picker during a restart.
-    picked = autoConnection?.port || await navigator.serial.requestPort();
+    // UART reuses the granted port; USB can adopt one newly enumerated port.
+    // Restart never opens another picker or adopts an already granted other board.
+    picked = autoConnection?.port || await connectionAPI().requestPort();
     const fwReconnect = !!autoConnection?.firmware;
     if (picked.readable || picked.writable) {
       const closing = (async () => { try { await picked.close(); } catch { /* 未打开 */ } })();
-      await (fwReconnect ? Promise.race([closing, new Promise((resolve) => setTimeout(resolve, 700))]) : closing);
+      if(autoConnection) await firmwareBounded(closing,700,'关闭原串口超时');
+      else await closing;
     }
     const baudRate = autoConnection?.baudRate || Number($('baud').value);
     const openOptions = { baudRate, dataBits: 8, stopBits: 1, parity: 'none', flowControl: 'none', bufferSize: SERIAL_BUFFER_SIZE };
-    if (fwReconnect) await openPortBounded(picked, openOptions, FW_RECONNECT_OPEN_MS);
+    if (autoConnection) await openPortBounded(picked, openOptions,
+      Math.max(1,Math.min(FW_RECONNECT_OPEN_MS,(autoConnection.deadline ?? Infinity)-performance.now())),
+      fwReconnect,()=>generation!==connectionGeneration);
     else await picked.open(openOptions);
-    if (generation !== connectionGeneration) { await picked.close(); return false; }
+    if (generation !== connectionGeneration) { await firmwareBounded(picked.close(),1000,'关闭过期端口超时'); return false; }
     if (autoConnection) {
       parseModeValue = autoConnection.parseMode; justChannels = autoConnection.justChannels;
       $('baud').value = String(baudRate); $('parseMode').value = parseModeValue; $('justChannels').value = String(justChannels);
     }
-    rememberedConnection = { port:picked, baudRate, parseMode:parseModeValue, justChannels };
+    let usbInfo = null, usbSeen = null;
+    if (portTransport(picked) === 'usb') {
+      usbInfo = picked.getInfo();
+      try { usbSeen = await connectionAPI().getPorts(); } catch { /* Only retry original object if enumeration is unavailable. */ }
+      if (generation !== connectionGeneration) { await firmwareBounded(picked.close(),1000,'关闭过期端口超时'); return false; }
+    }
+    rememberedConnection = { port:picked, origin:picked, usbInfo, usbSeen, baudRate, parseMode:parseModeValue, justChannels };
+    driftStartup = driftDiag = null; driftDiagAt = 0;
     if ($('startupBiasPanel')) $('startupBiasPanel').hidden = true;
     port = picked;
     writes.reset();
@@ -1705,6 +1947,14 @@ async function connect(autoConnection = null) {
     motionBias?.reset();
     vqfInit?.reset();
     biasHist?.reset();
+    ws2812Control?.reset();
+    magRejectionControl?.reset();
+    fusionAlgorithmControl?.reset();
+    vqfTuningControl?.reset();
+    gyroScaleControl?.reset();
+    captureControl?.reset();
+    restBiasControl?.reset();
+    magCalControl?.reset();
     clearTimeout(fwVersionTimer); fwVersionTimer = null; fwVersion = { text: null, supported: null }; renderFwVersion();
     deviceModel = { text: null, supported: null }; renderDeviceModel();
     tempPoller.reset(); tempAt = 0;
@@ -1715,12 +1965,20 @@ async function connect(autoConnection = null) {
     say(autoConnection ? '原串口已自动重连，等待设备启动和数据' : '串口已连接，等待数据');
     readLoopDone = readLoop(picked);
     await send(CMD.QUERY_CONFIG);
+    ws2812Control?.query();
+    magRejectionControl?.query();
+    fusionAlgorithmControl?.query();
+    vqfTuningControl?.query();
+    gyroScaleControl?.query();
+    captureControl?.query();
+    restBiasControl?.query();
+    magCalControl?.read();
     await send(CMD.QUERY);
     await send(CMD.QUERY_ACC_CAL);
     await filterProfile?.query();
     await zaruLimits?.query(); // 连接后与姿态稳定性一起查询阈值
     await motionBias?.query();
-    await vqfInit?.query(); // vqfinit1：0x2C + 0x29（3 s 无数据帧 → 隐藏）
+    await vqfInit?.query(); // vqfinit1：0x2C + 0x29（超时保留卡片并重试）
     await queryFwVersion(); // fwver1：0x23 → 0x32
     await biasHist?.read(); // biashist1：0x33 → 0x34 整表
     await sendQuiet(CMD.QUERY_STARTUP_BIAS);
@@ -1732,8 +1990,11 @@ async function connect(autoConnection = null) {
         autoConnection.lastError = error.message; log(`原串口暂不可用，继续等待：${error.message}`);
       }
     } else say(`连接失败：${error.message}`);
-    if (port) await teardown();
-    else if (picked && (picked.readable || picked.writable)) { try { await picked.close(); } catch { /* ignore */ } }
+    if (port) await teardown(autoConnection ? 700 : 0);
+    else if (picked && (picked.readable || picked.writable)) { try {
+      if(autoConnection) await firmwareBounded(picked.close(),1000,'关闭重连端口超时');
+      else await picked.close();
+    } catch { /* ignore */ } }
   } finally {
     connecting = false;
     setConnected(!!port);
@@ -1755,17 +2016,18 @@ function updateFirmwareLink() {
   const node = $('firmwareLink');
   if (!node) return;
   const t = portTransport(port);
-  const text = t ? `当前链路：${t === 'usb' ? 'USB' : 'UART'}` : '当前链路：未连接';
+  const text = t ? `当前链路：${port?.webusb ? 'WebUSB' : t === 'usb' ? 'USB 串口' : 'UART'}` : '当前链路：未连接';
   if (node.textContent !== text) node.textContent = text;
   if (node.dataset.transport !== (t || '')) node.dataset.transport = t || '';
 }
 function updateFirmwareUI() {
   updateFirmwareLink();
+  if ($("connKind")) $("connKind").disabled = !!port || connecting || firmwareBusy || firmwareChoosingPort || !!reconnectPlan;
   $('firmwareFile').disabled = firmwareBusy || firmwareChoosingPort;
   $('firmwareRecovery').disabled = firmwareBusy || firmwareChoosingPort;
   $('firmwarePortBtn').hidden = !$('firmwareRecovery').checked;
   $('firmwarePortBtn').disabled = firmwareBusy || firmwareChoosingPort || !!port || connecting || !!reconnectPlan;
-  $('firmwareStartBtn').disabled = firmwareBusy || firmwareChoosingPort || !firmwareImage || connecting || !!reconnectPlan ||
+  $('firmwareStartBtn').disabled = !!globalThis.GyroCapture?.busy?.() || !!globalThis.GyroScale?.busy?.() || firmwareBusy || firmwareChoosingPort || !firmwareImage || connecting || !!reconnectPlan ||
     (!running && !$('firmwareRecovery').checked) || accStartPending || accCalibration?.status === 1 ||
     !!pendingStartup || !!pendingOutput || !!pendingCan || !!pendingRate;
   $('firmwareStopBtn').disabled = !firmwareBusy || firmwareStopRequested || !['enter','hello','erase','write'].includes(firmwarePhase);
@@ -1804,9 +2066,9 @@ async function firmwareBounded(promise, ms, text) {
 // 不按 VID/PID 退回 same[0]，也不使用点击前已授权的另一块相同 VID/PID 的板子；getPorts 失败时继续用当前口。
 async function usbUpgradePort(current, info, seen, origin = null) {
   let ports;
-  try { ports = await navigator.serial.getPorts(); } catch (error) { return current; }
+  try { ports = await connectionAPI().getPorts(); } catch (error) { return current; }
   const same = ports.filter((p) => {
-    try { const i = p.getInfo(); return i.usbVendorId === info.usbVendorId && i.usbProductId === info.usbProductId; }
+    try { const i = p.getInfo(); return i.usbVendorId === info.usbVendorId && i.usbProductId === info.usbProductId && (!info.serialNumber || i.serialNumber === info.serialNumber); }
     catch { return false; }
   });
   const fresh = same.filter((p) => !seen.includes(p));
@@ -1834,7 +2096,8 @@ async function openFirmwarePort(selected, usb = null) {
     const target=candidate;
     let client;
     try {
-      await target.open({baudRate:2000000,dataBits:8,stopBits:1,parity:'none',flowControl:'none',bufferSize:SERIAL_BUFFER_SIZE});
+      await openPortBounded(target, {baudRate:2000000,dataBits:8,stopBits:1,parity:'none',flowControl:'none',bufferSize:SERIAL_BUFFER_SIZE},
+        Math.max(1, Math.min(FW_RECONNECT_OPEN_MS, deadline-performance.now())), false, () => firmwareStopRequested);
       client=new firmware.BootClient(target).start();
       const base=await client.request(firmware.COMMAND.HELLO,0,0,0,0,new Uint8Array(),600);
       if(base!==firmware.APP_BASE) throw new Error('Bootloader 应用分区不匹配，已停止；没有擦除固件。');
@@ -1844,8 +2107,8 @@ async function openFirmwarePort(selected, usb = null) {
         if(client) await client.close();
         else if(target.readable || target.writable) await target.close();
       };
-      if(usb) {try {await release();} catch(closeError) {log(closeError.message);}}
-      else await release();
+      try {await firmwareBounded(release(),1000,'关闭升级端口超时');}
+      catch(closeError) {log(closeError.message);}
       if(error.message.includes('分区不匹配') || error.message.includes('Bootloader 拒绝') || error.message===FW_USB_MULTI_TEXT) throw error;
       await firmwareDelay(200);
     }
@@ -1865,7 +2128,7 @@ async function restoreAfterFirmware(plan, usb = null) {
     const p=event?.port || event?.target;
     if(!p || typeof p.getInfo!=='function') return;
     let i; try {i=p.getInfo();} catch {return;}
-    if(i?.usbVendorId!==plan.info.usbVendorId || i?.usbProductId!==plan.info.usbProductId) return;
+    if(i?.usbVendorId!==plan.info.usbVendorId || i?.usbProductId!==plan.info.usbProductId || (plan.info.serialNumber && i.serialNumber!==plan.info.serialNumber)) return;
     if(usb.before.includes(p) && p!==usb.origin) return;
     // 校验完成后同时冒出多块新的同 VID/PID 口：不再采纳任何一个，只保持当前口，不抛掉整个升级
     if(!eventPorts.includes(p)) eventPorts.push(p);
@@ -1877,7 +2140,7 @@ async function restoreAfterFirmware(plan, usb = null) {
     if(!usb.seen.includes(p)) usb.seen.push(p);
     log('升级重连：已发现重新枚举的 USB 端口');
   };
-  if(usb) navigator.serial.addEventListener('connect',onConnect);
+  if(usb) connectionAPI().addEventListener('connect',onConnect);
   try {
     while(performance.now()<deadline) {
       if(usb && adopted && port && port!==adopted) {
@@ -1907,22 +2170,22 @@ async function restoreAfterFirmware(plan, usb = null) {
     return false;
   } finally {
     firmwareRestoring=false;
-    if(usb) navigator.serial.removeEventListener('connect',onConnect);
+    if(usb) connectionAPI().removeEventListener('connect',onConnect);
     firmwareReconnectPort=null;
   }
 }
 async function startFirmwareUpgrade() {
-  if(firmwareBusy || firmwareChoosingPort || !firmwareImage || connecting || reconnectPlan) return;
+  if(globalThis.GyroScale?.busy?.() || firmwareBusy || firmwareChoosingPort || !firmwareImage || connecting || reconnectPlan) return;
   if(accStartPending || accCalibration?.status===1) {firmwareStatus('请先取消正在进行的六面校准。');return;}
-  if(pendingStartup || pendingOutput || pendingCan || pendingRate) {firmwareStatus('请等待当前设备操作完成。');return;}
-  if(startupFormDirty || canFormDirty || rateFormDirty) {firmwareStatus('请先保存或撤销尚未应用的配置修改。');return;}
+  if(globalThis.GyroCapture?.busy?.() || pendingStartup || pendingOutput || pendingCan || pendingRate) {firmwareStatus('请等待当前设备操作完成。');return;}
+  if(globalThis.GyroScale?.control?.state.dirty || globalThis.GyroVqfTuning?.control?.state.dirty || startupFormDirty || canFormDirty || rateFormDirty) {firmwareStatus('请先保存或撤销尚未应用的配置修改。');return;}
   const recovery=$('firmwareRecovery').checked, image=firmwareImage;
   let selected=port || (recovery ? firmwareRecoveryPort : null), client=null, eraseSent=false, entered=false;
   if(!selected && !recovery) {firmwareStatus('请先连接设备。');return;}
   // Only an explicit recovery click can open a picker. Re-enumeration never chooses a similar device.
   if(!selected) {
     firmwareChoosingPort=true;updateFirmwareUI();
-    try {selected=await navigator.serial.requestPort();} catch(error) {firmwareStatus(`未选择恢复端口：${error.message}`);return;}
+    try {selected=await connectionAPI().requestPort();} catch(error) {firmwareStatus(`未选择恢复端口：${error.message}`);return;}
     finally {firmwareChoosingPort=false;updateFirmwareUI();}
     if(firmwareBusy) return;
   }
@@ -1936,7 +2199,7 @@ async function startFirmwareUpgrade() {
     if(transport==='usb') {
       // 发 0x16 之前按对象引用记下已授权端口：之后新出现的那个才是同一块板子重新枚举出来的口。
       let seen;
-      try {seen=[...await navigator.serial.getPorts()];} catch {seen=[selected];}
+      try {seen=[...await connectionAPI().getPorts()];} catch {seen=[selected];}
       if(!seen.includes(selected)) seen.push(selected);
       usb={info,seen,before:[...seen],origin:selected,lastFresh:null,multiLogged:false};
     }
@@ -2016,6 +2279,8 @@ function updateSettingUI() {
   filterView?.render();
   zaruView?.render();
   biasView?.render();
+  fusionAlgorithmView?.render();
+  restBiasView?.render();
   vqfView?.render();
   biasHistView?.render();
   updateFirmwareUI();
@@ -2030,6 +2295,7 @@ function startupValidationError() {
   const combined = deviceConfig.version >= 4, fast = $('fastStart').checked;
   const supportsDuration = deviceConfig.version >= 2 && !!(deviceConfig.capabilities & 16);
   if (deviceConfig.version >= 3 && (deviceConfig.capabilities & 32) && !GYRO_RANGES.includes(Number($('gyroRange').value))) return '请选择有效的陀螺仪量程';
+  if (deviceConfig.version >= 5 && !ACC_RANGES.includes(Number($('accRange').value))) return '请选择有效的加速度计量程';
   if (!fast && !supportsDuration) return '当前固件不支持普通启动零偏采样，请先升级配套固件';
   if (supportsDuration && (combined || !fast)) {
     const text = $('gyroInitSeconds').value.trim(), seconds = Number(text), ms = Math.round(seconds * 1000);
@@ -2052,6 +2318,8 @@ async function applyMode() {
   const supportsDuration = deviceConfig?.version >= 2 && !!(deviceConfig.capabilities & 16);
   const rangeDps = deviceConfig?.version >= 3 && (deviceConfig.capabilities & 32) ? Number($('gyroRange').value) : null;
   if (rangeDps !== null && !GYRO_RANGES.includes(rangeDps)) { say('请选择有效的陀螺仪量程'); return; }
+  const accRangeG = deviceConfig?.version >= 5 ? Number($('accRange').value) : null;
+  if (accRangeG !== null && !ACC_RANGES.includes(accRangeG)) { say('请选择有效的加速度计量程'); return; }
   let initMs = null;
   if (deviceConfig) {
     if (!fast && !supportsDuration) { say('当前固件不支持普通启动零偏采样，请先升级配套固件'); return; }
@@ -2066,7 +2334,7 @@ async function applyMode() {
     }
     if (combined) fast = initMs === 0 ? 1 : 0;
     startupFormDirty = true;
-    pendingStartup = { mode: selectedMode(), fast, initMs, rangeDps, revision: startupFormRevision, acked: false };
+    pendingStartup = { mode: selectedMode(), fast, initMs, rangeDps, accRangeG, revision: startupFormRevision, acked: false };
     startupAckTimer = setTimeout(() => {
       pendingStartup = null; pendingImmediateReset = false; pendingExitAfterMode = false;
       updateSettingUI(); say('未确认启动设置回读，修改已保留，请读取设备配置核对');
@@ -2079,6 +2347,7 @@ async function applyMode() {
   const payload = [selectedMode(), fast, immediate ? 1 : 0];
   if (initMs !== null) payload.push(initMs & 0xff, initMs >> 8);
   if (rangeDps !== null) payload.push(rangeDps & 0xff, rangeDps >> 8);
+  if (accRangeG !== null) payload.push(accRangeG);
   const sent = deviceConfig
     ? await send(CMD.STARTUP, payload)
     : await send(CMD.MODE, [selectedMode(), immediate ? 1 : 0]);
@@ -2182,6 +2451,33 @@ function valDeg(id, value) { // quick1：首页 Yaw/Pitch/Roll 三位小数
   $(id).textContent = Number.isFinite(value) ? Number(value).toFixed(3) : '--';
 }
 
+let yawRange360 = false;
+function displayedYaw(value) {
+  if (!yawRange360 || !Number.isFinite(value)) return value;
+  const wrapped = ((value % 360) + 360) % 360;
+  return (Math.round(wrapped * 1000) % 360000) / 1000;
+}
+const yawRangeControl = $('yaw')?.closest('.ypr-item');
+if (yawRangeControl) {
+  yawRangeControl.setAttribute('role', 'button');
+  yawRangeControl.setAttribute('aria-label', 'Yaw 航向');
+  yawRangeControl.setAttribute('aria-pressed', 'false');
+  yawRangeControl.tabIndex = 0;
+  yawRangeControl.style.cursor = 'pointer';
+  const toggleYawRange = () => {
+    yawRange360 = !yawRange360;
+    yawRangeControl.setAttribute('aria-pressed', String(yawRange360));
+    valDeg('yaw', displayedYaw(pose.yaw));
+  };
+  yawRangeControl.addEventListener('click', toggleYawRange);
+  yawRangeControl.addEventListener('keydown', event => {
+    if (event.key === 'Enter' || event.key === ' ') {
+      event.preventDefault();
+      toggleYawRange();
+    }
+  });
+}
+
 function currentRotation() {
   if (quat && performance.now() - lastQuatAt <= QUAT_PREFER_MS) return { R: quatToMatrix(...quat), source: '四元数' };
   if (selectionMask !== null && (selectionMask & 7) !== 7) return { R: eulerToMatrix(0, 0, 0), source: '请选齐 Yaw/Pitch/Roll 查看姿态' };
@@ -2256,7 +2552,7 @@ function render3D() {
 }
 
 function draw() {
-  valDeg('yaw', pose.yaw); valDeg('pitch', pose.pitch); valDeg('roll', pose.roll);
+  valDeg('yaw', displayedYaw(pose.yaw)); valDeg('pitch', pose.pitch); valDeg('roll', pose.roll);
   renderTemp();
   val('yaw2', pose.yaw); val('pitch2', pose.pitch); val('roll2', pose.roll);
   if ($('gx')) {
@@ -2294,7 +2590,7 @@ $('enterBtn').onclick = enterSettings;
 $('exitBtn').onclick = () => send(CMD.EXIT);
 $('applyBtn').onclick = applyMode;
 for (const event of ['input', 'change']) $('startupControls').addEventListener(event, (e) => {
-  if (!e.target.matches('#fastStart, #gyroInitSeconds, #gyroRange, input[name="fusion"]') || !deviceConfig || pendingStartup) return;
+  if (!e.target.matches('#fastStart, #gyroInitSeconds, #gyroRange, #accRange, input[name="fusion"]') || !deviceConfig || pendingStartup) return;
   startupFormDirty = true; startupFormRevision++; updateSettingUI();
 });
 $('startupDiscard').onclick = () => {
@@ -2317,6 +2613,8 @@ $('acc6Btn').onclick = startAccCalibration;
 $('accCancelBtn').onclick = () => send(CMD.CANCEL_ACC_CAL);
 $('accRefreshBtn').onclick = () => send(CMD.QUERY_ACC_CAL);
 $('pingBtn').onclick = () => send(CMD.PING);
+$('statusRestartBtn').onclick = restartDevice;
+$('testRestartBtn').onclick = restartDevice;
 $('clearLog').onclick = () => { $('log').textContent = ''; };
 $('firmwareFile').onchange = selectFirmwareFile;
 $('firmwareRecovery').onchange = updateFirmwareUI;
@@ -2328,7 +2626,7 @@ $('firmwareStopBtn').onclick = () => {
 $('firmwarePortBtn').onclick = async () => {
   if(firmwareBusy || firmwareChoosingPort || port || connecting || reconnectPlan) return;
   firmwareChoosingPort=true;updateFirmwareUI();
-  try {firmwareRecoveryPort=await navigator.serial.requestPort();firmwareStatus('已选择恢复端口，可开始完整上传。');}
+  try {firmwareRecoveryPort=await connectionAPI().requestPort();firmwareStatus('已选择恢复端口，可开始完整上传。');}
   catch(error) {firmwareStatus(`未选择恢复端口：${error.message}`);}
   finally {firmwareChoosingPort=false;updateFirmwareUI();}
 };
@@ -2345,7 +2643,11 @@ if (zaruLimits) {
   zaruView.render();
 }
 if (motionBias) { biasView = GyroBias.bindDom(motionBias, { connected: () => running && !firmwareBusy }); biasView.render(); }
-if (biasHist) { biasHistView = GyroBiasHist.bindDom(biasHist, { connected: () => running && !firmwareBusy }); biasHistView.render(); }
+if (biasHist) {
+  biasHistView = GyroBiasHist.bindDom(biasHist, { connected: () => running && !firmwareBusy, startup: () => driftStartup });
+  $('bhRead').onclick = () => { void sendQuiet(CMD.QUERY_STARTUP_BIAS); biasHist.read(); };
+  biasHistView.render();
+}
 if ($('startupBiasRead')) $('startupBiasRead').onclick = () => sendQuiet(CMD.QUERY_STARTUP_BIAS);
 if (vqfInit) { vqfView = GyroVqf.bindDom(vqfInit, { editable: () => settingEditable(), connected: () => running && !firmwareBusy }); vqfView.render(); }
 resetParser(); updateSettingUI(); draw(); updateRate();
@@ -2367,9 +2669,47 @@ import('/pcb-view.js?v=20261001fw1-app2').then(async ({ createPCBView }) => {
 setInterval(updateLiveness, 100);
 setInterval(() => { if (fwVersionRequery && running && writer && !firmwareBusy && !firmwareRestoring) { fwVersionRequery = false; void queryFwVersion(); } }, 300);
 setInterval(pollAccCalibration, 500);
-if ('serial' in navigator) navigator.serial.addEventListener('disconnect', (event) => { if (port && event.target === port) handlePortGone('设备已拔出'); });
+for (const api of [navigator.serial, webusbAPI].filter(Boolean)) api.addEventListener('disconnect', (event) => { if (port && (event.port || event.target) === port) handlePortGone('设备已拔出'); });
 
 // 测试钩子（无头浏览器检查用；页面逻辑不依赖它）
+// Read-only test-page bridge. Metadata excludes adaptive bias values: their normal updates must not invalidate a test.
+globalThis.GyroDriftIO = {
+  context: () => ({ connected: running, ready: running && lastPoseAt > 0 && performance.now() - lastPoseAt < 500 && !!deviceConfig,
+    busy: !!globalThis.GyroCapture?.busy?.() || !!globalThis.GyroScale?.busy?.() || !!globalThis.GyroMagCal?.control?.busy() || setting || connecting || firmwareBusy || firmwareRestoring || !!reconnectPlan || !!pendingDeviceReset || !!pendingStartup || !!pendingOutput || !!pendingRate || (!!(globalThis.GyroRestBias?.control?.state.pending || globalThis.GyroWs2812?.control?.state.pending || (globalThis.GyroMagRejection?.control?.state.pending || (globalThis.GyroVqfTuning?.control?.state.pending || globalThis.GyroFusionAlgorithm?.control?.state.pending))) || !!(globalThis.GyroMagRejection?.control?.state.pending || (globalThis.GyroVqfTuning?.control?.state.pending || globalThis.GyroFusionAlgorithm?.control?.state.pending))) ||
+      !!pendingCan || !!accStartPending || accCalibration?.status === 1 || !!vqfInit?.busy() || !!filterProfile?.state.pending,
+    metadata: { firmware: fwVersion.text || null, model: deviceModel.text || null, mode: deviceConfig?.activeMode ?? null,
+      algorithm: fusionAlgorithmControl?.state.data?.active ?? null,
+      rangeDps: deviceConfig?.activeRangeDps ?? null, accRangeG: deviceConfig?.activeAccRangeG ?? null,
+      outputHz: deviceConfig?.outHz ?? null, initMs: deviceConfig?.activeInitMs ?? null,
+      profile: filterProfile?.state.config?.active ?? null, restBiasEnabled: restBiasControl?.state.data ? Number(restBiasControl.state.data.enabled) : motionBias?.state.data?.restBiasEnabled ?? null,
+      motionBiasEnabled: motionBias?.state.data?.motionBiasEnabled ?? null, outputs: deviceConfig?.outputs ?? null,
+      vqfSettings: vqfInit?.state.settings?.current ?? null, zaruSettings: zaruLimits?.state.runtime ?? null,
+      startupBias: driftStartup, transport: portTransport(port), baud: Number($('baud').value), mock: new URLSearchParams(location.search).get('mock') === '1' || !!globalThis.__mock } }),
+  queryDiagnostic: () => sendQuiet(CMD.QUERY_FILTER_DIAG),
+};
+const gyroScaleContext=()=>{
+  const ctx=GyroDriftIO.context();
+  return {...ctx,busy:!deviceRestartAllowed(true)||startupFormDirty||canFormDirty||rateFormDirty||
+    !!filterProfile?.state.dirty||!!zaruLimits?.state.dirty||!!vqfTuningControl?.state.dirty||
+    !!globalThis.GyroInertial?.session?.state?.().active};
+};
+globalThis.GyroCaptureIO={
+  context:()=>{const ctx=GyroDriftIO.context();return {...ctx,ready:running&&!!deviceConfig&&!!fwVersion.text&&!!fusionAlgorithmControl?.state.data,
+    busy:!deviceRestartAllowed(false,true)||startupFormDirty||canFormDirty||rateFormDirty||!!globalThis.GyroInertial?.session?.state?.().active,
+    metadata:{...ctx.metadata,gyroScale:gyroScaleControl?.state.data?.active??null,vqfTuning:vqfTuningControl?.state.data?.active??null}};},
+};
+globalThis.GyroScaleIO={context:gyroScaleContext,nextSeq:()=>seq&255,stream:p=>sendQuiet(CMD.INERTIAL,p)};
+globalThis.GyroInertialIO = {
+  context: () => GyroDriftIO.context(),
+  nextSeq: () => seq & 255,
+  send: payload => sendQuiet(CMD.INERTIAL,payload),
+};
+globalThis.GyroMagIO = {
+  context: () => ({ connected: running, epoch: connectedAt, mode: deviceConfig?.activeMode,
+    visible: !document.hidden && window.GyroUI?.view === 'test', busy: GyroDriftIO.context().busy || !tempPollAllowed() }),
+  nextSeq: () => seq & 255,
+  send: () => sendQuiet(CMD.QUERY_MAGNETOMETER),
+};
 if (typeof globalThis !== 'undefined') {
   globalThis.__feed = feed;
   globalThis.__state = () => ({ pose, imu, quat, streamMode, setting });

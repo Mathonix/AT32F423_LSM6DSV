@@ -7,11 +7,13 @@ void gyro_startup_calibration_init(gyro_startup_calibration_t *s, uint16_t durat
 {
   memset(s, 0, sizeof(*s));
   s->duration_ms = duration_ms;
+  s->input_temperature_c=25.f;
 }
 
 static void clear_block(gyro_startup_calibration_t *s)
 {
   s->block_samples=0; s->block_bad=0;
+  s->block_temperature_c=0.f;
   memset(s->gyro_mean,0,sizeof(s->gyro_mean));
   memset(s->gyro_m2,0,sizeof(s->gyro_m2));
   memset(s->acc_mean,0,sizeof(s->acc_mean));
@@ -63,6 +65,7 @@ void gyro_startup_calibration_finalize(gyro_startup_calibration_t *s)
       s->acc_sum[i]+=(s->acc_mean[i]-s->acc_sum[i])*weight;
     }
     s->samples+=s->block_samples; s->accepted_ms+=span;
+    s->mean_temperature_c+=(s->block_temperature_c-s->mean_temperature_c)*weight;
     if(!s->gravity_reference_valid) {
       memcpy(s->gravity_reference,s->acc_mean,sizeof(s->acc_mean));
       s->gravity_reference_valid=1;
@@ -85,13 +88,14 @@ int gyro_startup_calibration_push(gyro_startup_calibration_t *s, uint32_t now,
   s->block_last_ms=now; s->last_ms=now; ++s->seen_samples;
   float g2=0,a2=0;
   for(unsigned i=0;i<3;++i) {
-    if(!isfinite(gyro[i]) || !isfinite(acc[i])) { s->block_bad=1; return 0; }
+    if(!isfinite(gyro[i]) || !isfinite(acc[i]) || !isfinite(s->input_temperature_c)) { s->block_bad=1; return 0; }
     g2+=gyro[i]*gyro[i]; a2+=acc[i]*acc[i];
   }
   const float gross=APP_STARTUP_GYR_GROSS_DPS*.017453292519943295f;
   if(g2>gross*gross) { s->block_bad=7; return 0; }
   if(fabsf(sqrtf(a2)-9.80665f)>APP_STARTUP_ACC_GROSS_MS2) { s->block_bad=8; return 0; }
   ++s->block_samples;
+  s->block_temperature_c+=(s->input_temperature_c-s->block_temperature_c)/(float)s->block_samples;
   for(unsigned i=0;i<3;++i) {
     float dg=gyro[i]-s->gyro_mean[i], da=acc[i]-s->acc_mean[i];
     s->gyro_mean[i]+=dg/(float)s->block_samples;
@@ -125,8 +129,11 @@ uint8_t gyro_startup_calibration_window_reason(const gyro_startup_calibration_t 
   if(qualified.samples<s->duration_ms || qualified.samples<2U ||
      qualified.accepted_ms<((uint32_t)s->duration_ms+1U)/2U)
     return qualified.rejected_windows ? qualified.rejection_reason : 10;
-  /* A changed final orientation cannot use gravity from an earlier pose. */
-  if(qualified.last_block_reason==5U) return 5;
+  /* Noise-only rejection can retain a checked gravity direction. Gross
+   * motion, invalid input or insufficient tail samples cannot establish the
+   * final pose, and must not hide a preceding orientation mismatch. */
+  if(qualified.last_block_reason && qualified.last_block_reason!=4U &&
+     qualified.last_block_reason!=9U) return qualified.last_block_reason;
   return 0;
 }
 

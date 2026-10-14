@@ -1,4 +1,5 @@
 #include "usb_cdc.h"
+#include "usb_tx_control_guard.h"
 #include "usb_conf.h"
 #include "usb_core.h"
 #include "usbd_int.h"
@@ -17,12 +18,15 @@
 static otg_core_type otg_core;
 #define USB_TX_RING_SIZE 2048U
 #define USB_RX_RING_SIZE 512U
+/* Keep room for replies even when an unread telemetry endpoint fills up. */
+#define USB_TX_CONTROL_RESERVE 256U
 static uint8_t tx_ring[USB_TX_RING_SIZE];
 static volatile uint16_t tx_r, tx_w;
 static uint8_t rx_packet[USBD_CDC_OUT_MAXPACKET_SIZE];
 static uint8_t rx_ring[USB_RX_RING_SIZE];
 static volatile uint16_t rx_r, rx_w;
 static uint8_t usb_tx_packet[USBD_CDC_IN_MAXPACKET_SIZE];
+static usb_tx_control_guard_t cdc_control_tx;
 
 /* Interface 2 (WebUSB vendor bulk 0x83/0x03): independent rings so a CDC
  * host and a WebUSB host never block or corrupt each other's stream. */
@@ -34,6 +38,7 @@ static uint8_t wu_rx_packet[USBD_WEBUSB_MAXPACKET_SIZE];
 static uint8_t wu_rx_ring[WEBUSB_RX_RING_SIZE];
 static volatile uint16_t wu_rx_r, wu_rx_w;
 static uint8_t wu_tx_packet[USBD_WEBUSB_MAXPACKET_SIZE];
+static usb_tx_control_guard_t webusb_control_tx;
 
 static uint16_t ring_used(volatile uint16_t r, volatile uint16_t w, uint16_t size)
 {
@@ -72,6 +77,8 @@ void usb_cdc_init(void)
    * buffers.  This also makes a second init/re-enumeration deterministic. */
   tx_r = tx_w = rx_r = rx_w = 0U;
   wu_tx_r = wu_tx_w = wu_rx_r = wu_rx_w = 0U;
+  memset(&cdc_control_tx,0,sizeof(cdc_control_tx));
+  memset(&webusb_control_tx,0,sizeof(webusb_control_tx));
   /* The bootloader also initializes OTGFS1 before jumping to the app.  A
    * peripheral reset here is required for a clean USB disconnect/reconnect;
    * otherwise the app may inherit stale device/endpoint state and Windows
@@ -108,6 +115,13 @@ int usb_cdc_configured(void)
   return (otg_core.dev.conn_state == USB_CONN_STATE_CONFIGURED) ? 1 : 0;
 }
 
+int usb_cdc_control_tx_idle(void)
+{
+  if(!usb_cdc_configured()) return 1;
+  cdc_struct_type *pcdc=(cdc_struct_type *)otg_core.dev.class_handler->pdata;
+  return pcdc!=NULL&&usb_tx_control_idle(&cdc_control_tx,pcdc->g_tx_completed!=0U);
+}
+
 void usb_cdc_task(void)
 {
   uint16_t n, i;
@@ -123,6 +137,7 @@ void usb_cdc_task(void)
   {
     tx_r = tx_w;
     rx_r = rx_w;
+    memset(&cdc_control_tx,0,sizeof(cdc_control_tx));
     return;
   }
 
@@ -132,8 +147,10 @@ void usb_cdc_task(void)
     n = (used > USBD_CDC_IN_MAXPACKET_SIZE) ? USBD_CDC_IN_MAXPACKET_SIZE : used;
     for(i = 0U; i < n; ++i)
       usb_tx_packet[i] = tx_ring[(tx_r + i) & (USB_TX_RING_SIZE - 1U)];
-    if(usb_vcp_send_data(&otg_core.dev, usb_tx_packet, n) == SUCCESS)
+    if(usb_vcp_send_data(&otg_core.dev, usb_tx_packet, n) == SUCCESS) {
+      usb_tx_control_packet(&cdc_control_tx,tx_r,n);
       tx_r = (uint16_t)(tx_r + n);
+    }
   }
 
   /* Official CDC keeps one OUT packet armed. Move it to the application ring
@@ -164,19 +181,22 @@ int usb_cdc_read_byte(uint8_t *ch)
   return 1;
 }
 
-int usb_cdc_write(const uint8_t *data, uint16_t len)
+static int usb_cdc_enqueue(const uint8_t *data, uint16_t len,int control)
 {
   uint16_t free_n, i;
   if(data == NULL || len == 0U) return 0;
   if(otg_core.dev.conn_state != USB_CONN_STATE_CONFIGURED) return -1;
   free_n = (uint16_t)((USB_TX_RING_SIZE - 1U) - ring_used(tx_r, tx_w, USB_TX_RING_SIZE));
-  if(len > free_n) return -1;
+  if(len > free_n||(!control&&free_n-len<USB_TX_CONTROL_RESERVE)) return -1;
   for(i = 0U; i < len; ++i)
     tx_ring[(tx_w + i) & (USB_TX_RING_SIZE - 1U)] = data[i];
   __DMB();
   tx_w = (uint16_t)(tx_w + len);
+  if(control) usb_tx_control_queued(&cdc_control_tx,tx_w);
   return 0;
 }
+int usb_cdc_write(const uint8_t *data,uint16_t len) { return usb_cdc_enqueue(data,len,0); }
+int usb_cdc_write_control(const uint8_t *data,uint16_t len) { return usb_cdc_enqueue(data,len,1); }
 int webusb_configured(void) { return usb_cdc_configured(); }
 
 int webusb_tx_idle(void)
@@ -187,6 +207,13 @@ int webusb_tx_idle(void)
   return wu_tx_r == wu_tx_w && pcdc != NULL && pcdc->g_webusb_tx_completed != 0U;
 }
 
+int webusb_control_tx_idle(void)
+{
+  if(!usb_cdc_configured()) return 1;
+  cdc_struct_type *pcdc=(cdc_struct_type *)otg_core.dev.class_handler->pdata;
+  return pcdc!=NULL&&usb_tx_control_idle(&webusb_control_tx,pcdc->g_webusb_tx_completed!=0U);
+}
+
 void webusb_task(void)
 {
   uint16_t n, i, used;
@@ -194,6 +221,7 @@ void webusb_task(void)
   {
     wu_tx_r = wu_tx_w;
     wu_rx_r = wu_rx_w;
+    memset(&webusb_control_tx,0,sizeof(webusb_control_tx));
     return;
   }
   used = ring_used(wu_tx_r, wu_tx_w, WEBUSB_TX_RING_SIZE);
@@ -202,8 +230,10 @@ void webusb_task(void)
     n = (used > USBD_WEBUSB_MAXPACKET_SIZE) ? USBD_WEBUSB_MAXPACKET_SIZE : used;
     for(i = 0U; i < n; ++i)
       wu_tx_packet[i] = wu_tx_ring[(wu_tx_r + i) & (WEBUSB_TX_RING_SIZE - 1U)];
-    if(usb_webusb_send_data(&otg_core.dev, wu_tx_packet, n) == SUCCESS)
+    if(usb_webusb_send_data(&otg_core.dev, wu_tx_packet, n) == SUCCESS) {
+      usb_tx_control_packet(&webusb_control_tx,wu_tx_r,n);
       wu_tx_r = (uint16_t)(wu_tx_r + n);
+    }
   }
   /* Copy the packet out only if it fits; otherwise leave the OUT endpoint
    * un-armed (host is NAKed) until the parser has drained the ring. */
@@ -231,19 +261,22 @@ int webusb_read_byte(uint8_t *ch)
   return 1;
 }
 
-int webusb_write(const uint8_t *data, uint16_t len)
+static int webusb_enqueue(const uint8_t *data, uint16_t len,int control)
 {
   uint16_t free_n, i;
   if(data == NULL || len == 0U) return 0;
   if(otg_core.dev.conn_state != USB_CONN_STATE_CONFIGURED) return -1;
   free_n = (uint16_t)((WEBUSB_TX_RING_SIZE - 1U) - ring_used(wu_tx_r, wu_tx_w, WEBUSB_TX_RING_SIZE));
-  if(len > free_n) return -1;
+  if(len > free_n||(!control&&free_n-len<USB_TX_CONTROL_RESERVE)) return -1;
   for(i = 0U; i < len; ++i)
     wu_tx_ring[(wu_tx_w + i) & (WEBUSB_TX_RING_SIZE - 1U)] = data[i];
   __DMB();
   wu_tx_w = (uint16_t)(wu_tx_w + len);
+  if(control) usb_tx_control_queued(&webusb_control_tx,wu_tx_w);
   return 0;
 }
+int webusb_write(const uint8_t *data,uint16_t len) { return webusb_enqueue(data,len,0); }
+int webusb_write_control(const uint8_t *data,uint16_t len) { return webusb_enqueue(data,len,1); }
 
 #include "bsp.h"
 void usb_delay_ms(uint32_t ms) { delay_ms(ms); }

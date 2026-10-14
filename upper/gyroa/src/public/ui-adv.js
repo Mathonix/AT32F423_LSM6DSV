@@ -39,6 +39,7 @@
     fast: (c) => [c.activeFast ? '开' : '关', c.savedFast ? '开' : '关'],
     init: (c) => [c.activeInitMs, c.savedInitMs].map((ms) => (ms === null ? '--' : `${(ms / 1000).toFixed(1)} s`)),
     range: (c) => [c.activeRangeDps, c.savedRangeDps].map((r) => (r === null ? '--' : `±${r} dps`)),
+    accRange: (c) => [c.activeAccRangeG, c.savedAccRangeG].map((g) => g == null ? '--' : `±${g} g`),
     rate: (c) => [`${c.outHz} Hz`, c.savedOutputHz === null ? '--' : `${c.savedOutputHz} Hz`],
   };
   function renderStartup() {

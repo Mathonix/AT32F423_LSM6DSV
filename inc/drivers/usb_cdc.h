@@ -10,6 +10,10 @@ void usb_cdc_isr(void);
 int usb_cdc_configured(void);
 int usb_cdc_tx_idle(void);
 int usb_cdc_write(const uint8_t *data, uint16_t len);
+/* Command replies use reserved ring space and are tracked independently of
+ * unread telemetry. Main context only; control_idle includes the IN packet. */
+int usb_cdc_control_tx_idle(void);
+int usb_cdc_write_control(const uint8_t *data, uint16_t len);
 int usb_cdc_read_byte(uint8_t *ch);
 int usb_cdc_available(void);
 
@@ -19,6 +23,8 @@ void webusb_task(void);
 int webusb_configured(void);
 int webusb_tx_idle(void);
 int webusb_write(const uint8_t *data, uint16_t len);
+int webusb_control_tx_idle(void);
+int webusb_write_control(const uint8_t *data, uint16_t len);
 int webusb_read_byte(uint8_t *ch);
 int webusb_available(void);
 #ifdef __cplusplus

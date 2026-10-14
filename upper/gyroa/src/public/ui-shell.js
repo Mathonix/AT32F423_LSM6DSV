@@ -11,7 +11,7 @@
 
   // ---------------- navigation ----------------
   // app3: CAN 并入「输出」页（UART / USB / CAN 分段）；旧链接 #/can 进入输出页的 CAN 分段
-  const VIEWS = ['status', 'output', 'calib', 'upgrade', 'settings'];
+  const VIEWS = ['status', 'output', 'calib', 'tuning', 'test', 'capture', 'upgrade', 'settings'];
   let currentView = 'status';
   function route() {
     const raw = (location.hash.match(/^#\/(\w+)/) || [])[1];
@@ -186,6 +186,12 @@
     }
   }
   function refresh() {
+    for (const id of ['statusRestartBtn', 'testRestartBtn']) {
+      const button = $(id); if (!button) continue;
+      button.disabled = !deviceRestartAllowed();
+      label(button, pendingDeviceReset || reconnectPlan ? '重启重连中…' : null);
+      button.title = globalThis.GyroDrift?.session?.active ? '请先停止测试再重启设备' : '使用已保存的配置重新执行启动流程，并自动重连原 USB / UART';
+    }
     const connected = !!running;
     if (connected || connecting) connectFailed = false;
     const reconnecting = !!reconnectPlan;

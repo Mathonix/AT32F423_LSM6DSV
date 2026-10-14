@@ -38,7 +38,38 @@ extern "C" {
 #define AHRS_MSG_BIAS_HISTORY      0x34U /* one page of startup gyro-bias history */
 #define AHRS_MSG_DEVICE_MODEL      0x36U /* ASCII AT32, exactly 4 bytes, no NUL */
 #define AHRS_MSG_STARTUP_BIAS      0x38U /* actual boot selection and current total bias */
+#define AHRS_MSG_INERTIAL          0x41U /* v1: calibrated acceleration, raw 6D fusion quaternion, sample clock */
+#define AHRS_MSG_DATA_CAPTURE      0x61U /* v1, timestamped same-sample 9-channel recording (56B) */
+#define AHRS_MSG_CAPTURE_CONFIG    0x63U /* v1, per-port token and runtime recording frequency (12B) */
+#define AHRS_MSG_MAGNETOMETER      0x43U /* v1: flags/mode, sample counter/ms, calibrated body Bxyz in uT */
+#define AHRS_MSG_MAG_REJECTION     0x4FU /* version, active, saved, reserved (4B) */
+#define AHRS_CMD_QUERY_MAG_REJECTION 0x4DU /* empty */
+#define AHRS_CMD_SET_MAG_REJECTION   0x4EU /* enabled:u8; save then apply */
+#define AHRS_CMD_QUERY_ALGORITHM     0x50U /* empty */
+#define AHRS_CMD_SET_ALGORITHM       0x51U /* algorithm:u8; save, normal reset applies it */
+#define AHRS_MSG_ALGORITHM           0x52U /* version, active, saved, restart-required (4B) */
+#define AHRS_CMD_QUERY_EKF_UPDATES    0x53U /* filter:u8 (0=6D,1=9D); renew 2s attribution lease */
+#define AHRS_MSG_EKF_UPDATES          0x54U /* v1, algorithm, filter, flags, time; attribution (60B) */
+#define AHRS_CMD_QUERY_REST_BIAS      0x55U /* empty */
+#define AHRS_CMD_SET_REST_BIAS        0x56U /* enabled:u8; save then apply without reset */
+#define AHRS_CMD_QUERY_VQF_TUNING     0x58U /* empty; replies saved/default/live pages */
+#define AHRS_CMD_SET_VQF_TUNING       0x59U /* v1,reserved[3],14 floats (60B); persist, reboot applies */
+#define AHRS_CMD_RESTORE_VQF_TUNING   0x5AU /* empty; persist compiled defaults, reboot applies */
+#define AHRS_CMD_QUERY_GYRO_SCALE     0x5CU /* empty; replies active and saved factors */
+#define AHRS_CMD_SET_GYRO_SCALE       0x5DU /* v1,reserved[3],float XYZ (16B); persist, reboot applies */
+#define AHRS_CMD_RESTORE_GYRO_SCALE   0x5EU /* empty; persist unity factors */
+#define AHRS_MSG_GYRO_SCALE           0x5FU /* v1,flags(bit0 restart),reserved[2],active XYZ,saved XYZ,skip/clip counters (36B) */
+#define AHRS_MSG_VQF_TUNING           0x5BU /* v1,page(0 saved/1 defaults/2 live),flags,algorithm,14 floats */
+#define AHRS_MSG_REST_BIAS            0x57U /* version, active, saved, reserved (4B) */
+#define AHRS_MSG_WS2812            0x46U /* version, active enabled, saved enabled, reserved (4B) */
 #define AHRS_MSG_ACK               0x90U /* Command Acknowledge */
+
+#define AHRS_MSG_MAG_RAW_CAL 0x48U /* v1 flags reserved[2], sample/ms:u32, raw sensor uT[3], quat6[4] (40B) */
+#define AHRS_MSG_MAG_CAL 0x4AU /* v1 valid reserved[2], offset[3], symmetric matrix[9] (52B) */
+#define AHRS_CMD_QUERY_MAG_RAW_CAL 0x47U
+#define AHRS_CMD_QUERY_MAG_CAL 0x49U
+#define AHRS_CMD_SET_MAG_CAL 0x4BU /* 52B: version=1,valid=1,reserved=0,offset/matrix floats */
+#define AHRS_CMD_RESTORE_MAG_CAL 0x4CU /* empty: compiled trial coefficients, persist */
 
 /* Uplink Command IDs (Host -> MCU) */
 #define AHRS_CMD_PING              0x10U /* Ping -> replies with ACK */
@@ -55,7 +86,7 @@ extern "C" {
 #define AHRS_CMD_START_GYRO_CAL_60S 0x1BU /* start runtime gyro calibration */
 #define AHRS_CMD_START_ACC_6FACE_CAL 0x1CU /* start six-face calibration */
 #define AHRS_CMD_SET_OUTPUT_HZ      0x1DU /* payload: uint16 LE Hz; apply and persist */
-#define AHRS_CMD_SET_STARTUP_CONFIG 0x1EU /* mode, fast_start, apply_now, optional init_ms:u16, range_dps:u16 */
+#define AHRS_CMD_SET_STARTUP_CONFIG 0x1EU /* mode, fast_start, apply_now, optional init_ms:u16, range_dps:u16, acc_range_g:u8 */
 #define AHRS_CMD_QUERY_CONFIG       0x1FU /* empty; reply DEVICE_CONFIG */
 #define AHRS_CMD_SET_OUTPUT_CONFIG  0x20U /* port, format, mask:u16 LE, persist */
 #define AHRS_CMD_QUERY_CAN_CONFIG   0x21U /* empty; reply CAN_CONFIG */
@@ -78,8 +109,19 @@ extern "C" {
 #define AHRS_CMD_QUERY_BIAS_HISTORY 0x33U /* empty or offset:u16; reply BIAS_HISTORY, no ACK */
 #define AHRS_CMD_QUERY_DEVICE_MODEL 0x35U /* empty; reply DEVICE_MODEL, no ACK */
 #define AHRS_CMD_QUERY_STARTUP_BIAS 0x37U /* empty; reply STARTUP_BIAS, no ACK */
+#define AHRS_CMD_QUERY_TEMP_LEARN_STATUS 0x39U /* empty -> 60B status, no ACK */
+#define AHRS_MSG_TEMP_LEARN_STATUS 0x3AU
+#define AHRS_CMD_QUERY_TEMP_LEARN_PAGE 0x3BU /* offset:u8, 0..26 */
+#define AHRS_MSG_TEMP_LEARN_PAGE 0x3CU /* 10B header + at most two 24B bins */
+#define AHRS_CMD_TEMP_LEARN_CONTROL 0x3DU /* version=1, action=1..5; ACK queues work */
+#define AHRS_CMD_INERTIAL_STREAM    0x40U /* enable:u8, Hz:u16, session token:u32; runtime lease only */
+#define AHRS_CMD_DATA_CAPTURE       0x60U /* enable:u8, Hz:u16, token:u32; runtime 10s lease only */
+#define AHRS_CMD_QUERY_CAPTURE      0x62U /* empty; capture capability and per-port state */
+#define AHRS_CMD_QUERY_MAGNETOMETER 0x42U /* empty; read latest field, no stream/config/flash changes */
+#define AHRS_CMD_QUERY_WS2812       0x44U /* empty; reply 0x46 */
+#define AHRS_CMD_SET_WS2812         0x45U /* enabled:u8 (0/1); save then apply, ACK + 0x46 */
 
-#define AHRS_CONFIG_VERSION        4U /* v3 layout; shared BL/init time 0..60000 ms */
+#define AHRS_CONFIG_VERSION        5U /* v4 + active/saved accelerometer full scale, g */
 #define AHRS_FIELD_COUNT           9U
 #define AHRS_FIELDS_ALL            0x01FFU
 #define AHRS_FIELDS_ATTITUDE       0x0007U
@@ -128,6 +170,74 @@ typedef enum
 #define AHRS_VQF_CAL_ACTIVE        0x0703U
 
 #pragma pack(push, 1)
+
+typedef struct {
+  uint8_t version, flags, state, last_reject;
+  uint8_t confirmed_bins, candidate_bins, flash_slot, flash_writes_this_boot;
+  uint32_t flash_sequence, table_revision;
+  float current_temp_c, boot_temp_c, learning_temp_c;
+  uint32_t rest_elapsed_ms, collect_elapsed_ms;
+  float applied_delta_bias_dps[3]; /* RAW domain, before per-axis scale */
+  int32_t last_flash_error;
+  uint8_t total_bins, reserved[3];
+  uint32_t uptime_ms;
+} ahrs_payload_temp_learn_status_t;
+typedef struct {
+  uint8_t bin_index, state;
+  uint16_t accepted_windows;
+  float mean_temp_c, bias_dps[3], sigma_rms_dps;
+} ahrs_temp_learn_entry_t;
+typedef struct {
+  uint8_t version, model_schema, total_bins, offset, entry_count, reserved;
+  uint32_t table_revision;
+  ahrs_temp_learn_entry_t entry[2];
+} ahrs_payload_temp_learn_page_t;
+#ifdef __cplusplus
+static_assert(sizeof(ahrs_payload_temp_learn_status_t)==60U,"temperature status ABI");
+static_assert(sizeof(ahrs_temp_learn_entry_t)==24U,"temperature entry ABI");
+static_assert(sizeof(ahrs_payload_temp_learn_page_t)==58U,"temperature page ABI");
+#else
+_Static_assert(sizeof(ahrs_payload_temp_learn_status_t)==60U,"temperature status ABI");
+_Static_assert(sizeof(ahrs_temp_learn_entry_t)==24U,"temperature entry ABI");
+_Static_assert(sizeof(ahrs_payload_temp_learn_page_t)==58U,"temperature page ABI");
+#endif
+
+typedef struct {
+  uint8_t version, flags, mode, reserved; /* flags bit0: fresh sample; bit1: magnetic disturbance */
+  uint32_t sample_n, sample_ms;
+  float b_ut[3]; /* calibrated and mapped into the IMU body axes, same input as VQF */
+} ahrs_payload_magnetometer_t;
+
+typedef struct {
+  uint8_t version, flags; /* bit0: six-face calibration valid; bit1: VQF rest diagnostic only */
+  uint16_t reserved;
+  uint32_t token, sample_seq, sample_us, period_us;
+  float quaternion[4], acc_ms2[3], gyro_dps[3];
+} ahrs_payload_inertial_t;
+typedef struct {
+  uint8_t version, flags; /* bit0 acc calibration valid, bit1 rest, bit2 gyro clip, bit3 acc clip */
+  uint16_t reserved;
+  uint32_t token, sample_seq, sample_us, period_us;
+  float values[9]; /* ax/ay/az:g, gx/gy/gz:dps, yaw/pitch/roll:degrees; device output convention */
+} ahrs_payload_data_capture_t;
+typedef struct {
+  uint8_t version, active;
+  uint16_t reserved;
+  uint32_t token;
+  uint16_t hz, max_hz;
+} ahrs_payload_capture_config_t;
+#ifdef __cplusplus
+static_assert(sizeof(ahrs_payload_data_capture_t)==56U, "capture wire payload");
+static_assert(sizeof(ahrs_payload_capture_config_t)==12U, "capture config wire payload");
+#else
+_Static_assert(sizeof(ahrs_payload_data_capture_t)==56U, "capture wire payload");
+_Static_assert(sizeof(ahrs_payload_capture_config_t)==12U, "capture config wire payload");
+#endif
+#ifdef __cplusplus
+static_assert(sizeof(ahrs_payload_inertial_t)==60U, "inertial wire payload");
+#else
+_Static_assert(sizeof(ahrs_payload_inertial_t)==60U, "inertial wire payload");
+#endif
 
 typedef struct {
   uint8_t version, active_profile, saved_profile, capabilities;
@@ -197,6 +307,14 @@ typedef struct {
   float bias_sigma_dps;
 } ahrs_payload_fusion_diagnostic_t;
 typedef struct {
+  uint8_t version, algorithm, filter_index, flags; /* bit0 valid, bit1 ready; bit2 covariance/bit3 bias recovery since init */
+  uint32_t timestamp_ms, generation;
+  float yaw_delta_deg[4]; /* cumulative gyro, gravity, zero rate, magnetic increments */
+  uint32_t updates[4];
+  float acc_innovation_deg, acc_norm_error_ms2, acc_weight;
+  uint32_t gravity_skipped;
+} ahrs_payload_ekf_updates_t; /* 60B; diff only within the same generation */
+typedef struct {
   uint8_t version, source, reserved[2]; /* source: 1 fresh, 2 history, 3 default */
   uint32_t duration_ms, elapsed_ms, samples, rejected_windows, rejection_reason;
   uint16_t range_dps, reserved2;
@@ -218,6 +336,7 @@ typedef struct {
   output_config_t outputs[2]; /* Active UART then USB configuration */
   uint16_t active_gyro_init_ms, saved_gyro_init_ms;
   uint16_t active_gyro_range_dps, saved_gyro_range_dps, saved_output_hz;
+  uint8_t active_acc_range_g, saved_acc_range_g;
 } ahrs_payload_device_config_t;
 typedef struct {
   uint8_t version, ready;

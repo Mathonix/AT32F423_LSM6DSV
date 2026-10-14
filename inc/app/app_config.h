@@ -6,23 +6,72 @@
 /* Application label: YYYYMMDD and one letter. The first build of a day is
  * "a". Each later build on that same day uses the next letter. */
 #ifdef APP_USER_BL_UPDATE
-#define APP_FIRMWARE_VERSION "20261005f"
+#define APP_FIRMWARE_VERSION "20261005j"
 #else
-#define APP_FIRMWARE_VERSION "20261005e"
+#define APP_FIRMWARE_VERSION "20261012g"
 #endif
 
 #define APP_FUSION_HZ             2000U
 #define APP_GYR_LPF_CUTOFF_HZ    30.0f
+/* Rate smoothing is for calibration/diagnostics. Filtering each body gyro
+ * axis before quaternion integration changes multi-axis rotation paths. */
+#define APP_GYR_FUSION_LPF_ENABLE 0U
 
 /* LSM6DSV temperature telemetry is always published. */
+#ifndef APP_GYR_TEMP_COMP_ENABLE
 #define APP_GYR_TEMP_COMP_ENABLE       1U
+#endif
+/* V4 learning is independent of compensation. Neither switch permits a
+ * legacy writer to erase an existing V4 slot. All learned bias is RAW dps,
+ * before scale, temperature correction and the VQF startup seed. */
+#ifndef APP_GYR_TEMP_LEARNING_ENABLE
+#define APP_GYR_TEMP_LEARNING_ENABLE   1U
+#endif
+#define APP_GYR_TEMP_LEARNING_DEFAULT  1U
+#define APP_TEMP_LEARN_HZ              100U
+#define APP_TEMP_COMP_HZ               20U
+#define APP_TEMP_LEARN_REST_MS         10000U
+#define APP_TEMP_LEARN_CAPTURE_MS      30000U
+/* Inclusive chip-temperature window for NEW learning. Keep the V4
+ * 26-slot storage/wire grid to read previously saved models safely. */
+#define APP_TEMP_LEARN_MIN_C           10.0f
+#define APP_TEMP_LEARN_MAX_C           60.0f
+#define APP_TEMP_LEARN_GAP_US          750U
+#define APP_TEMP_LEARN_RESIDUAL_DPS    0.25f
+#define APP_TEMP_LEARN_GROSS_STEP_DPS  1.5f
+#define APP_TEMP_LEARN_GROSS_RESIDUAL_DPS 0.75f
+/* Brief VQF-only dropouts pause qualified sampling, never create a new
+ * movement episode. Bound both one dropout and its whole-round budget. */
+#define APP_TEMP_LEARN_REST_GRACE_MS   300U
+#define APP_TEMP_LEARN_REST_PAUSE_MAX_MS 1000U
+#define APP_TEMP_LEARN_ACC_DEV_MS2     0.15f
+#define APP_TEMP_LEARN_ACC_DIRECTION_MS2 0.08f
+#define APP_TEMP_LEARN_ACC_GROSS_MS2   0.5f
+#define APP_TEMP_LEARN_DIRECTION_GROSS_MS2 0.4f
+#define APP_TEMP_LEARN_TEMP_SPAN_C     0.3f
+#define APP_TEMP_LEARN_TEMP_RATE_C_S   0.01f
+#define APP_TEMP_LEARN_TEMP_RATE_BLOCKS 5U
+#define APP_TEMP_LEARN_TEMP_STEP_C     0.10f
+/* Sigma of the 100 Hz means (each mean contains 20 actual raw samples). */
+#define APP_TEMP_LEARN_SIGMA_DPS       0.08f
+#define APP_TEMP_LEARN_BLOCK_DRIFT_DPS 0.04f
+#define APP_TEMP_LEARN_CONFLICT_DPS    0.05f
+#define APP_TEMP_LEARN_UPDATE_ALPHA    0.2f
+#define APP_TEMP_LEARN_MAX_BIAS_DPS    5.0f
+#define APP_TEMP_MODEL_MAX_GAP_C       10.0f
+#ifndef APP_TEMP_FLASH_AUTO_SAVE_ENABLE
+#define APP_TEMP_FLASH_AUTO_SAVE_ENABLE 1U
+#endif
+#define APP_TEMP_FLASH_INTERVAL_MS     1800000U
+#define APP_TEMP_FLASH_MAX_WRITES      4U
 #define APP_GYR_TEMP_REF_C             25.0f
 /* Maximum temperature difference for selecting a temperature-matched
  * historical gyro bias during startup fallback. */
 #define APP_GYR_BIAS_TEMP_WINDOW_C     1.0f
 
-/* Fast startup: use a valid temperature-matched history record, then refine
- * it only after confirmed rest. A save is attempted at most once per boot. */
+/* Fast startup: use a trusted V4 raw model/fallback or read-only legacy
+ * history. VQF refines the residual; its bias is never a raw learning sample.
+ * Fresh startup fallback is queued for the throttled V4 safe-idle writer. */
 #ifndef APP_GYR_FAST_START_ENABLE
 /* Default for erased/legacy settings only. A saved host startup setting
  * overrides this value; both startup paths are present in the firmware. */
@@ -70,7 +119,8 @@
 #define APP_GYR_DEFAULT_BIAS_Y_DPS     0.0f
 #define APP_GYR_DEFAULT_BIAS_Z_DPS     0.0f
 
-/* Runtime VQF bias estimators. Startup averaging remains independent of
+/* Default runtime bias estimators; rest estimation is a persistent host switch.
+ * Startup averaging remains independent of
  * these switches; rest detection remains available for status and ZARU. */
 #define APP_VQF_MOTION_BIAS_ENABLE 1U
 #define APP_VQF_REST_BIAS_ENABLE   1U
@@ -105,6 +155,31 @@
 #define APP_VQF_REST_GYR_DPS      0.6f
 #define APP_VQF_REST_ACC_MS2      0.15f
 #define APP_VQF_REST_MIN_SECONDS   1.0f
+/* EKF tune used only while the host rest-bias switch is OFF. Gravity can
+ * refine observable bias without a zero-rate assumption. Keep the gyro and
+ * bias process noise unchanged; never infer level-board yaw bias from gravity.
+ * Build overrides support deterministic A/B validation. */
+#ifndef APP_EKF_GYRO_NOISE_DPS_SQRT_HZ
+#define APP_EKF_GYRO_NOISE_DPS_SQRT_HZ 0.015f
+#endif
+#ifndef APP_EKF_BIAS_RW_DPS_SQRT_S
+#define APP_EKF_BIAS_RW_DPS_SQRT_S 0.0005f
+#endif
+#ifndef APP_EKF_GRAVITY_NOISE
+#define APP_EKF_GRAVITY_NOISE 0.015f
+#endif
+#ifndef APP_EKF_GRAVITY_BIAS_MIN_WEIGHT
+#define APP_EKF_GRAVITY_BIAS_MIN_WEIGHT 0.2f
+#endif
+#ifndef APP_EKF_BIAS_MAX_ACC_NORM_ERROR_MS2
+#define APP_EKF_BIAS_MAX_ACC_NORM_ERROR_MS2 0.05f
+#endif
+#ifndef APP_EKF_BIAS_MAX_ACC_TRANSIENT_MS2
+#define APP_EKF_BIAS_MAX_ACC_TRANSIENT_MS2 0.15f
+#endif
+#ifndef APP_EKF_BIAS_ACC_QUALIFY_S
+#define APP_EKF_BIAS_ACC_QUALIFY_S 2.0f
+#endif
 /* Static initialization may only raise rest gates and rest sigma up to these
  * ceilings. The floors are the current firmware values, so a quiet capture
  * cannot replace the running tune with a smaller number. */

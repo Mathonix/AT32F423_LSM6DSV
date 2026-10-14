@@ -13,8 +13,10 @@
   const groups = {
     acc: { keys: ['ax', 'ay', 'az'], scale: 1 / G, unit: 'g', digits: 3, minSpan: 0.2, el: $('accChart') },
     gyro: { keys: ['gx', 'gy', 'gz'], scale: 1, unit: 'dps', digits: 2, minSpan: 2, el: $('gyroChart') },
+    mag: { keys: ['bx', 'by', 'bz'], scale: 1, unit: 'µT', digits: 2, minSpan: 2, el: $('magChart'), view: 'test', title: '磁力计', labels: ['Bx', 'By', 'Bz'] },
   };
-  for (const g of Object.values(groups)) {
+  for (const [name, g] of Object.entries(groups)) {
+    Object.assign(g, { name, view: g.view || 'status', title: g.title || (name === 'acc' ? '加速度' : '角速度') });
     Object.assign(g, { t: new Float64Array(CAP), n: new Float64Array(CAP), seq: 0, v: g.keys.map(() => new Float32Array(CAP)), head: 0, count: 0, lastActive: 0, visible: false,
       canvas: g.el.querySelector('canvas'), legend: g.keys.map((k) => $(`${k}Live`)), draws: 0 });
     new ResizeObserver(() => fit(g)).observe(g.canvas);
@@ -30,22 +32,27 @@
     const now = performance.now();
     let changed = false;
     for (const g of Object.values(groups)) {
-      const fresh = g.keys.map((k) => running && now - imuStamp[k] < FRESH_MS && Number.isFinite(imu[k]));
-      if (fresh.some(Boolean)) {
+      const mag = g.name === 'mag' ? window.GyroMag?.state?.() : null;
+      const fresh = mag ? g.keys.map((_, a) => !!mag.b && Number.isFinite(mag.b[a])) : g.keys.map((k) => running && now - imuStamp[k] < FRESH_MS && Number.isFinite(imu[k]));
+      if (mag) { $('magChartMessage').textContent = mag.message; g.zoomBtn.disabled = !mag.b; }
+      // Query replies can repeat a sensor sample. Do not insert synthetic duplicates.
+      if (fresh.some(Boolean) && (!mag || mag.sample !== g.lastSample)) {
         g.lastActive = now;
+        if (mag) g.lastSample = mag.sample;
         const i = g.head; g.t[i] = now; g.n[i] = ++g.seq;
-        g.keys.forEach((k, a) => { g.v[a][i] = fresh[a] ? imu[k] * g.scale : NaN; });
+        g.keys.forEach((k, a) => { g.v[a][i] = fresh[a] ? (mag ? mag.b[a] : imu[k]) * g.scale : NaN; });
         g.head = (i + 1) % CAP; g.count = Math.min(CAP, g.count + 1);
-        g.fresh = fresh;
       }
-      const show = g.lastActive > 0 && now - g.lastActive < HIDE_MS;
+      g.fresh = fresh;
+      const show = mag ? mag.enabled : g.lastActive > 0 && now - g.lastActive < HIDE_MS;
+      if (mag && !mag.b && g.count) { g.count = 0; g.head = 0; g.lastSample = null; if (zoom.g === g) closeZoom(); }
       if (show !== g.visible) {
         g.visible = show; g.el.hidden = !show; changed = true;
-        if (!show) { g.count = 0; g.head = 0; g.lastActive = 0; if (zoom.g === g) closeZoom(); }
+        if (!show) { g.count = 0; g.head = 0; g.lastActive = 0; g.lastSample = null; if (zoom.g === g) closeZoom(); }
       }
     }
     if (changed) {
-      const any = Object.values(groups).some((g) => g.visible);
+      const any = Object.values(groups).some((g) => g.view === 'status' && g.visible);
       $('homeCharts').hidden = !any;
       document.querySelector('.home-grid').classList.toggle('has-charts', any);
       for (const g of Object.values(groups)) fit(g);
@@ -166,8 +173,9 @@
     if (!zoom.el) buildZoom();
     zoom.g = g; zoom.hover = null; zoom.last = null; zoom.tip.hidden = true; zoom.opener = document.activeElement;
     setPaused(false);
-    zoom.el.querySelector('#czTitle').innerHTML = `${g === groups.acc ? '加速度' : '角速度'}<em>${g.unit}</em>`;
-    zoom.el.dataset.group = g === groups.acc ? 'acc' : 'gyro';
+    zoom.el.querySelector('#czTitle').innerHTML = `${g.title}<em>${g.unit}</em>`;
+    zoom.stats.querySelectorAll('.cz-ax i').forEach((node, a) => { node.textContent = (g.labels || AX)[a]; });
+    zoom.el.dataset.group = g.name;
     zoom.el.hidden = false; document.body.classList.add('zoom-open');
     zoom.el.querySelector('#czClose').focus({ preventScroll: true });
     drawZoom(performance.now());
@@ -194,7 +202,7 @@
     });
     if (r.hit) {
       const h = r.hit, tip = zoom.tip;
-      const text = `<div class="cz-tt">−${(h.age / 1000).toFixed(2)} s · 样本 #${h.seq}</div>` + h.values.map((v, a) => `<div class="cz-tv cz-${AX[a].toLowerCase()}"><i>${AX[a]}</i><b>${Number.isFinite(v) ? fmt(v, g.digits).trim() : '--'}</b><em>${g.unit}</em></div>`).join('');
+      const text = `<div class="cz-tt">−${(h.age / 1000).toFixed(2)} s · 样本 #${h.seq}</div>` + h.values.map((v, a) => `<div class="cz-tv cz-${AX[a].toLowerCase()}"><i>${(zoom.g.labels || AX)[a]}</i><b>${Number.isFinite(v) ? fmt(v, g.digits).trim() : '--'}</b><em>${g.unit}</em></div>`).join('');
       if (tip.innerHTML !== text) tip.innerHTML = text;
       tip.hidden = false;
       const pw = c.clientWidth, tw = tip.offsetWidth || 140, th = tip.offsetHeight || 80;
@@ -206,18 +214,18 @@
     zoom.draws++;
   }
   for (const g of Object.values(groups)) {
-    g.zoomBtn = $(g === groups.acc ? 'accZoomBtn' : 'gyroZoomBtn');
+    g.zoomBtn = $(`${g.name}ZoomBtn`);
     g.zoomBtn?.addEventListener('click', () => openZoom(g));
   }
   document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && zoom.g) { e.preventDefault(); e.stopPropagation(); closeZoom(); } }, true);
 
   function loop(now) {
     requestAnimationFrame(loop);
-    if (zoom.g && window.GyroUI?.view !== 'status') closeZoom(); // 离开首页即关闭放大视图
-    if (document.hidden || window.GyroUI?.view !== 'status' || now - lastFrame < FRAME_MS) return; // paused off-page
+    if (zoom.g && window.GyroUI?.view !== zoom.g.view) closeZoom();
+    if (document.hidden || !['status', 'test'].includes(window.GyroUI?.view) || now - lastFrame < FRAME_MS) return;
     lastFrame = now; frames++;
     const t = performance.now();
-    for (const g of Object.values(groups)) if (g.visible) draw(g, t);
+    for (const g of Object.values(groups)) if (g.visible && g.view === window.GyroUI?.view) draw(g, t);
     if (zoom.g) drawZoom(t);
   }
   setInterval(sample, SAMPLE_MS);
@@ -232,7 +240,7 @@
       state: () => {
         const g = zoom.g, L = zoom.last;
         const d = zoom.frozen || g;
-        return { open: !!g, group: g ? (g === groups.acc ? 'acc' : 'gyro') : null, draws: zoom.draws, digits: g?.digits ?? null, paused: !!zoom.frozen,
+        return { open: !!g, group: g?.name ?? null, draws: zoom.draws, digits: g?.digits ?? null, paused: !!zoom.frozen,
           stats: L?.stats ?? null, hit: L?.hit ?? null,
           snapshot: g && L ? { seq: L.idx.map((i) => d.n[i]), v: d.v.map((arr) => L.idx.map((i) => arr[i])) } : null };
       },
