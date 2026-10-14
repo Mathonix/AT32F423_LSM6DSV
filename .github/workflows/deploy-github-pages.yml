@@ -72,9 +72,10 @@ jobs:
               if not file.is_file() or file.suffix not in ('.html', '.js', '.css'):
                   continue
               original = file.read_text(encoding='utf-8')
-              updated = asset_url.sub(rewrite_asset, original)
+              updated = original
               if file.suffix == '.html':
                   updated = html_url.sub(rewrite_html, updated)
+              updated = asset_url.sub(rewrite_asset, updated)
               if updated != original:
                   file.write_text(updated, encoding='utf-8')
                   rewritten.append(str(file.relative_to(output)))
