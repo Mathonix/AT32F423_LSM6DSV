@@ -84,12 +84,14 @@
     const values = rows.flatMap(row => row.angles.map((v, i) => v - base[i]));
     const scale = Math.max(.005, ...values.map(Math.abs)) * 1.1;
     const xmax = Math.max(60, session.elapsed() / 1000);
-    g.font = '12px system-ui'; g.strokeStyle = '#e4e7ec'; g.fillStyle = '#667085';
+    // style1：颜色取自主题 CSS 变量（Yaw / Pitch / Roll = Z / Y / X 轴色）
+    const TC = (name, fallback) => window.GyroTheme?.color(name, fallback) || fallback;
+    g.font = '12px system-ui'; g.strokeStyle = TC('--chart-grid', '#e4e7ec'); g.fillStyle = TC('--chart-label', '#667085');
     for (let i = 0; i <= 4; i++) { const y = top + ph * i / 4; g.beginPath(); g.moveTo(left, y); g.lineTo(w - 20, y); g.stroke();
       g.fillText(num(scale * (1 - i / 2), 3), 5, y + 4);
       const x = left + pw * i / 4; g.fillText(`${num(xmax * i / 240, 1)} min`, Math.min(x, w - 60), h - 10); }
     g.fillText('°', 8, 12);
-    ['#635bff', '#22a06b', '#f79009'].forEach((color, i) => {
+    [TC('--c-yaw', '#635bff'), TC('--c-pitch', '#22a06b'), TC('--c-roll', '#f79009')].forEach((color, i) => {
       g.strokeStyle = color; g.lineWidth = 1.6; g.beginPath(); let previous = null;
       rows.forEach(row => { const x = left + (row.second + .5) / xmax * pw, y = top + ph / 2 - (row.angles[i] - base[i]) / scale * ph / 2;
         if (previous == null || row.second !== previous + 1) g.moveTo(x, y); else g.lineTo(x, y); previous = row.second; }); g.stroke();

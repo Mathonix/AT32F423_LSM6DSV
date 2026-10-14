@@ -8,7 +8,9 @@
 (() => {
   const $ = (id) => document.getElementById(id);
   const CAP = 640, SAMPLE_MS = 20, WINDOW_MS = 10000, FRESH_MS = 600, HIDE_MS = 800, FRAME_MS = 33;
-  const COLORS = ['#635BFF', '#22A06B', '#F79009'];
+  // style1：曲线 / 网格颜色取自主题 CSS 变量（theme.js · GyroTheme.color），切换深浅色即时生效；无主题时用旧色。
+  const TC = (name, fallback) => window.GyroTheme?.color(name, fallback) || fallback;
+  const AXIS_COLORS = () => [TC('--c-x', '#635BFF'), TC('--c-y', '#22A06B'), TC('--c-z', '#F79009')];
   const G = 9.80665; // app.js / firmware report acceleration in m/s²
   const groups = {
     acc: { keys: ['ax', 'ay', 'az'], scale: 1 / G, unit: 'g', digits: 3, minSpan: 0.2, el: $('accChart') },
@@ -85,12 +87,13 @@
     const left = 46 * dpr, right = 8 * dpr, top = 8 * dpr, bottom = 8 * dpr, pw = W - left - right, ph = H - top - bottom;
     const y = (v) => top + (hi - v) / (hi - lo) * ph, x = (t) => left + (1 - (now - t) / WINDOW_MS) * pw;
     ctx.font = `${12 * dpr}px Inter,system-ui,sans-serif`; ctx.textAlign = 'right'; ctx.textBaseline = 'middle';
+    const COLORS = AXIS_COLORS(), GRID = TC('--chart-grid', '#EEF0F3'), ZERO = TC('--chart-zero', '#D0D5DD'), LABEL = TC('--chart-label', '#98A2B3'), CURSOR = TC('--chart-cursor', '#667085');
     const dec = step >= 1 ? 0 : Math.min(3, Math.ceil(-Math.log10(step)));
     for (let v = lo; v <= hi + step / 2; v += step) {
       const yy = Math.round(y(v)) + .5;
-      ctx.strokeStyle = Math.abs(v) < step / 2 ? '#D0D5DD' : '#EEF0F3'; ctx.lineWidth = 1;
+      ctx.strokeStyle = Math.abs(v) < step / 2 ? ZERO : GRID; ctx.lineWidth = 1;
       ctx.beginPath(); ctx.moveTo(left, yy); ctx.lineTo(W - right, yy); ctx.stroke();
-      ctx.fillStyle = '#98A2B3'; ctx.fillText(v.toFixed(dec), left - 8 * dpr, yy);
+      ctx.fillStyle = LABEL; ctx.fillText(v.toFixed(dec), left - 8 * dpr, yy);
     }
     ctx.lineWidth = 1.6 * dpr; ctx.lineJoin = 'round';
     g.v.forEach((arr, a) => {
@@ -112,9 +115,9 @@
         for (const i of idx) { const d = Math.abs(x(g.t[i]) - hx); if (d < bd) { bd = d; best = i; } }
         if (best >= 0) {
           const px = Math.round(x(g.t[best])) + .5;
-          ctx.strokeStyle = '#667085'; ctx.lineWidth = 1; ctx.setLineDash([4 * dpr, 3 * dpr]);
+          ctx.strokeStyle = CURSOR; ctx.lineWidth = 1; ctx.setLineDash([4 * dpr, 3 * dpr]);
           ctx.beginPath(); ctx.moveTo(px, top); ctx.lineTo(px, H - bottom); ctx.stroke(); ctx.setLineDash([]);
-          if (hover.y != null) { const hy = Math.round(hover.y * dpr) + .5; if (hy >= top && hy <= H - bottom) { ctx.strokeStyle = '#D0D5DD'; ctx.beginPath(); ctx.moveTo(left, hy); ctx.lineTo(W - right, hy); ctx.stroke(); } }
+          if (hover.y != null) { const hy = Math.round(hover.y * dpr) + .5; if (hy >= top && hy <= H - bottom) { ctx.strokeStyle = ZERO; ctx.beginPath(); ctx.moveTo(left, hy); ctx.lineTo(W - right, hy); ctx.stroke(); } }
           g.v.forEach((arr, a) => { const val = arr[best]; if (!Number.isFinite(val)) return; ctx.fillStyle = COLORS[a]; ctx.beginPath(); ctx.arc(px, y(val), 3.5 * dpr, 0, Math.PI * 2); ctx.fill(); });
           hit = { i: best, seq: g.n[best], age: now - g.t[best], values: g.v.map((arr) => arr[best]), px: px / dpr };
         }
@@ -230,6 +233,10 @@
   }
   setInterval(sample, SAMPLE_MS);
   requestAnimationFrame(loop);
+  // theme2：主题切换在 View Transition 回调内同步重绘（回调期间 rAF 不触发），新快照即为新配色
+  window.addEventListener('gyroa-theme', () => {
+    try { const t = performance.now(); for (const g of Object.values(groups)) if (g.visible && g.view === window.GyroUI?.view) draw(g, t); if (zoom.g) drawZoom(t); } catch (e) { lastFrame = 0; }
+  });
 
   window.GyroUI.charts = {
     state: () => Object.fromEntries(Object.entries(groups).map(([k, g]) => [k, { visible: g.visible, count: g.count, draws: g.draws, w: g.canvas.width, h: g.canvas.height }])),

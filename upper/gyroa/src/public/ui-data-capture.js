@@ -53,15 +53,16 @@
     if(now-lastDraw>200&&!document.querySelector('[data-view="capture"]').hidden){lastDraw=now;draw();}
   }
   function draw(){
-    const points=session.preview(),colors=['#3abff8','#6bcf9e','#efa649'];
+    const points=session.preview(),TC=(name,fallback)=>window.GyroTheme?.color(name,fallback)||fallback;
     for(const [id,offset,unit] of [['captureAccChart',0,'g'],['captureGyroChart',3,'°/s'],['capturePoseChart',6,'°']]){
       const canvas=$(id),rect=canvas.getBoundingClientRect();if(!rect.width)continue;
+      const colors=(offset===6?['--c-yaw','--c-pitch','--c-roll']:['--c-x','--c-y','--c-z']).map((name,i)=>TC(name,['#3abff8','#6bcf9e','#efa649'][i]));
       const ratio=devicePixelRatio||1,w=rect.width,h=200;canvas.width=Math.round(w*ratio);canvas.height=Math.round(h*ratio);
       const g=canvas.getContext('2d');g.scale(ratio,ratio);const left=54,top=18,pw=w-left-14,ph=h-top-30;
       const values=points.flatMap(p=>p.values.slice(offset,offset+3));let min=values.length?Math.min(...values):0,max=values.length?Math.max(...values):1;
       const span=Math.max(max-min,offset===0?.05:offset===3?1:1);min-=span*.15;max=min+span*1.3;
       const end=points.at(-1)?.t||15,start=Math.max(0,end-15),timeSpan=Math.max(1,end-start);
-      const css=getComputedStyle(canvas);g.font='11px system-ui';g.fillStyle=css.color;g.strokeStyle=css.getPropertyValue('--bd')||'#334155';
+      const css=getComputedStyle(canvas);g.font='11px system-ui';g.fillStyle=css.color;g.strokeStyle=TC('--chart-grid','#334155');
       for(let i=0;i<5;i++){const y=top+i*ph/4;g.beginPath();g.moveTo(left,y);g.lineTo(w-14,y);g.stroke();g.fillText((max-i*(max-min)/4).toFixed(2),2,y+4);}
       g.fillText(unit,3,10);g.fillText(`${start.toFixed(1)} s`,left,h-5);g.fillText(`${end.toFixed(1)} s`,Math.max(left,w-55),h-5);
       colors.forEach((color,i)=>{g.strokeStyle=color;g.lineWidth=1.5;g.beginPath();let first=true;for(const p of points){const x=left+(p.t-start)/timeSpan*pw,y=top+(max-p.values[offset+i])/(max-min)*ph;if(first||p.gap)g.moveTo(x,y);else g.lineTo(x,y);first=false;}g.stroke();});
