@@ -11,6 +11,7 @@
 <link rel="stylesheet" href="/theme.css?v=20261009theme3">
 <link rel="stylesheet" href="/workspace-pages.css?v=20261015layout1">
 <link rel="stylesheet" href="/ui-cards.css?v=20261015cards1">
+<link rel="stylesheet" href="/tuning-polish.css?v=20261015tune2">
 </head>
 <body>
 <svg class="sprite" aria-hidden="true" xmlns="http://www.w3.org/2000/svg">
@@ -417,38 +418,53 @@
       <section class="view view-tuning" data-view="tuning" hidden>
         <header class="page-h workspace-page-head"><div class="workspace-heading"><span class="workspace-kicker">TUNING / 02</span><h1>调参</h1><p>调整融合参数与陀螺仪比例因子；修改保存后按设备流程重新启动。</p></div><span id="vqfTuningState" class="chip">--</span></header>
         <div class="tuning-workspace">
-        <div class="card tuning-card">
-          <div class="card-h"><h2>VQF 参数</h2></div>
-          <p class="tuning-note">保存后自动重启并重连，参数在重启后生效。自定义参数优先于滤波档位和静置初始化参数。</p>
+        <div class="card tuning-card tuning-vqf-card">
+          <div class="card-h"><h2>VQF 参数</h2><span class="tuning-section-caption">14 项参数 · 4 个分组</span></div>
+          <div class="tuning-guidance" role="note"><span class="tuning-guidance-mark" aria-hidden="true">i</span><p class="tuning-note">保存后自动重启并重连，参数在重启后生效。自定义参数优先于滤波档位和静置初始化参数。</p></div>
+          <div class="tuning-control-dock">
+            <div class="tuning-toolbar" role="group" aria-label="VQF 参数操作">
+              <button id="vqfTuningApply" class="primary" disabled>保存并应用</button>
+              <button id="vqfTuningRestore" disabled>恢复默认参数</button>
+              <button id="vqfTuningRead" disabled>读取设备参数</button>
+              <button id="vqfTuningDiscard" disabled>撤销修改</button>
+              <span id="vqfTuningDirty" class="chip warn" hidden>未保存</span>
+            </div>
+            <p id="vqfTuningMessage" class="tuning-message" role="status" aria-live="polite">请先连接设备</p>
+          </div>
+          <div class="tuning-form-head"><h3>融合参数配置</h3><p>输入参数后，对照设备当前值与固件默认值核对。</p></div>
           <div id="vqfTuningFields" class="tuning-grid"></div>
-          <div class="tuning-toolbar">
-            <button id="vqfTuningApply" class="primary" disabled>保存并应用</button>
-            <button id="vqfTuningRestore" disabled>恢复默认参数</button>
-            <button id="vqfTuningRead" disabled>读取设备参数</button>
-            <button id="vqfTuningDiscard" disabled>撤销修改</button>
-            <span id="vqfTuningDirty" class="chip warn" hidden>未保存</span>
-          </div>
-          <p id="vqfTuningMessage" class="tuning-message" role="status" aria-live="polite">请先连接设备</p>
-
         </div>
-        <div class="card tuning-card" id="gyroScalePanel" data-fw-inert>
+        <div class="card tuning-card tuning-scale-card" id="gyroScalePanel" data-fw-inert>
           <div class="card-h"><h2>陀螺仪比例因子校准</h2><span id="gyroScaleStatus" class="chip">—</span></div>
-          <p class="tuning-note">先热机并完成静止零偏校准，再使用六轴模式采集。固定所选转轴，标记起始位置，单向转满指定圈数后回到标记；保存后再反向转动复测。平放转航向选 Z 轴。</p>
-          <div class="tuning-grid">
-            <label class="field">转轴<select id="gyroScaleAxis"><option value="2">Z（航向）</option><option value="0">X</option><option value="1">Y</option></select></label>
-            <label class="field">实际圈数<input id="gyroScaleCircles" type="number" value="10" min="1" max="100" step="1"></label>
-          </div>
-          <div class="tuning-toolbar"><button id="gyroScalePrepare" disabled>准备采集</button><button id="gyroScaleBegin" disabled>开始转动</button><button id="gyroScaleEnd" disabled>结束转动</button><button id="gyroScaleCancel" disabled>取消采集</button></div>
-          <p id="gyroScaleAngle">累计角度：—</p>
-          <details><summary>使用已有测量结果</summary><div class="form-2col"><label class="field">测得累计角度（°，10 圈例如 3585）<input id="gyroScaleMeasured" type="number" step="any" inputmode="decimal"></label><label class="field">测量时比例系数<input id="gyroScaleMeasuredFactor" type="number" value="1" min="0.95" max="1.05" step="any" inputmode="decimal"></label></div><button id="gyroScaleCalculate" disabled>按输入计算系数</button><p class="tuning-note">手动输入默认按未补偿角度计算，测量时系数填 1：10 圈测得 3600°，系数为 1。若测量已应用比例补偿，请填写测量当时的系数。自动采集会填入该基准。填写完整累计角度，不能只填最后的偏差。</p></details>
-          <div class="tuning-grid gyro-scale-factors">
-            <label class="field">X 轴系数<input id="gyroScaleFactor0" type="number" min="0.95" max="1.05" step="0.000001" disabled><small>当前 <span id="gyroScaleActive0">—</span></small></label>
-            <label class="field">Y 轴系数<input id="gyroScaleFactor1" type="number" min="0.95" max="1.05" step="0.000001" disabled><small>当前 <span id="gyroScaleActive1">—</span></small></label>
-            <label class="field">Z 轴系数<input id="gyroScaleFactor2" type="number" min="0.95" max="1.05" step="0.000001" disabled><small>当前 <span id="gyroScaleActive2">—</span></small></label>
-          </div>
-          <div class="tuning-toolbar"><button id="gyroScaleApply" class="primary" disabled>保存并应用</button><button id="gyroScaleRestore" disabled>恢复系数为 1</button><button id="gyroScaleRead" disabled>读取设备系数</button><button id="gyroScaleDiscard" disabled>撤销修改</button></div>
-          <p id="gyroScaleMessage" class="tuning-message" role="status" aria-live="polite">请先连接设备</p>
-          <p class="tuning-note">系数保存到板卡，自动重启后对 VQF／EKF、六轴／九轴生效。</p>
+          <div class="tuning-guidance" role="note"><span class="tuning-guidance-mark" aria-hidden="true">i</span><p class="tuning-note">先热机并完成静止零偏校准，再使用六轴模式采集。固定所选转轴，标记起始位置，单向转满指定圈数后回到标记；保存后再反向转动复测。平放转航向选 Z 轴。</p></div>
+          <section class="tuning-step" aria-labelledby="gyroStepOne">
+            <div class="tuning-step-head"><span class="tuning-step-index">01</span><div><h3 id="gyroStepOne">选择采集条件</h3><p>选择转轴和实际旋转圈数，然后准备采集。</p></div></div>
+            <div class="tuning-grid">
+              <label class="field">转轴<select id="gyroScaleAxis"><option value="2">Z（航向）</option><option value="0">X</option><option value="1">Y</option></select></label>
+              <label class="field">实际圈数<input id="gyroScaleCircles" type="number" value="10" min="1" max="100" step="1"></label>
+            </div>
+            <div class="tuning-toolbar" role="group" aria-label="陀螺仪转动采集控制"><button id="gyroScalePrepare" disabled>准备采集</button><button id="gyroScaleBegin" disabled>开始转动</button><button id="gyroScaleEnd" disabled>结束转动</button><button id="gyroScaleCancel" disabled>取消采集</button></div>
+          </section>
+          <section class="tuning-step" aria-labelledby="gyroStepTwo">
+            <div class="tuning-step-head"><span class="tuning-step-index">02</span><div><h3 id="gyroStepTwo">实时采集数据</h3><p>以设备返回的采样数据为准，未采集时不显示虚假数值。</p></div></div>
+            <div class="ui-metrics tuning-live-metrics">
+              <div class="ui-metric"><span class="ui-metric-label">累计角度</span><b id="gyroScaleAngle" class="ui-metric-value">—</b></div>
+              <div class="ui-metric"><span class="ui-metric-label">有效数据帧</span><b id="gyroScaleFrames" class="ui-metric-value">0</b></div>
+              <div class="ui-metric"><span class="ui-metric-label">目标转角</span><b id="gyroScaleTarget" class="ui-metric-value">3600°</b></div>
+            </div>
+          </section>
+          <details class="tuning-manual"><summary>使用已有测量结果（手动计算）</summary><div class="form-2col"><label class="field">测得累计角度（°，10 圈例如 3585）<input id="gyroScaleMeasured" type="number" step="any" inputmode="decimal"></label><label class="field">测量时比例系数<input id="gyroScaleMeasuredFactor" type="number" value="1" min="0.95" max="1.05" step="any" inputmode="decimal"></label></div><button id="gyroScaleCalculate" disabled>按输入计算系数</button><p class="tuning-note">手动输入默认按未补偿角度计算，测量时系数填 1：10 圈测得 3600°，系数为 1。若测量已应用比例补偿，请填写测量当时的系数。自动采集会填入该基准。填写完整累计角度，不能只填最后的偏差。</p></details>
+          <section class="tuning-step" aria-labelledby="gyroStepThree">
+            <div class="tuning-step-head"><span class="tuning-step-index">03</span><div><h3 id="gyroStepThree">检查并应用系数</h3><p>修改的系数与设备当前系数分开显示，保存前请核对。</p></div></div>
+            <div class="tuning-grid gyro-scale-factors">
+              <label class="field tuning-factor">X 轴系数<input id="gyroScaleFactor0" type="number" min="0.95" max="1.05" step="0.000001" disabled><small>设备当前 <span id="gyroScaleActive0">—</span></small></label>
+              <label class="field tuning-factor">Y 轴系数<input id="gyroScaleFactor1" type="number" min="0.95" max="1.05" step="0.000001" disabled><small>设备当前 <span id="gyroScaleActive1">—</span></small></label>
+              <label class="field tuning-factor">Z 轴系数<input id="gyroScaleFactor2" type="number" min="0.95" max="1.05" step="0.000001" disabled><small>设备当前 <span id="gyroScaleActive2">—</span></small></label>
+            </div>
+            <div class="tuning-toolbar" role="group" aria-label="比例因子保存操作"><button id="gyroScaleApply" class="primary" disabled>保存并应用</button><button id="gyroScaleRestore" disabled>恢复系数为 1</button><button id="gyroScaleRead" disabled>读取设备系数</button><button id="gyroScaleDiscard" disabled>撤销修改</button></div>
+            <p id="gyroScaleMessage" class="tuning-message" role="status" aria-live="polite">请先连接设备</p>
+          </section>
+          <div class="tuning-guidance tuning-guidance--small" role="note"><span class="tuning-guidance-mark" aria-hidden="true">i</span><p class="tuning-note">系数保存到板卡，自动重启后对 VQF／EKF、六轴／九轴生效。</p></div>
         </div>
         </div>
       </section>
