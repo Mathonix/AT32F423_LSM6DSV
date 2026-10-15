@@ -9,6 +9,7 @@
 <link rel="stylesheet" href="/layout.css?v=20261007ekf1">
 <link rel="stylesheet" href="/data-capture.css?v=20261014themefix1">
 <link rel="stylesheet" href="/theme.css?v=20261009theme3">
+<link rel="stylesheet" href="/workspace-pages.css?v=20261015layout1">
 </head>
 <body>
 <svg class="sprite" aria-hidden="true" xmlns="http://www.w3.org/2000/svg">
@@ -115,7 +116,7 @@
       </section>
 
       <section class="view view-test" data-view="test" hidden>
-        <header class="page-h"><h1>测试</h1><span id="driftState" class="chip" role="status">未开始</span><span class="fill"></span><button id="testRestartBtn" disabled><svg class="ic sm"><use href="#i-rotate"/></svg><span class="lbl">重启设备</span></button></header>
+        <header class="page-h workspace-page-head"><div class="workspace-heading"><span class="workspace-kicker">VALIDATION / 03</span><h1>测试</h1><p>固定板卡进行姿态零漂测试，或查看惯导运动估计与实时磁场。</p></div><span id="driftState" class="chip" role="status">未开始</span><span class="fill"></span><button id="testRestartBtn" disabled><svg class="ic sm"><use href="#i-rotate"/></svg><span class="lbl">重启设备</span></button></header>
 
 
 
@@ -123,8 +124,11 @@
 
       <div class="test-workspace"><div class="test-session"><div class="card drift-controls" id="driftControlsPanel">
           <h2>零漂测试</h2>
-          <div class="drift-actions"><label class="field">测试时长<select id="driftDuration"><option value="60">一分钟</option><option value="300" selected>五分钟</option><option value="600">十分钟</option><option value="1800">三十分钟</option><option value="3600">一小时</option></select></label>
-          <button id="driftStart" class="primary" disabled>开始测试</button><button id="driftStop" hidden>停止测试</button><span class="fill"></span><button id="driftCsv" disabled>导出 CSV</button><button id="driftJson" disabled>导出报告 JSON</button></div>
+          <div class="drift-actions">
+            <label class="field">测试时长<select id="driftDuration"><option value="60">一分钟</option><option value="300" selected>五分钟</option><option value="600">十分钟</option><option value="1800">三十分钟</option><option value="3600">一小时</option></select></label>
+            <div class="drift-run-actions"><button id="driftStart" class="primary" disabled>开始测试</button><button id="driftStop" hidden>停止测试</button></div>
+            <div class="drift-export-actions"><button id="driftCsv" disabled>导出 CSV</button><button id="driftJson" disabled>导出报告 JSON</button></div>
+          </div>
           <p id="driftConfig" class="drift-config"></p>
           <p id="driftHoldWarning" class="drift-warning" hidden>当前启用零角速保持：航向被锁定，测到的是保持后的输出稳定性，不能代表陀螺仪自身零漂。</p>
           <p id="driftNineWarning" class="drift-warning" hidden>九轴航向受磁力计修正；结果包含磁场影响，不能与六轴零漂直接比较。</p>
@@ -224,7 +228,7 @@
 
       <!-- ============ 校准 ============ -->
       <section class="view view-calib" data-view="calib" hidden>
-        <header class="page-h"><h1>传感器校准</h1></header>
+        <header class="page-h workspace-page-head"><div class="workspace-heading"><span class="workspace-kicker">CALIBRATION / 01</span><h1>传感器校准</h1><p>按步骤完成加速度计与磁力计校准，右侧查看静置初始化和历史零偏。</p></div></header>
         <div class="calib-grid" data-fw-inert>
           <div class="calib-main">
           <section class="card">
@@ -319,19 +323,25 @@
 
       <!-- ============ 数据采集 ============ -->
       <section class="view view-capture" data-view="capture" hidden>
-        <header class="page-h"><h1>数据采集</h1><span id="captureState" class="chip">未开始</span></header>
+        <header class="page-h workspace-page-head"><div class="workspace-heading"><span class="workspace-kicker">CAPTURE / 04</span><h1>数据采集</h1><p>选择采样频率并记录三轴运动数据，实时预览波形，结束后导出 CSV。</p></div><span id="captureState" class="chip">未开始</span></header>
         <div class="capture-layout">
           <div class="card capture-controls">
             <h2>运动数据记录</h2>
-            <label class="field">采集频率<select id="captureHz"><option value="1">1 Hz</option><option value="5">5 Hz</option><option value="10">10 Hz</option><option value="20">20 Hz</option><option value="50">50 Hz</option><option value="100" selected>100 Hz</option><option value="200">200 Hz</option><option value="500">500 Hz</option></select></label>
-            <p id="captureEstimate"></p>
-            <div class="capture-actions"><button id="captureStart" class="primary" disabled>开始采集</button><button id="captureStop" disabled>停止采集</button><button id="captureCsv" disabled>导出 CSV</button><button id="captureClear" disabled>清空数据</button></div>
-            <p id="captureMessage" role="status" aria-live="polite">请先连接设备。</p>
-            <div class="capture-stats"><div><small>记录行数</small><b id="captureRows">0</b></div><div><small>采集时长</small><b id="captureElapsed">0.0 s</b></div><div><small>文件大小</small><b id="captureSize">0 B</b></div></div>
-            <p id="captureQuality"></p><p id="captureConfig"></p>
-            <p>加速度含重力，单位 g；角速度为 °/s，姿态为 °（±180°）。CSV 记录电脑接收时间（UTC）和板卡采样时间，分析间隔请使用 elapsed_s。低频记录可减小文件，快速运动请提高频率。</p>
-            <p>停止后导出 CSV，再清空数据开始下一轮。页面关闭或刷新会清除尚未导出的数据。</p>
-            <button id="captureRead" class="sm" disabled>读取采集状态</button>
+            <div class="capture-primary">
+              <label class="field">采集频率<select id="captureHz"><option value="1">1 Hz</option><option value="5">5 Hz</option><option value="10">10 Hz</option><option value="20">20 Hz</option><option value="50">50 Hz</option><option value="100" selected>100 Hz</option><option value="200">200 Hz</option><option value="500">500 Hz</option></select></label>
+              <p id="captureEstimate"></p>
+              <div class="capture-actions"><button id="captureStart" class="primary" disabled>开始采集</button><button id="captureStop" disabled>停止采集</button><button id="captureCsv" disabled>导出 CSV</button><button id="captureClear" disabled>清空数据</button></div>
+              <p id="captureMessage" role="status" aria-live="polite">请先连接设备。</p>
+            </div>
+            <div class="capture-side">
+              <div class="capture-stats"><div><small>记录行数</small><b id="captureRows">0</b></div><div><small>采集时长</small><b id="captureElapsed">0.0 s</b></div><div><small>文件大小</small><b id="captureSize">0 B</b></div></div>
+              <p id="captureQuality"></p><p id="captureConfig"></p>
+              <button id="captureRead" class="sm" disabled>读取采集状态</button>
+            </div>
+            <details class="capture-help"><summary>采集说明与注意事项</summary>
+              <p>加速度含重力，单位 g；角速度为 °/s，姿态为 °（±180°）。CSV 记录电脑接收时间（UTC）和板卡采样时间，分析间隔请使用 elapsed_s。低频记录可减小文件，快速运动请提高频率。</p>
+              <p>停止后导出 CSV，再清空数据开始下一轮。页面关闭或刷新会清除尚未导出的数据。</p>
+            </details>
           </div>
           <div class="capture-plots">
             <div class="card"><h2>加速度 <small>g</small></h2><div class="capture-legend"><span>ax <b id="captureValue0">—</b></span><span>ay <b id="captureValue1">—</b></span><span>az <b id="captureValue2">—</b></span></div><canvas id="captureAccChart" aria-label="最近15秒的三轴加速度"></canvas></div>
@@ -376,10 +386,12 @@
 
       <!-- ============ 设置 ============ -->
       <section class="view view-tuning" data-view="tuning" hidden>
-        <header class="page-h"><h1>调参</h1><span id="vqfTuningState" class="chip">--</span></header>
+        <header class="page-h workspace-page-head"><div class="workspace-heading"><span class="workspace-kicker">TUNING / 02</span><h1>调参</h1><p>调整融合参数与陀螺仪比例因子；修改保存后按设备流程重新启动。</p></div><span id="vqfTuningState" class="chip">--</span></header>
+        <div class="tuning-workspace">
         <div class="card tuning-card">
           <div class="card-h"><h2>VQF 参数</h2></div>
           <p class="tuning-note">保存后自动重启并重连，参数在重启后生效。自定义参数优先于滤波档位和静置初始化参数。</p>
+          <div id="vqfTuningFields" class="tuning-grid"></div>
           <div class="tuning-toolbar">
             <button id="vqfTuningApply" class="primary" disabled>保存并应用</button>
             <button id="vqfTuningRestore" disabled>恢复默认参数</button>
@@ -388,7 +400,7 @@
             <span id="vqfTuningDirty" class="chip warn" hidden>未保存</span>
           </div>
           <p id="vqfTuningMessage" class="tuning-message" role="status" aria-live="polite">请先连接设备</p>
-          <div id="vqfTuningFields" class="tuning-grid"></div>
+
         </div>
         <div class="card tuning-card" id="gyroScalePanel" data-fw-inert>
           <div class="card-h"><h2>陀螺仪比例因子校准</h2><span id="gyroScaleStatus" class="chip">—</span></div>
@@ -408,6 +420,7 @@
           <div class="tuning-toolbar"><button id="gyroScaleApply" class="primary" disabled>保存并应用</button><button id="gyroScaleRestore" disabled>恢复系数为 1</button><button id="gyroScaleRead" disabled>读取设备系数</button><button id="gyroScaleDiscard" disabled>撤销修改</button></div>
           <p id="gyroScaleMessage" class="tuning-message" role="status" aria-live="polite">请先连接设备</p>
           <p class="tuning-note">系数保存到板卡，自动重启后对 VQF／EKF、六轴／九轴生效。</p>
+        </div>
         </div>
       </section>
 
