@@ -10,6 +10,7 @@
 <link rel="stylesheet" href="/data-capture.css?v=20261014themefix1">
 <link rel="stylesheet" href="/theme.css?v=20261009theme3">
 <link rel="stylesheet" href="/workspace-pages.css?v=20261015layout1">
+<link rel="stylesheet" href="/ui-cards.css?v=20261015cards1">
 </head>
 <body>
 <svg class="sprite" aria-hidden="true" xmlns="http://www.w3.org/2000/svg">
@@ -137,16 +138,26 @@
           <p id="driftMessage" role="status">请先连接设备。</p>
           <label id="driftReplaceBox" class="drift-replace" hidden><input id="driftReplace" type="checkbox">覆盖上次结果（请先导出）</label>
         </div><div class="card drift-plot"><div class="drift-plot-h"><h2>角度变化</h2><span class="drift-legend"><i>Yaw</i><i>Pitch</i><i>Roll</i></span></div><canvas id="driftChart" role="img" aria-label="相对首十秒均值的三轴角度变化曲线"></canvas></div><div class="card drift-results"><h2>测试结果</h2><div class="drift-table-wrap"><table><thead><tr><th>角度</th><th>首尾均值变化 / °</th><th>首末帧变化 / °</th><th>峰峰值 / °</th><th>最大偏离 / °</th><th>趋势 / °/min</th></tr></thead><tbody><tr><th scope="row">Yaw</th><td id="drift-yaw-meanChangeDeg">—</td><td id="drift-yaw-netDeg">—</td><td id="drift-yaw-peakToPeakDeg">—</td><td id="drift-yaw-maxDeviationDeg">—</td><td id="drift-yaw-slopeDegPerMin">—</td></tr><tr><th scope="row">Pitch</th><td id="drift-pitch-meanChangeDeg">—</td><td id="drift-pitch-netDeg">—</td><td id="drift-pitch-peakToPeakDeg">—</td><td id="drift-pitch-maxDeviationDeg">—</td><td id="drift-pitch-slopeDegPerMin">—</td></tr><tr><th scope="row">Roll</th><td id="drift-roll-meanChangeDeg">—</td><td id="drift-roll-netDeg">—</td><td id="drift-roll-peakToPeakDeg">—</td><td id="drift-roll-maxDeviationDeg">—</td><td id="drift-roll-slopeDegPerMin">—</td></tr></tbody></table></div>
-          <p id="driftFrames">0 帧</p><p id="driftTemp">无有效温度数据</p><p id="driftRest">静置检测：无诊断数据</p>
+          
+          <div class="ui-summary-block" aria-label="测试摘要"><h3 class="ui-summary-title">测量摘要</h3>
+            <div class="ui-metrics ui-metrics--test">
+              <div class="ui-metric"><span class="ui-metric-label">有效帧 / 采样间隔</span><p id="driftFrames" class="ui-metric-detail">0 帧</p></div>
+              <div class="ui-metric"><span class="ui-metric-label">温度信息</span><p id="driftTemp" class="ui-metric-detail">无有效温度数据</p></div>
+              <div class="ui-metric"><span class="ui-metric-label">静置检测</span><p id="driftRest" class="ui-metric-detail">无诊断数据</p></div>
+            </div></div>
           <details class="drift-method"><summary>统计口径</summary><p>首尾均值变化：最后 10 秒均值减最初 10 秒均值；峰峰值：全部姿态帧的最大值减最小值；最大偏离：相对最初 10 秒均值；趋势：每秒均值线性拟合。Yaw / Roll 跨 ±180° 连续展开。曲线和 CSV 保存每秒统计，JSON 包含配置与结果。测试只测量当前输出，不做归零或校准。</p><p>测试中不要移动板卡。断线、数据中断超过 2 秒或设备配置变化会结束测试并保留部分结果。网页刷新会丢失未导出的结果；长时间测试请保持电脑运行及页面打开。模拟设备数据仅用于演示。</p></details>
         </div></div><aside class="test-aux"><div class="card ins-card" id="insPanel">
           <h2>惯导运动估计</h2>
           <div class="drift-actions"><button id="insStart" class="primary" disabled>建立 / 重置原点</button><button id="insStop" disabled>停止估计</button><button id="insStationary" disabled>确认静止，归零速度</button><label><input id="insZupt" type="checkbox">停靠模式（可能误判匀速）</label></div>
           <div class="drift-table-wrap"><table class="cs-table ins-position"><thead><tr><th>X / cm</th><th>Y / cm</th><th>Z / cm</th></tr></thead><tbody><tr><td id="insX">—</td><td id="insY">—</td><td id="insZ">—</td></tr></tbody></table></div>
           <p id="insMessage" role="status">请先连接设备。</p>
-          <p id="insDiagnostics"></p>
-          <p id="insVelocity"></p>
-          <p id="insQuality">数据质量：等待数据</p>
+          
+          <div class="ui-summary-block" aria-label="惯导诊断"><h3 class="ui-summary-title">实时诊断</h3>
+            <div class="ui-metrics ui-metrics--ins">
+              <div class="ui-metric"><span class="ui-metric-label">运动速度</span><p id="insVelocity" class="ui-metric-detail">—</p></div>
+              <div class="ui-metric"><span class="ui-metric-label">数据质量</span><p id="insQuality" class="ui-metric-detail">等待数据</p></div>
+              <div class="ui-metric ui-metric--wide"><span class="ui-metric-label">采样诊断</span><p id="insDiagnostics" class="ui-metric-detail">—</p></div>
+            </div></div>
           <p>建立原点后静止 2 秒。X 向初始前方、Y 向初始左方、Z 向上；纯惯导会累积漂移。</p>
           <details><summary>估计说明</summary><p>固件将已校准加速度按同采样时刻的六轴融合四元数旋转，再按输出周期平均以减少降采样混叠；独立数据含微秒时间和帧序号，按 200 Hz 输出。显示滤波和航向归零不参与位置计算。原点初始化只确认静止并建立坐标，不把单姿态残差当成加速度标定。默认自由运动保留匀速速度；板卡确实停止时可确认归零速度。停靠模式会自动归零，但可能误判匀速和缓慢平移。纯惯导仍会累积漂移，六轴航向也会漂移；cm 是单位而非精度承诺。丢帧、姿态跳变、配置变化和断线会停止积分并保留部分结果。</p></details>
         </div><section class="card chart mag-chart" id="magChart" hidden aria-label="三轴磁力计波形">
@@ -260,7 +271,7 @@
             <p id="magCalMode" class="warn-line" hidden>请先切换到九轴模式，再采集磁场。</p>
             <div class="progress-row"><progress id="magCalProgress" max="100" value="0" aria-label="磁校准方向覆盖度"></progress><span id="magCalCount" class="num">0 样本 · 0/32 方向</span></div>
             <p id="magCalMessage" class="status-line" role="status" aria-live="polite">请先连接设备</p>
-            <p id="magCalQuality" class="status-line">采集 → 拟合 → 新数据验证 → 保存</p>
+            <div class="ui-calibration-steps" aria-label="磁力计校准流程"><span><b>01</b>采集</span><span><b>02</b>拟合</span><span><b>03</b>验证</span><span><b>04</b>保存</span></div><p id="magCalQuality" class="status-line"></p>
             <p id="magCalParams" class="aux mono"></p>
             <div class="actions mag-cal-actions">
               <button id="magCalRead" type="button" class="sm" disabled>读取</button>
@@ -334,8 +345,27 @@
               <p id="captureMessage" role="status" aria-live="polite">请先连接设备。</p>
             </div>
             <div class="capture-side">
-              <div class="capture-stats"><div><small>记录行数</small><b id="captureRows">0</b></div><div><small>采集时长</small><b id="captureElapsed">0.0 s</b></div><div><small>文件大小</small><b id="captureSize">0 B</b></div></div>
-              <p id="captureQuality"></p><p id="captureConfig"></p>
+              <section class="ui-summary-block" aria-label="采集统计"><h3 class="ui-summary-title">采集统计</h3><div class="capture-stats"><div><small>记录行数</small><b id="captureRows">0</b></div><div><small>采集时长</small><b id="captureElapsed">0.0 s</b></div><div><small>文件大小</small><b id="captureSize">0 B</b></div></div></section>
+              
+              <section class="ui-summary-block" aria-label="采集质量">
+                <div class="ui-summary-head"><h3 class="ui-summary-title">采集质量</h3><span class="ui-summary-caption">帧完整性监测</span></div>
+                <div class="ui-metrics cols-4">
+                  <div class="ui-metric" id="captureLostCard"><span class="ui-metric-label">丢失帧</span><b class="ui-metric-value" id="captureLostValue">0</b><small class="ui-metric-unit">帧</small></div>
+                  <div class="ui-metric" id="captureBadCard"><span class="ui-metric-label">损坏帧</span><b class="ui-metric-value" id="captureBadValue">0</b><small class="ui-metric-unit">帧</small></div>
+                  <div class="ui-metric" id="captureGapCard"><span class="ui-metric-label">时间间断</span><b class="ui-metric-value" id="captureGapValue">0</b><small class="ui-metric-unit">次</small></div>
+                  <div class="ui-metric" id="captureClipCard"><span class="ui-metric-label">接近量程</span><b class="ui-metric-value" id="captureClipValue">0</b><small class="ui-metric-unit">帧</small></div>
+                </div><p id="captureQuality" hidden></p>
+              </section>
+              <section class="ui-summary-block" aria-label="设备配置">
+                <h3 class="ui-summary-title">当前设备配置</h3>
+                <div class="ui-metrics ui-metrics--meta">
+                  <div class="ui-metric"><span class="ui-metric-label">融合模式</span><b class="ui-metric-value" id="captureModeValue">—</b></div>
+                  <div class="ui-metric"><span class="ui-metric-label">融合算法</span><b class="ui-metric-value" id="captureAlgorithmValue">—</b></div>
+                  <div class="ui-metric"><span class="ui-metric-label">陀螺仪量程</span><b class="ui-metric-value" id="captureGyroValue">—</b></div>
+                  <div class="ui-metric"><span class="ui-metric-label">加速度量程</span><b class="ui-metric-value" id="captureAccValue">—</b></div>
+                  <div class="ui-metric ui-metric--wide"><span class="ui-metric-label">固件版本</span><b class="ui-metric-value" id="captureFirmwareValue">—</b></div>
+                </div><p id="captureConfig" hidden></p>
+              </section>
               <button id="captureRead" class="sm" disabled>读取采集状态</button>
             </div>
             <details class="capture-help"><summary>采集说明与注意事项</summary>
@@ -355,8 +385,7 @@
       <section class="view view-upgrade" data-view="upgrade" hidden>
         <header class="page-h"><h1>固件升级</h1></header>
         <div class="card form-card fw-card" id="firmwarePanel">
-          <div class="list-row"><span class="k">设备型号</span><b id="deviceModel" class="num">--</b></div>
-          <div class="list-row"><span class="k">当前版本</span><b id="fwVersion" class="num" title="未读到应用版本">--</b></div>
+          <div class="ui-metrics ui-metrics--firmware"><div class="ui-metric"><span class="ui-metric-label">设备型号</span><b id="deviceModel" class="ui-metric-value num">--</b></div><div class="ui-metric"><span class="ui-metric-label">当前版本</span><b id="fwVersion" class="ui-metric-value num" title="未读到应用版本">--</b></div></div>
           <label class="file-pick">
             <input id="firmwareFile" type="file" accept=".bin,application/octet-stream">
             <svg class="ic"><use href="#i-file"/></svg>
@@ -366,7 +395,7 @@
           <div class="progress-row"><progress id="firmwareProgress" max="100" value="0" aria-label="固件已确认上传进度"></progress><span id="fwPct" class="num">0%</span></div>
           <p id="firmwareStatus" class="status-line" role="status" aria-live="polite">先连接设备，再选择固件。</p>
           <p class="warn-line"><svg class="ic sm"><use href="#i-alert"/></svg>升级期间请勿断开设备。</p>
-          <p id="firmwareLink" class="firmware-link" data-transport="" style="margin:0;font-size:13px;color:var(--tx2)">当前链路：未连接</p>
+          <div class="ui-summary-block"><h3 class="ui-summary-title">当前升级链路</h3><p id="firmwareLink" class="firmware-link" data-transport="">当前链路：未连接</p></div>
           <div id="fwResult" class="result" hidden></div>
           <details class="disclosure" id="fwDetails"><summary>查看详情<svg class="ic xs"><use href="#i-chevron"/></svg></summary>
             <div class="kv"><small id="firmwareInfo" class="mono">尚未选择固件。</small></div>
@@ -604,6 +633,7 @@
 <script src="/ui-mag.js?v=20261005mag1"></script>
 <script src="/ui-chart.js?v=20261009theme2"></script>
 <script src="/ui-adv.js?v=20261012acc1"></script>
+<script src="/ui-cards.js?v=20261015cards1"></script>
 <script src="/quick-settings.js?v=20261002quick2"></script>
 <script src="/ui-test.js?v=20261014themefix1"></script>
 <script src="/ui-ws2812.js?v=20261007ekf1"></script>
