@@ -1,0 +1,159 @@
+/* Tuning page: guided steps and legible parameter comparison cards.
+   Light/dark theme tokens are intentionally shared with ui-cards.css. */
+.view-tuning .tuning-vqf-card{container-name:vqf-panel;container-type:inline-size}
+.view-tuning .tuning-section-caption{
+  display:inline-flex;align-items:center;min-height:30px;
+  padding:6px 11px;border:1px solid var(--border);border-radius:9px;
+  background:var(--weak-bg);font-size:12px;font-weight:600;color:var(--tx2)
+}
+.view-tuning .tuning-guidance{
+  display:flex;align-items:flex-start;gap:11px;
+  padding:12px 14px;border:1px solid var(--border);border-radius:11px;
+  background:var(--weak-bg)
+}
+.view-tuning .tuning-guidance-mark{
+  display:grid;place-items:center;flex:none;width:19px;height:19px;
+  font-size:12px;font-weight:750;line-height:1;border:1px solid var(--primary);
+  color:var(--primary);border-radius:50%;margin-top:1px
+}
+.view-tuning .tuning-guidance .tuning-note{margin:0;min-width:0;color:var(--tx2)}
+.view-tuning .tuning-guidance--small{padding:10px 12px}
+.view-tuning .tuning-form-head{display:flex;align-items:baseline;justify-content:space-between;flex-wrap:wrap;gap:4px 14px}
+.view-tuning .tuning-form-head h3{margin:0;font-size:15px;font-weight:700;line-height:1.5;color:var(--tx)}
+.view-tuning .tuning-form-head p{margin:0;font-size:12px;line-height:1.6;color:var(--tx2)}
+.view-tuning .tuning-control-dock{
+  position:sticky;top:0;z-index:5;display:flex;flex-direction:column;gap:10px;
+  padding:12px 13px;border:1px solid var(--border);border-radius:12px;
+  background:var(--surface);box-shadow:0 7px 21px rgba(0,0,0,.07)
+}
+.view-tuning .tuning-control-dock .tuning-toolbar{
+  margin:0;padding:0;border:0;display:flex;align-items:center;gap:8px
+}
+.view-tuning .tuning-control-dock .tuning-toolbar button{min-height:38px}
+.view-tuning .tuning-control-dock .tuning-toolbar button.primary{margin-right:auto}
+.view-tuning .tuning-control-dock .ui-notice{margin:0}
+.view-tuning .tuning-control-dock .ui-notice__text{font-size:12px!important}
+.view-tuning .tuning-control-dock>.tuning-message{margin:0}
+.view-tuning .tuning-group{
+  min-width:0;margin:0;padding:12px;border:1px solid var(--border);
+  border-radius:13px;background:var(--weak-bg)
+}
+.view-tuning .tuning-group legend{
+  display:inline-flex;align-items:center;margin:0 0 6px;padding:5px 11px;
+  border:1px solid var(--border);border-radius:8px;
+  color:var(--tx);background:var(--surface);font-size:14px;
+  font-weight:700;line-height:1.45
+}
+.view-tuning .tuning-group .tuning-row{
+  display:grid;grid-template-columns:minmax(0,1fr) minmax(112px,145px);
+  gap:7px 12px;align-items:center;margin:0 0 9px;padding:13px;
+  border:1px solid var(--border);border-radius:10px;background:var(--surface)
+}
+.view-tuning .tuning-group .tuning-row:last-child{margin-bottom:0;border:1px solid var(--border)}
+.view-tuning .tuning-row>label{
+  font-size:13px;line-height:1.45;font-weight:650;min-width:0;color:var(--tx)
+}
+.view-tuning .tuning-row>label small{
+  display:block;margin-top:4px;font-size:11px;line-height:1.35;
+  color:var(--tx3);font-weight:450;overflow-wrap:anywhere
+}
+.view-tuning .tuning-row .tuning-input{gap:6px;min-width:0}
+.view-tuning .tuning-row .tuning-input input{width:100%;min-width:0}
+.view-tuning .tuning-row .tuning-input>span{font-size:11px;color:var(--tx2)}
+.view-tuning .tuning-row .tuning-values{
+  grid-column:1/-1;display:grid;grid-template-columns:repeat(2,minmax(0,1fr));
+  gap:7px;margin:3px 0 0;font-size:11px;color:var(--tx2)
+}
+.view-tuning .tuning-values>span{
+  min-width:0;display:flex;align-items:center;justify-content:space-between;
+  gap:6px;flex-wrap:wrap;padding:8px 10px;border:1px solid var(--border);
+  border-radius:8px;background:var(--weak-bg);line-height:1.4
+}
+.view-tuning .tuning-values>span b{
+  font-size:12px;font-weight:650;color:var(--tx);font-variant-numeric:tabular-nums;
+  overflow-wrap:anywhere
+}
+.view-tuning .tuning-row>p{
+  grid-column:1/-1;margin:0;font-size:12px;line-height:1.55;color:var(--tx2);
+  padding:0 2px;overflow-wrap:anywhere
+}
+/* Gyroscope scale: three visually numbered tasks, each with its own inputs. */
+.view-tuning .tuning-step{
+  display:flex;flex-direction:column;gap:13px;padding:15px;
+  border:1px solid var(--border);border-radius:12px;background:var(--weak-bg);
+  min-width:0
+}
+.view-tuning .tuning-step-head{
+  display:flex;gap:11px;align-items:flex-start;min-width:0
+}
+.view-tuning .tuning-step-index{
+  display:grid;place-items:center;flex:none;width:31px;height:31px;
+  background:var(--primary-soft);color:var(--primary);border:1px solid var(--border);
+  font-size:12px;font-weight:750;font-variant-numeric:tabular-nums;border-radius:9px
+}
+.view-tuning .tuning-step-head>div{min-width:0}
+.view-tuning .tuning-step-head h3{margin:0 0 3px;font-size:14px;font-weight:700;color:var(--tx)}
+.view-tuning .tuning-step-head p{margin:0;font-size:12px;color:var(--tx2);line-height:1.55}
+.view-tuning .tuning-step>.tuning-toolbar{
+  display:flex;gap:8px;margin:0;padding:12px 0 0;border-top:1px solid var(--border)
+}
+.view-tuning .tuning-step>.tuning-toolbar button{min-height:38px;min-width:0}
+.view-tuning .tuning-live-metrics{grid-template-columns:repeat(3,minmax(0,1fr));gap:9px}
+.view-tuning .tuning-live-metrics .ui-metric{padding:12px;min-height:76px}
+.view-tuning .tuning-live-metrics .ui-metric-value{font-size:clamp(17px,1.65vw,24px)}
+.view-tuning #gyroScalePanel .tuning-step #gyroScaleAngle{
+  margin:0;padding:0;border:0;background:none;border-radius:0;line-height:1.3
+}
+.view-tuning .tuning-manual{
+  display:block;padding:14px 16px;border-radius:12px;
+  border:1px solid var(--border);background:var(--weak-bg)
+}
+.view-tuning .tuning-manual summary{font-size:13px;font-weight:650;color:var(--tx);cursor:pointer}
+.view-tuning .tuning-manual[open] summary{margin-bottom:14px}
+.view-tuning .tuning-manual>.tuning-note{
+  display:block;margin-top:12px;padding:11px 13px;border-radius:9px;
+  border:1px solid var(--border);background:var(--surface)
+}
+.view-tuning .tuning-factor{
+  display:flex;gap:9px;padding:12px;border:1px solid var(--border);
+  border-radius:10px;background:var(--surface);font-size:13px;font-weight:650
+}
+.view-tuning .tuning-factor input{min-width:0;width:100%}
+.view-tuning .tuning-factor>small{
+  display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap;
+  margin-top:0;padding:8px 9px;border-radius:8px;
+  border:1px solid var(--border);background:var(--weak-bg);
+  font-size:11px;font-weight:500;color:var(--tx2)
+}
+.view-tuning .tuning-factor>small span{
+  color:var(--tx);font-weight:700;font-variant-numeric:tabular-nums;overflow-wrap:anywhere
+}
+.view-tuning #gyroScalePanel .tuning-step .gyro-scale-factors{gap:9px}
+.view-tuning .tuning-scale-card .card-h{flex-wrap:wrap}
+@container vqf-panel (max-width:780px){
+  .view-tuning #vqfTuningFields{grid-template-columns:minmax(0,1fr)}
+}
+@media(min-width:1550px){
+  .view-tuning #gyroScalePanel .tuning-live-metrics{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .view-tuning #gyroScalePanel .tuning-live-metrics .ui-metric:last-child{grid-column:1/-1}
+  .view-tuning #gyroScalePanel .gyro-scale-factors{grid-template-columns:minmax(0,1fr)}
+}
+@media(max-width:1099px){
+  .view-tuning .tuning-control-dock{position:static;box-shadow:none}
+}
+@media(max-width:680px){
+  .view-tuning .tuning-control-dock{padding:11px}
+  .view-tuning .tuning-control-dock .tuning-toolbar button{flex:1 1 calc(50% - 9px);margin-right:0}
+  .view-tuning .tuning-group{padding:10px}
+  .view-tuning .tuning-group .tuning-row{grid-template-columns:minmax(0,1fr) minmax(94px,120px);padding:11px;gap:7px 8px}
+  .view-tuning .tuning-step{padding:12px}
+  .view-tuning .tuning-live-metrics{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .view-tuning .tuning-live-metrics .ui-metric:last-child{grid-column:1/-1}
+  .view-tuning .tuning-step>.tuning-toolbar button{flex:1 1 calc(50% - 9px)}
+}
+@media(max-width:390px){
+  .view-tuning .tuning-group .tuning-row{grid-template-columns:minmax(0,1fr)}
+  .view-tuning .tuning-row .tuning-input{grid-column:1/-1}
+  .view-tuning .tuning-row .tuning-values{grid-template-columns:minmax(0,1fr)}
+  .view-tuning .tuning-live-metrics .ui-metric-value{font-size:17px}
+}
