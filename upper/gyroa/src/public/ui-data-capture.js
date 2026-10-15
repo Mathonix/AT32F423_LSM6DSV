@@ -44,9 +44,26 @@
     $('captureState').className=`chip ${s.active?'on':s.rows?'warn':''}`;
     $('captureMessage').textContent=s.active?(v.pending?'正在确认采集状态…':'采集中，可以移动板卡；切换页面仍会继续记录。'):s.reason||(!c.connected?'请先连接设备。':v.config?.active?'设备上已有采集，请先停止后开始新记录。':v.message);
     $('captureRows').textContent=s.rows.toLocaleString();$('captureElapsed').textContent=(s.elapsedUs/1e6).toFixed(1)+' s';$('captureSize').textContent=size(s.bytes);
+    // Keep the legacy text targets for compatibility, but present each live
+    // measurement in its own metric card rather than a delimiter-joined line.
+    const quality=[['Lost',s.lost],['Bad',s.bad],['Gap',s.timingGaps],['Clip',s.clipped]];
+    for(const [key,value] of quality){
+      $('capture'+key+'Value').textContent=Number(value||0).toLocaleString();
+      $('capture'+key+'Card').dataset.level=Number(value)>0?'warn':s.rows?'good':'idle';
+    }
     $('captureQuality').textContent=`丢失 ${s.lost} 帧 · 损坏 ${s.bad} 帧 · 时间间断 ${s.timingGaps} 次 · 接近量程 ${s.clipped} 帧`;
-    const meta=s.metadata||c.metadata;
-    $('captureConfig').textContent=`${meta.mode===0?'六轴':meta.mode===2?'九轴相对角':meta.mode===1?'九轴':'—'} · ${meta.algorithm===1?'EKF':'VQF'} · 陀螺仪 ±${meta.rangeDps??'—'} °/s · 加速度 ±${meta.accRangeG??'—'} g · ${meta.firmware||'—'}`;
+    const meta=s.metadata||(c.connected?c.metadata:null);
+    const mode=meta?.mode===0?'六轴':meta?.mode===2?'九轴相对角':meta?.mode===1?'九轴':'—';
+    const algorithm=meta?.algorithm===1?'EKF':meta?.algorithm===0?'VQF':'—';
+    const gyro=meta?.rangeDps==null?'—':`±${meta.rangeDps} °/s`;
+    const acc=meta?.accRangeG==null?'—':`±${meta.accRangeG} g`;
+    const firmware=meta?.firmware||'—';
+    $('captureModeValue').textContent=mode;
+    $('captureAlgorithmValue').textContent=algorithm;
+    $('captureGyroValue').textContent=gyro;
+    $('captureAccValue').textContent=acc;
+    $('captureFirmwareValue').textContent=firmware;
+    $('captureConfig').textContent=`${mode} · ${algorithm} · 陀螺仪 ${gyro} · 加速度 ${acc} · ${firmware}`;
     if(s.latest)s.latest.forEach((x,i)=>$('captureValue'+i).textContent=x.toFixed(i<3?4:3));
     else for(let i=0;i<9;i++)$('captureValue'+i).textContent='—';
     if(!s.active&&wakeLock){void wakeLock.release();wakeLock=null;}
