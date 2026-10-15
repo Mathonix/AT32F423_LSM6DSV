@@ -96,7 +96,12 @@
     $('gyroScaleEnd').disabled=stage!=='capturing'||s.phase!=='turn';$('gyroScaleCancel').disabled=!active();
     for(const id of ['gyroScaleAxis','gyroScaleCircles','gyroScaleMeasured','gyroScaleMeasuredFactor'])$(id).disabled=busy;
     $('gyroScaleCalculate').disabled=!editable||data?.restartRequired;
-    $('gyroScaleAngle').textContent=`累计角度：${s.angle?.toFixed(3)??'—'}° · ${s.frames??0} 帧`;
+    // Live telemetry is displayed as three independent metric cards.
+    const circles=Number($('gyroScaleCircles').value);
+    $('gyroScaleAngle').textContent=Number.isFinite(s.angle)?s.angle.toFixed(3)+'°':'—';
+    $('gyroScaleFrames').textContent=Number(s.frames||0).toLocaleString();
+    $('gyroScaleTarget').textContent=Number.isInteger(circles)&&circles>=1&&circles<=100
+      ?(circles*360).toLocaleString()+'°':'—';
     $('gyroScaleMessage').textContent=!ctx.connected?'请先连接设备':active()?s.message:stage==='failed'?s.message:c.state.message;
     $('gyroScaleStatus').textContent=data?.restartRequired?'等待重启生效':c.state.dirty?'未保存':data?'已生效':'—';
   }
