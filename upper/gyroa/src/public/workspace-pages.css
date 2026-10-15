@@ -1,0 +1,155 @@
+/* Four laboratory workflows: calibration, tuning, test and capture.
+   Presentation only: all existing device controls and IDs remain unchanged. */
+.view-calib,.view-tuning,.view-test,.view-capture{gap:18px}
+.workspace-page-head{display:flex;align-items:center;flex-wrap:wrap;gap:12px 16px;min-height:72px;padding:0 2px 2px}
+.workspace-heading{display:flex;flex-direction:column;gap:4px;min-width:0}
+.workspace-heading h1{margin:0}
+.workspace-heading p{margin:0;color:var(--tx2);font-size:13px;line-height:1.55;max-width:78ch}
+.workspace-kicker{font-size:11px;font-weight:700;letter-spacing:.12em;color:var(--primary)}
+.workspace-page-head>.chip{margin-left:auto}
+.workspace-page-head .fill{min-width:0}
+.view-calib .card,.view-tuning .tuning-card,.view-test .card,.view-capture .card{border-radius:14px}
+.view-calib .card-h,.view-tuning .card-h{gap:10px;align-items:center}
+.view-calib .card-h h2,.view-tuning .card-h h2{line-height:1.35}
+.view-calib .lead,.view-tuning .tuning-note{color:var(--tx2);font-size:13px;line-height:1.7}
+.view-calib .status-line,.view-calib .vqf-msg,.view-test [role="status"],.view-capture [role="status"]{overflow-wrap:anywhere}
+.view-calib .actions button,.view-tuning .tuning-toolbar button,.view-test .drift-actions button,.view-capture .capture-actions button{min-height:38px}
+.view-calib .disclosure,.view-test details,.view-tuning details,.view-capture details{min-width:0}
+.view-calib .disclosure summary,.view-test details summary,.view-tuning details summary,.view-capture details summary{cursor:pointer}
+
+/* 01 / Calibration: two predictable columns, with progress and results kept together. */
+.view-calib .calib-grid{width:100%;max-width:1540px;grid-template-columns:minmax(0,1.18fr) minmax(330px,.92fr);gap:18px;align-items:start}
+.view-calib .calib-main,.view-calib .calib-side{gap:18px}
+.view-calib .calib-main>.card,.view-calib .calib-side>.card{padding:22px;gap:14px}
+.view-calib .acc-faces{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:8px}
+.view-calib .acc-faces span{min-width:0;min-height:64px;height:auto;display:grid;place-items:center;font-variant-numeric:tabular-nums}
+.view-calib .progress-row{align-items:center;gap:12px}
+.view-calib .progress-row .num{white-space:nowrap;font-variant-numeric:tabular-nums}
+.view-calib #magCalPanel .mag-cal-actions{grid-template-columns:repeat(2,minmax(0,1fr));gap:9px}
+.view-calib #magCalPanel .mag-cal-actions button{min-height:40px}
+.view-calib #magCalPanel .mag-cal-actions #magCalRead{grid-column:1/-1;justify-self:start;width:auto}
+.view-calib .vqf-tbl,.view-calib .bh-tbl{width:100%}
+.view-calib .bh-wrap{max-height:320px}
+.view-calib .bh-actions{align-items:center;margin-top:auto}
+
+/* 02 / Tuning: main filter parameters alongside the independent scale workflow. */
+.tuning-workspace{width:100%;max-width:1600px;display:grid;grid-template-columns:minmax(0,1fr);gap:18px;align-items:start}
+.view-tuning .tuning-card{margin:0;padding:22px;min-width:0;display:flex;flex-direction:column;gap:14px}
+.view-tuning .tuning-card>.tuning-note,.view-tuning .tuning-card>.tuning-message{margin:0}
+.view-tuning .tuning-card>.tuning-message{min-height:24px}
+.view-tuning .tuning-toolbar{display:flex;flex-wrap:wrap;gap:9px;margin:0;padding-top:16px;border-top:1px solid var(--border)}
+.view-tuning .tuning-toolbar .primary{margin-right:auto}
+.view-tuning .tuning-group{border-radius:12px;padding:5px 15px 10px}
+.view-tuning .tuning-group legend{font-size:14px}
+.view-tuning .tuning-row{grid-template-columns:minmax(0,1fr) minmax(115px,150px);gap:5px 12px;padding:13px 0}
+.view-tuning .tuning-row label{line-height:1.4;font-size:13px}
+.view-tuning .tuning-row label small,.view-tuning .tuning-row p{line-height:1.55}
+.view-tuning .tuning-values{flex-wrap:wrap;gap:4px 14px}
+.view-tuning #vqfTuningFields{gap:14px;align-items:start}
+.view-tuning #gyroScalePanel .tuning-grid{gap:12px}
+.view-tuning #gyroScalePanel .gyro-scale-factors{grid-template-columns:repeat(3,minmax(0,1fr))}
+.view-tuning #gyroScalePanel .tuning-grid .field{min-width:0}
+.view-tuning #gyroScalePanel .tuning-grid input,.view-tuning #gyroScalePanel .tuning-grid select{width:100%;min-width:0}
+.view-tuning #gyroScalePanel #gyroScaleAngle{margin:0;padding:12px 14px;border:1px solid var(--border);border-radius:10px;background:var(--weak-bg);font-variant-numeric:tabular-nums}
+.view-tuning #gyroScalePanel details{padding:12px 14px;border:1px solid var(--border);border-radius:10px}
+.view-tuning #gyroScalePanel details[open]>summary{margin-bottom:12px}
+@media(min-width:1550px){
+  .tuning-workspace{grid-template-columns:minmax(0,1.65fr) minmax(350px,.95fr)}
+  .view-tuning #gyroScalePanel .gyro-scale-factors{grid-template-columns:1fr}
+  .view-tuning #gyroScalePanel .tuning-toolbar button{flex:1 1 calc(50% - 9px);margin-right:0}
+}
+
+/* 03 / Test: a clear run/export toolbar and numerical results that do not compress. */
+.view-test .test-workspace{width:100%;max-width:1540px;grid-template-columns:minmax(0,1.25fr) minmax(330px,.88fr);gap:18px}
+.view-test .test-session,.view-test .test-aux{gap:18px}
+.view-test .card{padding:22px;gap:14px}
+.view-test .drift-controls h2,.view-test .drift-plot h2,.view-test .drift-results h2{margin:0}
+.view-test .drift-actions{display:grid;grid-template-columns:minmax(140px,1fr) auto;gap:10px 12px;align-items:end}
+.view-test .drift-actions>.field{width:100%;max-width:240px;min-width:0}
+.view-test .drift-run-actions,.view-test .drift-export-actions{display:flex;align-items:center;flex-wrap:wrap;gap:8px}
+.view-test .drift-run-actions{justify-content:flex-end}
+.view-test .drift-export-actions{grid-column:1/-1;justify-content:flex-end;padding-top:10px;border-top:1px solid var(--border)}
+.view-test .drift-actions .fill{display:none}
+.view-test .drift-timer{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;padding:0;background:transparent;border:0}
+.view-test .drift-timer>span{display:block;min-width:0;padding:13px 16px;background:var(--weak-bg);border:1px solid var(--border);border-radius:10px}
+.view-test .drift-timer b{font-size:26px;line-height:1.25}
+.view-test .drift-results .drift-table-wrap{overflow-x:auto}
+.view-test .drift-results table{width:100%;min-width:610px}
+.view-test .ins-card .drift-actions{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}
+.view-test .ins-card .drift-actions label{grid-column:1/-1}
+.view-test .ins-position{width:100%;table-layout:fixed}
+.view-test .ins-position td{font-variant-numeric:tabular-nums}
+
+/* 04 / Capture: prominent acquisition controls, compact statistics, readable plots. */
+.view-capture .page-h{margin:0}
+.view-capture .capture-layout{width:100%;max-width:1600px;display:grid;grid-template-columns:minmax(0,1fr);gap:18px;align-items:start}
+.view-capture .capture-controls{display:grid;grid-template-columns:minmax(0,1fr) minmax(290px,.92fr);gap:14px 22px;padding:22px;align-items:start}
+.view-capture .capture-controls>h2{grid-column:1/-1;margin:0;font-size:17px}
+.view-capture .capture-primary,.view-capture .capture-side{display:flex;flex-direction:column;gap:13px;min-width:0}
+.view-capture .capture-primary .field{max-width:240px}
+.view-capture .capture-primary #captureEstimate{font-size:12px;line-height:1.5}
+.view-capture .capture-actions{grid-template-columns:repeat(2,minmax(0,1fr));gap:9px}
+.view-capture .capture-actions button{min-width:0;white-space:normal;padding:8px 10px}
+.view-capture #captureMessage{padding:11px 13px;background:var(--weak-bg);border:1px solid var(--border);border-radius:10px;line-height:1.55}
+.view-capture .capture-stats{grid-template-columns:repeat(3,minmax(0,1fr));gap:8px}
+.view-capture .capture-stats>div{min-width:0;padding:13px 11px;background:var(--weak-bg);border:1px solid var(--border);border-radius:10px}
+.view-capture .capture-stats small{font-size:11px}
+.view-capture .capture-stats b{font-size:clamp(17px,1.6vw,23px);overflow-wrap:anywhere}
+.view-capture #captureQuality,.view-capture #captureConfig{font-size:12px;line-height:1.6}
+.view-capture .capture-side #captureRead{align-self:flex-start;margin-top:auto}
+.view-capture .capture-help{grid-column:1/-1;padding:12px 14px;border:1px solid var(--border);border-radius:10px}
+.view-capture .capture-help summary{font-size:13px;font-weight:600;color:var(--tx2)}
+.view-capture .capture-help[open] summary{margin-bottom:10px}
+.view-capture .capture-help p+p{margin-top:8px}
+.view-capture .capture-plots{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:16px;min-width:0}
+.view-capture .capture-plots .card{padding:18px;min-width:0}
+.view-capture .capture-plots .card h2{margin:0;font-size:16px}
+.view-capture .capture-legend{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:6px;font-size:12px;margin:12px 0}
+.view-capture .capture-legend span{display:flex;flex-direction:column;gap:4px;min-width:0}
+.view-capture .capture-legend b{font-size:14px;font-weight:650;overflow-wrap:anywhere}
+.view-capture .capture-plots canvas{width:100%;height:200px}
+@media(min-width:1550px){
+  .view-capture .capture-layout{grid-template-columns:minmax(390px,.9fr) minmax(0,1.65fr)}
+  .view-capture .capture-controls{grid-template-columns:minmax(0,1fr)}
+  .view-capture .capture-controls>h2,.view-capture .capture-help{grid-column:1}
+  .view-capture .capture-plots{grid-template-columns:minmax(0,1fr)}
+}
+@media(max-width:1549px){
+  .view-test .test-workspace{grid-template-columns:minmax(0,1.2fr) minmax(300px,.9fr)}
+}
+@media(max-width:1199px){
+  .view-calib .calib-grid,.view-test .test-workspace{grid-template-columns:minmax(0,1fr)}
+  .view-calib .calib-side,.view-test .test-aux{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px;align-items:start}
+  .view-capture .capture-plots{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .view-capture .capture-plots .card:last-child{grid-column:1/-1}
+}
+@media(max-width:899px){
+  .view-calib .calib-side,.view-test .test-aux{display:flex;flex-direction:column}
+  .view-calib .calib-side>.card,.view-test .test-aux>.card{width:100%}
+  .view-capture .capture-controls{grid-template-columns:minmax(0,1fr)}
+  .view-capture .capture-controls>h2,.view-capture .capture-help{grid-column:1}
+  .view-tuning #vqfTuningFields{grid-template-columns:minmax(0,1fr)}
+}
+@media(max-width:680px){
+  .view-calib,.view-tuning,.view-test,.view-capture{gap:14px}
+  .workspace-page-head{min-height:0;gap:9px 12px}
+  .workspace-heading p{font-size:12px}
+  .workspace-page-head>.chip{margin-left:0}
+  .view-calib .calib-main>.card,.view-calib .calib-side>.card,.view-tuning .tuning-card,.view-test .card,.view-capture .capture-controls,.view-capture .capture-plots .card{padding:16px}
+  .view-calib .acc-faces{grid-template-columns:repeat(3,minmax(0,1fr))}
+  .view-tuning .tuning-toolbar button{flex:1 1 calc(50% - 9px);margin-right:0}
+  .view-tuning .tuning-row{grid-template-columns:minmax(0,1fr) minmax(110px,135px)}
+  .view-tuning #gyroScalePanel .gyro-scale-factors{grid-template-columns:minmax(0,1fr)}
+  .view-test .drift-actions{grid-template-columns:minmax(0,1fr)}
+  .view-test .drift-actions>.field{max-width:none}
+  .view-test .drift-run-actions,.view-test .drift-export-actions{justify-content:stretch}
+  .view-test .drift-run-actions button,.view-test .drift-export-actions button{flex:1 1 0}
+  .view-test .drift-export-actions{grid-column:1}
+  .view-test .drift-timer>span{padding:12px}
+  .view-test .drift-timer b{font-size:22px}
+  .view-capture .capture-plots{grid-template-columns:minmax(0,1fr)}
+  .view-capture .capture-plots .card:last-child{grid-column:1}
+  .view-capture .capture-stats{gap:6px}
+  .view-capture .capture-stats>div{padding:10px 8px}
+  .view-capture .capture-stats b{font-size:17px}
+}
