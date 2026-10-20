@@ -44,9 +44,9 @@
     "sram_capture.o": "ALLOC sections byte-identical to exact J",
     "attitude_output.o": "ALLOC sections byte-identical to exact J"
   },
-  "hardware_installation": "NOT AUTHORIZED / NOT PERFORMED",
-  "fresh_CPU_and_real_time": "NOT VERIFIED",
-  "board_operations": false,
+  "hardware_installation": "AUTHORIZED / APP INSTALLED / exact BIN readback PASS; see hardware-summary.json",
+  "fresh_CPU_and_real_time": "Short windows measured; full production acceptance NOT VERIFIED",
+  "board_operations": true,
   "source_base_commit": "2f9ca81118b3a1fec85a354426c019358d2e6c06",
   "branch": "codex/eskf8k-disable-temp-autosave",
   "app_address": "0x08008000",
@@ -78,5 +78,6 @@
     "min_stack_reserve_bytes": 3072,
     "main_static_frame_bytes": 688,
     "runtime_stack_high_water": "NOT VERIFIED"
-  }
+  },
+  "hardware_summary": "hardware-summary.json"
 }

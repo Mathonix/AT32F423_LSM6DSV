@@ -1,0 +1,173 @@
+{
+  "first_uncontrolled_receiver_window": {
+    "start": {
+      "seq": 1784,
+      "clock_hz": 150000000,
+      "hook_mean_cycles": 59,
+      "depth": 0,
+      "errors": 0,
+      "cycles": {
+        "idle_poll": 3126565206,
+        "foreground": 9338384436,
+        "drdy_irq": 426216598,
+        "dma_irq": 449328776,
+        "usb_irq": 34715457,
+        "uart_irq": 0,
+        "systick_irq": 0
+      },
+      "events": {
+        "idle_poll": 713599,
+        "foreground": 713600,
+        "drdy_irq": 713601,
+        "dma_irq": 713601,
+        "usb_irq": 89431,
+        "uart_irq": 0,
+        "systick_irq": 0
+      }
+    },
+    "end": {
+      "seq": 2946,
+      "clock_hz": 150000000,
+      "hook_mean_cycles": 59,
+      "depth": 0,
+      "errors": 0,
+      "cycles": {
+        "idle_poll": 5144381913,
+        "foreground": 15439413159,
+        "drdy_irq": 703827699,
+        "dma_irq": 741987525,
+        "usb_irq": 57249708,
+        "uart_irq": 0,
+        "systick_irq": 0
+      },
+      "events": {
+        "idle_poll": 1178399,
+        "foreground": 1178400,
+        "drdy_irq": 1178401,
+        "dma_irq": 1178401,
+        "usb_irq": 147529,
+        "uart_irq": 0,
+        "systick_irq": 0
+      }
+    },
+    "delta": {
+      "target_seconds": 58.07766354,
+      "bucket_percent": {
+        "idle_poll": 23.162280574071456,
+        "foreground": 70.03299089672711,
+        "drdy_irq": 3.186665166133392,
+        "dma_irq": 3.3593953470991624,
+        "usb_irq": 0.25866801596888067,
+        "uart_irq": 0.0,
+        "systick_irq": 0.0
+      },
+      "busy_percent": 76.83771942592854,
+      "cycles": {
+        "idle_poll": 2017816707,
+        "foreground": 6101028723,
+        "drdy_irq": 277611101,
+        "dma_irq": 292658749,
+        "usb_irq": 22534251,
+        "uart_irq": 0,
+        "systick_irq": 0
+      },
+      "events": {
+        "idle_poll": 464800,
+        "foreground": 464800,
+        "drdy_irq": 464800,
+        "dma_irq": 464800,
+        "usb_irq": 58098,
+        "uart_irq": 0,
+        "systick_irq": 0
+      },
+      "hook_overhead_estimate_percent": 1.9674203305596685,
+      "note": "Raw measured busy includes instrumentation; estimate is not subtracted. Polling CPU is physically awake."
+    }
+  },
+  "separate_normal_USB_read_window": {
+    "start": {
+      "seq": 6732,
+      "clock_hz": 150000000,
+      "hook_mean_cycles": 59,
+      "depth": 0,
+      "errors": 0,
+      "cycles": {
+        "idle_poll": 11530283140,
+        "foreground": 35504043825,
+        "drdy_irq": 1608357397,
+        "dma_irq": 1695105952,
+        "usb_irq": 133261015,
+        "uart_irq": 0,
+        "systick_irq": 0
+      },
+      "events": {
+        "idle_poll": 2692799,
+        "foreground": 2692800,
+        "drdy_irq": 2692801,
+        "dma_irq": 2692801,
+        "usb_irq": 339510,
+        "uart_irq": 0,
+        "systick_irq": 0
+      }
+    },
+    "end": {
+      "seq": 7032,
+      "clock_hz": 150000000,
+      "hook_mean_cycles": 59,
+      "depth": 0,
+      "errors": 0,
+      "cycles": {
+        "idle_poll": 11972715070,
+        "foreground": 37128998896,
+        "drdy_irq": 1680036906,
+        "dma_irq": 1770586002,
+        "usb_irq": 167897310,
+        "uart_irq": 0,
+        "systick_irq": 0
+      },
+      "events": {
+        "idle_poll": 2812799,
+        "foreground": 2812800,
+        "drdy_irq": 2812801,
+        "dma_irq": 2812801,
+        "usb_irq": 384511,
+        "uart_irq": 0,
+        "systick_irq": 0
+      }
+    },
+    "delta": {
+      "target_seconds": 14.994552366666667,
+      "bucket_percent": {
+        "idle_poll": 19.67078528170623,
+        "foreground": 72.24646352730623,
+        "drdy_irq": 3.186913364587247,
+        "dma_irq": 3.3558876652561005,
+        "usb_irq": 1.5399501611441904,
+        "uart_irq": 0.0,
+        "systick_irq": 0.0
+      },
+      "busy_percent": 80.32921471829377,
+      "cycles": {
+        "idle_poll": 442431930,
+        "foreground": 1624955071,
+        "drdy_irq": 71679509,
+        "dma_irq": 75480050,
+        "usb_irq": 34636295,
+        "uart_irq": 0,
+        "systick_irq": 0
+      },
+      "events": {
+        "idle_poll": 120000,
+        "foreground": 120000,
+        "drdy_irq": 120000,
+        "dma_irq": 120000,
+        "usb_irq": 45001,
+        "uart_irq": 0,
+        "systick_irq": 0
+      },
+      "hook_overhead_estimate_percent": 2.1247769114797026,
+      "note": "Raw measured busy includes instrumentation; estimate is not subtracted. Polling CPU is physically awake."
+    }
+  },
+  "method": "AT32F423 DWT exclusive accounting; hook overhead retained; different workloads/windows are not combined"
+}

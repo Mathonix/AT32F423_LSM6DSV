@@ -1,0 +1,113 @@
+{
+  "date": "2026-10-20",
+  "firmware": "20261020a",
+  "source_commit": "3fd61669654590007a8740d5d5443c1efcd2041a",
+  "bin_sha256": "09962f1e265b7d67ae0c597f29bb3394e4a8446f73d18f43d3f70c2b7af7c951",
+  "authorization": "Explicit user approval for this SHA256, SWD APP-only update, 4s startup calibration and short observation",
+  "install": {
+    "APP_readback": "PASS",
+    "Bootloader_and_reserved_Flash_unchanged": "PASS",
+    "Flash_options_unchanged": "PASS",
+    "chip_erase": false,
+    "maintenance_entered": false
+  },
+  "calibration": {
+    "result": "PASS",
+    "source": "FRESH",
+    "duration_ms": 4000,
+    "samples": 7999,
+    "rejected_windows": 0,
+    "rejection_reason": 0,
+    "new_bias_persisted": false,
+    "old_acc_and_mag_calibration_preserved": true
+  },
+  "temperature_autosave": {
+    "result": "PASS in observed window",
+    "mode": "STREAMING",
+    "dirty": 0,
+    "pending": 0,
+    "Flash_model_sequence_unchanged": 322
+  },
+  "first_window": {
+    "host_observation_approximately_seconds": 60,
+    "target_DWT_seconds": 58.07766354,
+    "CPU_percent": 76.83771942592854,
+    "capture_deltas": {
+      "irq_n": 476000,
+      "valid_n": 476000,
+      "consumed_n": 476000,
+      "overrun_n": 0,
+      "busy_n": 0,
+      "spi_error_n": 0,
+      "stale_n": 0,
+      "gap_n": 0
+    },
+    "pose_deltas": {
+      "due_count": 58031,
+      "generated_count": 58031,
+      "deadline_miss_count": 0,
+      "skipped_due_count": 0
+    },
+    "usb_enqueue_drop_delta": 59479,
+    "USB_verdict": "NOT VERIFIED / uncontrolled receiver; preserve 59479-drop counterexample",
+    "note": "Separate coherent groups have different epochs. Not a strict SOURCE/consumer window proof."
+  },
+  "separate_USB_read_window": {
+    "host_seconds": 15.0004898,
+    "frames": 14995,
+    "frames_per_host_second": 999.6340252836277,
+    "CRC_errors": 0,
+    "sequence8_anomalies": 0,
+    "timestamp16_non_1ms_steps": 0,
+    "nonfinite_frames": 0,
+    "device_enqueue_drop_delta": 0,
+    "cpu": {
+      "target_seconds": 14.994552366666667,
+      "bucket_percent": {
+        "idle_poll": 19.67078528170623,
+        "foreground": 72.24646352730623,
+        "drdy_irq": 3.186913364587247,
+        "dma_irq": 3.3558876652561005,
+        "usb_irq": 1.5399501611441904,
+        "uart_irq": 0.0,
+        "systick_irq": 0.0
+      },
+      "busy_percent": 80.32921471829377,
+      "cycles": {
+        "idle_poll": 442431930,
+        "foreground": 1624955071,
+        "drdy_irq": 71679509,
+        "dma_irq": 75480050,
+        "usb_irq": 34636295,
+        "uart_irq": 0,
+        "systick_irq": 0
+      },
+      "events": {
+        "idle_poll": 120000,
+        "foreground": 120000,
+        "drdy_irq": 120000,
+        "dma_irq": 120000,
+        "usb_irq": 45001,
+        "uart_irq": 0,
+        "systick_irq": 0
+      },
+      "hook_overhead_estimate_percent": 2.1247769114797026,
+      "note": "Raw measured busy includes instrumentation; estimate is not subtracted. Polling CPU is physically awake."
+    },
+    "mode_after": 0,
+    "pending_after": 0,
+    "errors": [],
+    "format": "existing 0x06 / seq8 + timestamp16 + CRC, unchanged",
+    "strict_seq32_acceptance": "NOT VERIFIED: no stream32 control was sent"
+  },
+  "full_production_readiness": "NOT VERIFIED",
+  "UART_CAN_Flash_concurrency_wide_temperature_long_duration": "NOT VERIFIED",
+  "private_evidence_sha256": {
+    "installation-receipt.private.json": "bbc359df2bbcd448bc7b4aae848417e7176e0d0e2ed9c549f8a29dc26cfdd0ac",
+    "authorized-60s-observation.private.json": "a8bf3de95db1fe5a23ee529de16417745f68e24508f198935f788031c6e52a4c",
+    "usb-readonly-short.private.json": "d67e35bc348d3c6f687399db1ec5e36ce0f237214fb7229e0e94aeaeb300f19c",
+    "usb-readonly-short-rx.private.bin": "4a37550e94814a82eace16f73d90d926e2be6f486008642af6f5ad207820fd5b",
+    "20261020-161108-authorized-install-before.private.json": "0a6595dd9580005314565b0765410b8f2f86a720a99b18e716b270ce8e20309b",
+    "20261020-161108-authorized-install-after.private.json": "64516fb54e5181cb6d08c3393f436d2fb252cccb17a0cd0c1533a71ec20f5eb7"
+  }
+}
