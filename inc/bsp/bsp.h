@@ -29,6 +29,9 @@ void bsp_systick_tick(void);
 void delay_ms(uint32_t ms);
 void delay_us(uint32_t us);
 uint32_t dwt_cycles(void);
+/* Foreground only. Extends CYCCNT to a 64-bit microsecond clock. The 8 kHz
+ * scheduler uses micros(), whose low 32 bits match this clock. */
+uint64_t dwt_time_us(void);
 uint32_t micros(void);
 uint32_t millis(void);
 void led_on(void);
@@ -42,10 +45,16 @@ int uart_control_enqueue(const uint8_t *data, uint16_t len);
 void uart_tx_task(void);
 int uart_tx_idle(void);
 int uart_dma_send(const uint8_t *data, uint16_t len);
+#if APP_UART_TX_PAD_TEST
+/* Diagnostic CUSTOM framing only; padding is not a telemetry frame/sample. */
+int uart_tx_padding_set(unsigned bytes);
+#endif
 int uart_read_byte(uint8_t *ch);
 void uart_rx_isr(void);
 extern volatile uint32_t uart_rx_overruns;
 extern volatile uint32_t uart_rx_drops;
+extern volatile uint32_t uart_rx_dma_overwrites;
+extern volatile uint32_t uart_rx_dma_errors;
 
 #ifdef __cplusplus
 }

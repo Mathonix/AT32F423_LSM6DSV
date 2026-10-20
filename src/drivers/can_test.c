@@ -8,6 +8,9 @@ static uint32_t can_last_tx_us, can_data_counter, can_last_status_us;
 static uint8_t can_pending_mask, can_cycle;
 static volatile uint8_t can_cmd_flags;
 static can_config_t can_config, pending_config;
+#if APP_COMM_POLL_FAST
+static uint32_t can_slot_us;
+#endif
 static can_sample_t can_sample;
 static uint8_t baud_pending;
 static uint8_t baud_mailbox;
@@ -48,6 +51,10 @@ int can_test_set_config(const can_config_t *c)
     }
   }
   can_config = *c; can_cycle = 0; can_last_tx_us = 0;
+#if APP_COMM_POLL_FAST
+  unsigned count=can_output_count(c->output_mask);
+  can_slot_us=count ? (uint32_t)c->period_ms*1000U/count : 0U;
+#endif
   return 0;
 }
 int can_test_set_node_id(uint16_t id)
@@ -56,14 +63,48 @@ int can_test_set_node_id(uint16_t id)
   return can_test_set_config(&c);
 }
 __attribute__((weak)) int can_test_save_config(const can_config_t *c) { (void)c; return -1; }
+#if APP_CAN_TX_FAST
+/* Main-context ownership. Retire before hardware reuses an empty mailbox,
+ * otherwise the old 1 ms poll misses completions cleared by the next submit. */
+static void can_retire(uint32_t sts)
+{
+  uint32_t clear=0U;
+  for(unsigned bit=0;bit<3U;++bit) {
+    uint8_t mask=(uint8_t)(1U<<bit);uint32_t shift=8U*bit;
+    if(!(can_pending_mask&mask) || !(sts&(1U<<shift)) ||
+       (baud_pending && bit==baud_mailbox))continue;
+    if(sts&(2U<<shift)) {can_test_live.tx_success_count++;can_test_live.last_status=CAN_TX_STATUS_SUCCESSFUL;}
+    else {can_test_live.tx_failed_count++;can_test_live.last_status=CAN_TX_STATUS_FAILED;}
+    can_pending_mask&=(uint8_t)~mask;clear|=1U<<shift;
+  }
+  if(clear)CAN2->tsts=clear; /* W1C only completed owned mailboxes. */
+}
+#endif
 static uint8_t transmit(uint16_t id, const uint8_t data[8])
 {
+#if APP_CAN_TX_FAST
+  uint32_t sts=CAN2->tsts,empty=(sts>>26)&7U,lo,hi;
+  can_retire(sts);
+  if(baud_pending)empty&=~(1U<<baud_mailbox);
+  uint8_t mailbox=empty&1U?0U:empty&2U?1U:empty&4U?2U:CAN_TX_STATUS_NO_EMPTY;
+  if(mailbox<=CAN_TX_MAILBOX2) {
+    memcpy(&lo,data,4U);memcpy(&hi,data+4U,4U);
+    /* Fully assign standard DATA/DLC8 registers, then request last. This
+     * avoids the SDK's per-byte volatile bitfield read/modify/write series. */
+    CAN2->tx_mailbox[mailbox].tmi=0U;
+    CAN2->tx_mailbox[mailbox].tmc=8U;
+    CAN2->tx_mailbox[mailbox].tmdtl=lo;
+    CAN2->tx_mailbox[mailbox].tmdth=hi;
+    CAN2->tx_mailbox[mailbox].tmi=((uint32_t)id<<21)|1U;
+  }
+#else
   can_tx_message_type message;
   memset(&message, 0, sizeof(message));
   message.standard_id = id; message.id_type = CAN_ID_STANDARD;
   message.frame_type = CAN_TFT_DATA; message.dlc = 8;
   memcpy(message.data, data, 8);
   uint8_t mailbox = can_message_transmit(CAN2, &message);
+#endif
   can_test_live.tx_count++;
   can_test_live.last_data_counter = can_data_counter++;
   if(mailbox <= CAN_TX_MAILBOX2) {
@@ -80,11 +121,20 @@ static void can_test_snapshot(uint32_t now_ms)
   can_test_live.seq++;
   __DMB();
   can_test_live.millis = now_ms;
+#if APP_COMM_POLL_FAST
+  uint32_t errors=CAN2->ests;
+  can_test_live.tx_error_counter=(errors>>16)&255U;
+  can_test_live.rx_error_counter=errors>>24;
+  can_test_live.error_record=(errors>>4)&7U;
+  can_test_live.bus_off=(errors>>2)&1U;
+  can_test_live.error_passive=(errors>>1)&1U;
+#else
   can_test_live.tx_error_counter = can_transmit_error_counter_get(CAN2);
   can_test_live.rx_error_counter = can_receive_error_counter_get(CAN2);
   can_test_live.error_record = (uint32_t)can_error_type_record_get(CAN2);
   can_test_live.bus_off = (can_flag_get(CAN2, CAN_BOF_FLAG) != RESET) ? 1U : 0U;
   can_test_live.error_passive = (can_flag_get(CAN2, CAN_EPF_FLAG) != RESET) ? 1U : 0U;
+#endif
   __DMB();
   can_test_live.seq++;
 }
@@ -131,6 +181,18 @@ static void can_test_poll_receive(uint32_t now_us)
 }
 static void can_test_poll_mailboxes(void)
 {
+#if APP_CAN_TX_FAST
+#if APP_COMM_POLL_FAST
+  uint32_t sts=CAN2->tsts;
+  /* Preserve the old pending-poll diagnostic at the same1kHz cadence. */
+  for(unsigned i=0;i<3U;++i)
+    if((can_pending_mask&(1U<<i)) && !(sts&(1U<<(8U*i))))
+      can_test_live.tx_pending_count++;
+  can_retire(sts);
+#else
+  can_retire(CAN2->tsts);
+#endif
+#else
   uint8_t bit;
   for(bit = 0U; bit < 3U; ++bit)
   {
@@ -160,6 +222,7 @@ static void can_test_poll_mailboxes(void)
       can_test_live.tx_pending_count++;
     }
   }
+#endif
 }
 
 
@@ -170,6 +233,10 @@ void can_test_init(void)
   can_baudrate_type can_baudrate_struct;
 
   can_config_defaults(&can_config);
+#if APP_COMM_POLL_FAST
+  unsigned count=can_output_count(can_config.output_mask);
+  can_slot_us=count ? (uint32_t)can_config.period_ms*1000U/count : 0U;
+#endif
   can_sample.qw = 1; can_sample.temperature = 25;
   crm_periph_clock_enable(CRM_GPIOA_PERIPH_CLOCK, TRUE);
   crm_periph_clock_enable(CRM_CAN2_PERIPH_CLOCK, TRUE);
@@ -249,6 +316,9 @@ void can_test_task(uint32_t now_us)
       can_transmit_status_type status = can_transmit_status_get(CAN2, (can_tx_mailbox_num_type)baud_mailbox);
       if(status == CAN_TX_STATUS_SUCCESSFUL) {
         baud_pending = 0;
+#if APP_CAN_TX_FAST
+        can_test_poll_mailboxes(); /* Account ACK before reconfiguration. */
+#endif
         (void)can_test_set_config(&pending_config);
       } else if(status == CAN_TX_STATUS_FAILED || (int32_t)(now_us - baud_deadline_us) >= 0) {
         can_transmit_cancel(CAN2, (can_tx_mailbox_num_type)baud_mailbox); baud_pending = 0;
@@ -261,11 +331,16 @@ void can_test_task(uint32_t now_us)
     can_last_status_us = now_us; can_test_snapshot(now_us / 1000U);
   }
 #if APP_CAN_TX_ENABLE
+#if APP_COMM_POLL_FAST
+  if(baud_pending || !can_config.active || !can_slot_us)return;
+  uint32_t slot_us=can_slot_us; /* Recompute only when config changes. */
+#else
   unsigned count = can_output_count(can_config.output_mask);
   if(baud_pending || !can_config.active || !count) return;
   /* Spread groups evenly through the requested PER-GROUP period. No burst,
    * no reduction to quarter-rate when all four groups are selected. */
   uint32_t slot_us = (uint32_t)can_config.period_ms * 1000U / count;
+#endif
   unsigned due = (uint32_t)(now_us - can_last_tx_us) / slot_us;
   if(!due) return;
   /* Main loop is 2 kHz: all four groups at 1 kHz require two frames per

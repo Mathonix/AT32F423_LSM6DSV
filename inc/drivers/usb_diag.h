@@ -1,0 +1,22 @@
+#ifndef USB_DIAG_H
+#define USB_DIAG_H
+#include <stdint.h>
+#ifndef APP_USB_DIAG
+#define APP_USB_DIAG 0
+#endif
+/* Independent experimental ABI. uint32 counters wrap modulo 2^32. */
+enum {
+ UD_MAGIC,UD_PACK_OK,UD_PACK_FAIL,UD_TELE_OK,UD_TELE_FULL,UD_TELE_DETACHED,
+ UD_CONTROL_OK,UD_CONTROL_FAIL,UD_QUEUE_HIGH,UD_FULL_SINCE,UD_FULL_US,
+ UD_FULL_MAX_US,UD_SUBMIT,UD_BUSY_COPY,UD_COMPLETE,UD_SUBMIT_BYTES,
+ UD_COMPLETE_BYTES,UD_INFLIGHT,UD_SUBMIT_CY,UD_BUSY_MAX_US,UD_CONFIG,
+ UD_CLEAR,UD_RESET,UD_SUSPEND,UD_RESUME,UD_RX_DROP,UD_TASK_MAX_GAP_US,
+ UD_TASK_LAST_US,UD_STREAM32,UD_PURGED_BYTES,UD_QUEUE_USED,UD_FULL_ACTIVE,
+ UD_WORDS
+};
+#if APP_USB_DIAG
+extern volatile uint32_t usb_diag[UD_WORDS];
+void usb_diag_event(unsigned event);
+void usb_diag_complete(void);
+#endif
+#endif

@@ -7,6 +7,12 @@ extern "C" {
 void usb_cdc_init(void);
 void usb_cdc_task(void);
 void usb_cdc_isr(void);
+#if APP_USB_TX_CHAIN
+/* USB completion ISR only. Bounded <=64 B transfer; no pose/protocol work. */
+void usb_cdc_tx_complete(void);
+/* Explicit benchmark boundary. Resets maxima only, never any drop/count. */
+int usb_cdc_reset_peaks(void);
+#endif
 int usb_cdc_configured(void);
 int usb_cdc_tx_idle(void);
 int usb_cdc_write(const uint8_t *data, uint16_t len);

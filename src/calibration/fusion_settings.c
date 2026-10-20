@@ -5,6 +5,76 @@
 #include "fusion_profile.h"
 #include "at32f423_flash.h"
 #include <string.h>
+#if APP_FLASH_TRACE
+#include "imu8k_capture.h"
+#include "flash_sram.h"
+#include "flash_gate.h"
+/* Word layout of one slot. Host reads this as a flat uint32 array. */
+typedef struct {
+  uint32_t magic, kind, address, status;
+  uint32_t unlock_cy, erase_cy, erase_spins;
+  uint32_t program_cy, program_words, program_max_cy, verify_cy;
+  uint32_t irq_before, irq_after_erase, irq_after_program, irq_after_all;
+  uint32_t busy_before, busy_after_erase, busy_after_all;
+  uint32_t gap_before, gap_after_erase, gap_after_all;
+  uint32_t overrun_before, overrun_after_all;
+  uint32_t overcapture_before, overcapture_after_erase, overcapture_after_all;
+  uint32_t missing_before, missing_after_erase, missing_after_all;
+  uint32_t max_depth_before, max_depth_after;
+} flash_save_trace_t;
+volatile flash_save_trace_t flash_save_trace[4];
+volatile uint32_t flash_save_trace_n;
+#if APP_SRAM_CAPTURE
+/* total begin, erase begin, erase end, total end; committed with trace_n. */
+volatile uint32_t flash_save_bounds[4][4];
+#endif
+static volatile flash_save_trace_t *flash_trace_cur;
+static uint32_t flash_cy(void) { return *(volatile uint32_t *)0xE0001004U; }
+static void flash_trace_open(uint32_t kind, uint32_t address)
+{
+  volatile flash_save_trace_t *tr = &flash_save_trace[flash_save_trace_n & 3U];
+  memset((void *)tr, 0, sizeof(*tr));
+  tr->magic = 0x46535431U;
+  tr->kind = kind;
+  tr->address = address;
+  flash_trace_cur = tr;
+#if APP_SRAM_CAPTURE
+  for(unsigned i=0;i<4;i++)flash_save_bounds[flash_save_trace_n&3U][i]=0;
+  flash_save_bounds[flash_save_trace_n&3U][0]=flash_cy();
+#endif
+}
+static void flash_trace_close(uint32_t status)
+{
+  if(!flash_trace_cur) return;
+  flash_trace_cur->status = status;
+  flash_trace_cur->irq_after_all = capture_stats.irq_n;
+  flash_trace_cur->busy_after_all = capture_stats.busy_n;
+  flash_trace_cur->gap_after_all = capture_stats.gap_n;
+  flash_trace_cur->overrun_after_all = capture_stats.overrun_n;
+  flash_trace_cur->overcapture_after_all = capture_edge[2];
+  flash_trace_cur->missing_after_all = capture_edge[6];
+  flash_trace_cur->max_depth_after = capture_stats.max_depth;
+  flash_trace_cur = 0;
+#if APP_SRAM_CAPTURE
+  flash_save_bounds[flash_save_trace_n&3U][3]=flash_cy();
+#endif
+  flash_save_trace_n++;
+}
+static flash_status_type flash_prog_word(uint32_t addr, uint32_t word)
+{
+  uint32_t t = flash_cy();
+  flash_status_type st = flash_word_program(addr, word);
+  if(flash_trace_cur) {
+    uint32_t d = flash_cy() - t;
+    flash_trace_cur->program_words++;
+    flash_trace_cur->program_cy += d;
+    if(d > flash_trace_cur->program_max_cy) flash_trace_cur->program_max_cy = d;
+  }
+  return st;
+}
+#else
+#define flash_prog_word flash_word_program
+#endif
 
 #define SETTINGS_MAGIC 0x4655534EU
 #define SETTINGS_VERSION 8U
@@ -330,7 +400,13 @@ int device_settings_save(const device_settings_t *s)
        previous.zaru.exit_confirm_ms == s->zaru.exit_confirm_ms &&
        previous.zaru.reserved == s->zaru.reserved &&
        memcmp(previous.outputs, s->outputs, sizeof(s->outputs)) == 0 &&
-       memcmp(&previous.can, &s->can, sizeof(s->can)) == 0) return 0;
+       memcmp(&previous.can, &s->can, sizeof(s->can)) == 0) {
+#if APP_FLASH_TRACE
+    flash_trace_open(2U, old_addr);
+    flash_trace_close(0U);
+#endif
+    return 0;
+  }
   }
   new_addr = old_addr == SETTINGS_SLOT1 ? SETTINGS_SLOT0 : SETTINGS_SLOT1;
   memset(&r, 0, sizeof(r));
@@ -366,62 +442,118 @@ int device_settings_save(const device_settings_t *s)
   scale.crc=crc32(&scale,sizeof(scale)-4U);
   acc_range.magic=ACC_RANGE_MAGIC;acc_range.sequence=r.sequence;acc_range.range_g=s->acc_range_g;
   acc_range.crc=crc32(&acc_range,sizeof(acc_range)-4U);
+#if APP_FLASH_TRACE
+  if(new_addr != SETTINGS_SLOT0 && new_addr != SETTINGS_SLOT1) return -4;
+#if APP_SRAM_CAPTURE
+  if(!sram_flash_ready()){sram_live[SR_SAVE_DEFERRED]++;return -5;}
+  /* A denied gate must not mask interrupts or count as a save. */
+  if(flash_gate_settings_held()) sram_flash_begin();
+  else { st = FLASH_EPP_ERROR; goto flash_trace_denied; }
+#endif
+  flash_trace_open(1U, new_addr);
+  {
+    uint32_t t = flash_cy();
+    flash_unlock();
+    flash_trace_cur->unlock_cy = flash_cy() - t;
+  }
+  flash_trace_cur->irq_before = capture_stats.irq_n;
+  flash_trace_cur->busy_before = capture_stats.busy_n;
+  flash_trace_cur->gap_before = capture_stats.gap_n;
+  flash_trace_cur->overrun_before = capture_stats.overrun_n;
+  flash_trace_cur->overcapture_before = capture_edge[2];
+  flash_trace_cur->missing_before = capture_edge[6];
+  flash_trace_cur->max_depth_before = capture_stats.max_depth;
+  {
+    uint32_t t = flash_cy();
+#if APP_SRAM_CAPTURE
+    flash_save_bounds[flash_save_trace_n&3U][1]=t;
+#endif
+    flash_trace_cur->erase_spins = flash_erase_wait_sram(new_addr);
+    flash_trace_cur->erase_cy = flash_cy() - t;
+#if APP_SRAM_CAPTURE
+    flash_save_bounds[flash_save_trace_n&3U][2]=flash_cy();
+#endif
+  }
+  st = flash_operation_status_get();
+  /* erase_wait returns all-ones without starting the controller. The status
+   * register can still say DONE from an older operation, so do not program. */
+  if(flash_trace_cur->erase_spins == 0xFFFFFFFFU) st = FLASH_EPP_ERROR;
+  flash_trace_cur->irq_after_erase = capture_stats.irq_n;
+  flash_trace_cur->busy_after_erase = capture_stats.busy_n;
+  flash_trace_cur->gap_after_erase = capture_stats.gap_n;
+  flash_trace_cur->overcapture_after_erase = capture_edge[2];
+  flash_trace_cur->missing_after_erase = capture_edge[6];
+#else
   flash_unlock();
   st = flash_sector_erase(new_addr);
+#endif
   if(st == FLASH_OPERATE_DONE) {
     for(i = 0; i < (sizeof(r)-4U) / 4U; ++i) {
       memcpy(&word, (const uint8_t *)&r + 4U * i, 4U);
-      st = flash_word_program(new_addr + 4U * i, word);
+      st = flash_prog_word(new_addr + 4U * i, word);
       if(st != FLASH_OPERATE_DONE) break;
     }
     if(st == FLASH_OPERATE_DONE) for(i=0; i<sizeof(ws)/4U; ++i) {
       memcpy(&word,(const uint8_t *)&ws+4U*i,4U);
-      st=flash_word_program(new_addr+sizeof(r)+4U*i,word);
+      st=flash_prog_word(new_addr+sizeof(r)+4U*i,word);
       if(st!=FLASH_OPERATE_DONE) break;
     }
     if(st == FLASH_OPERATE_DONE) for(i=0; i<sizeof(mag)/4U; ++i) {
       memcpy(&word,(const uint8_t *)&mag+4U*i,4U);
-      st=flash_word_program(new_addr+sizeof(r)+sizeof(ws)+4U*i,word);
+      st=flash_prog_word(new_addr+sizeof(r)+sizeof(ws)+4U*i,word);
       if(st!=FLASH_OPERATE_DONE) break;
     }
     if(st == FLASH_OPERATE_DONE) for(i=0; i<sizeof(rejection)/4U; ++i) {
       memcpy(&word,(const uint8_t *)&rejection+4U*i,4U);
-      st=flash_word_program(new_addr+sizeof(r)+sizeof(ws)+sizeof(mag)+4U*i,word);
+      st=flash_prog_word(new_addr+sizeof(r)+sizeof(ws)+sizeof(mag)+4U*i,word);
       if(st!=FLASH_OPERATE_DONE) break;
     }
     if(st == FLASH_OPERATE_DONE) for(i=0;i<sizeof(algorithm)/4U;++i) {
       memcpy(&word,(const uint8_t *)&algorithm+4U*i,4U);
-      st=flash_word_program(new_addr+164U+4U*i,word);
+      st=flash_prog_word(new_addr+164U+4U*i,word);
       if(st!=FLASH_OPERATE_DONE)break;
     }
     if(st == FLASH_OPERATE_DONE) for(i=0;i<sizeof(rest_bias)/4U;++i) {
       memcpy(&word,(const uint8_t *)&rest_bias+4U*i,4U);
-      st=flash_word_program(new_addr+180U+4U*i,word);
+      st=flash_prog_word(new_addr+180U+4U*i,word);
       if(st!=FLASH_OPERATE_DONE)break;
     }
     if(st == FLASH_OPERATE_DONE) for(i=0;i<sizeof(tuning)/4U;++i) {
       memcpy(&word,(const uint8_t *)&tuning+4U*i,4U);
-      st=flash_word_program(new_addr+196U+4U*i,word);
+      st=flash_prog_word(new_addr+196U+4U*i,word);
       if(st!=FLASH_OPERATE_DONE)break;
     }
     if(st == FLASH_OPERATE_DONE) for(i=0;i<sizeof(scale)/4U;++i) {
       memcpy(&word,(const uint8_t *)&scale+4U*i,4U);
-      st=flash_word_program(new_addr+268U+4U*i,word);
+      st=flash_prog_word(new_addr+268U+4U*i,word);
       if(st!=FLASH_OPERATE_DONE)break;
     }
     if(st == FLASH_OPERATE_DONE) for(i=0;i<sizeof(acc_range)/4U;++i) {
       memcpy(&word,(const uint8_t *)&acc_range+4U*i,4U);
-      st=flash_word_program(new_addr+292U+4U*i,word);
+      st=flash_prog_word(new_addr+292U+4U*i,word);
       if(st!=FLASH_OPERATE_DONE)break;
     }
-    if(st == FLASH_OPERATE_DONE) st=flash_word_program(new_addr+sizeof(r)-4U,r.crc);
+    if(st == FLASH_OPERATE_DONE) st=flash_prog_word(new_addr+sizeof(r)-4U,r.crc);
   }
   flash_lock();
-  if(st != FLASH_OPERATE_DONE) return -2;
+#if APP_SRAM_CAPTURE
+  if(flash_gate_settings_held()) sram_flash_end();
+flash_trace_denied:;
+#endif
+#if APP_FLASH_TRACE
+  if(flash_trace_cur) flash_trace_cur->irq_after_program = capture_stats.irq_n;
+  uint32_t verify_t = flash_cy();
+#endif
+  if(st != FLASH_OPERATE_DONE) {
+#if APP_FLASH_TRACE
+    flash_trace_close(0xFFFFFFFEU);
+#endif
+    return -2;
+  }
   load_mag((const settings_record_t *)(uintptr_t)new_addr,&previous.mag_cal);
   load_tuning((const settings_record_t *)(uintptr_t)new_addr,&previous);
   load_scale((const settings_record_t *)(uintptr_t)new_addr,&previous);
-  return load_acc_range((const settings_record_t *)(uintptr_t)new_addr)==s->acc_range_g &&
+  int saved = load_acc_range((const settings_record_t *)(uintptr_t)new_addr)==s->acc_range_g &&
       memcmp(&previous.gyro_scale,&s->gyro_scale,sizeof(s->gyro_scale))==0 &&
       previous.vqf_tuning_enabled==s->vqf_tuning_enabled &&
       memcmp(&previous.vqf_tuning,&s->vqf_tuning,sizeof(s->vqf_tuning))==0 &&
@@ -431,6 +563,11 @@ int device_settings_save(const device_settings_t *s)
       load_algorithm((const settings_record_t *)(uintptr_t)new_addr)==s->fusion_algorithm &&
       load_rest_bias((const settings_record_t *)(uintptr_t)new_addr)==s->rest_bias_enabled &&
       load_mag_rejection((const settings_record_t *)(uintptr_t)new_addr)==s->mag_rejection_enabled ? 0 : -3;
+#if APP_FLASH_TRACE
+  if(flash_trace_cur) flash_trace_cur->verify_cy = flash_cy() - verify_t;
+  flash_trace_close((uint32_t)saved);
+#endif
+  return saved;
 }
 int fusion_settings_load_ex(fusion_mode_t *mode, uint16_t *can_node_id)
 {

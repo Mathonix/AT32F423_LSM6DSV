@@ -25,6 +25,10 @@
 #include "usbd_core.h"
 #include "cdc_class.h"
 #include "cdc_desc.h"
+#include "usb_diag.h"
+#if APP_USB_TX_CHAIN
+#include "usb_cdc.h"
+#endif
 
 /** @addtogroup AT32F423_middlewares_usbd_class
   * @{
@@ -85,6 +89,9 @@ usbd_class_handler cdc_class_handler =
   */
 static usb_sts_type class_init_handler(void *udev)
 {
+#if APP_USB_DIAG
+  usb_diag_event(UD_CONFIG);
+#endif
   usb_sts_type status = USB_OK;
   usbd_core_type *pudev = (usbd_core_type *)udev;
   cdc_struct_type *pcdc = (cdc_struct_type *)pudev->class_handler->pdata;
@@ -119,6 +126,9 @@ static usb_sts_type class_init_handler(void *udev)
   */
 static usb_sts_type class_clear_handler(void *udev)
 {
+#if APP_USB_DIAG
+  usb_diag_event(UD_CLEAR);
+#endif
   usb_sts_type status = USB_OK;
   usbd_core_type *pudev = (usbd_core_type *)udev;
 
@@ -310,6 +320,12 @@ static usb_sts_type class_in_handler(void *udev, uint8_t ept_num)
   {
     usbd_flush_tx_fifo(pudev, ept_num);
     pcdc->g_tx_completed = 1;
+#if APP_USB_DIAG
+    usb_diag_complete();
+#endif
+#if APP_USB_TX_CHAIN
+    usb_cdc_tx_complete();
+#endif
   }
   else if(ept_num == (USBD_WEBUSB_BULK_IN_EPT & 0x7FU))
   {
@@ -377,16 +393,25 @@ static usb_sts_type class_event_handler(void *udev, usbd_event_type event)
   switch(event)
   {
     case USBD_RESET_EVENT:
+#if APP_USB_DIAG
+      usb_diag_event(UD_RESET);
+#endif
 
       /* ...user code... */
 
       break;
     case USBD_SUSPEND_EVENT:
+#if APP_USB_DIAG
+      usb_diag_event(UD_SUSPEND);
+#endif
 
       /* ...user code... */
 
       break;
     case USBD_WAKEUP_EVENT:
+#if APP_USB_DIAG
+      usb_diag_event(UD_RESUME);
+#endif
       /* ...user code... */
 
       break;

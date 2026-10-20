@@ -7,6 +7,13 @@
 #include "fusion_profile.h"
 #include "fusion_algorithm.h"
 #include "ekf.hpp"
+#if APP_EXPERIMENTAL_ESKF8K
+#include "eskf8k.hpp"
+#include "eskf8k_hotspot.h"
+#if APP_ESKF8K_HOTSPOT
+extern "C" { extern volatile unsigned eskf8k_counts[8]; }
+#endif
+#endif
 
 #include <cmath>
 #include <cstring>
@@ -45,7 +52,13 @@ void copy4(const vqf_real_t in[4], float out[4])
 } // namespace
 
 extern "C" void fusion_select_algorithm(uint8_t algorithm)
-{ if(algorithm < FUSION_ALGORITHM_COUNT) g_algorithm=algorithm; }
+{
+#if APP_EXPERIMENTAL_ESKF8K
+    (void)algorithm;g_algorithm=FUSION_ALGORITHM_ESKF8K;
+#else
+    if(algorithm < FUSION_ALGORITHM_COUNT) g_algorithm=algorithm;
+#endif
+}
 extern "C" uint8_t fusion_get_algorithm(void) { return g_algorithm; }
 
 extern "C" void vqf_configure_tuning(const vqf_tuning_t *p)
@@ -112,8 +125,19 @@ extern "C" void vqf_init(float gyr_dt, float acc_dt)
     ahrs_ekf::set_profile(g_tau_acc,g_tau_mag,g_rest_th_gyr,g_rest_th_acc);
     ahrs_ekf::set_bias_sigmas(APP_VQF_BIAS_SIGMA_INIT_DPS,APP_VQF_BIAS_SIGMA_REST_DPS);
     ahrs_ekf::set_mag_rejection(g_mag_rejection_enabled);
+#if APP_EXPERIMENTAL_ESKF8K
+    ahrs_eskf8k::set_mag_rejection(g_mag_rejection_enabled);
+#endif
     ahrs_ekf::set_rest_bias_enabled(g_rest_bias_enabled);
+#if APP_EXPERIMENTAL_ESKF8K
+    ahrs_eskf8k::set_rest_bias_enabled(g_rest_bias_enabled);
+#endif
     ahrs_ekf::init(gyr_dt,acc_dt);
+#if APP_EXPERIMENTAL_ESKF8K
+    ahrs_eskf8k::init();
+    ahrs_eskf8k::set_rest_bias_enabled(g_rest_bias_enabled);
+    ahrs_eskf8k::set_mag_rejection(g_mag_rejection_enabled);
+#endif
 }
 
 extern "C" void vqf_apply_profile(unsigned profile)
@@ -140,6 +164,18 @@ extern "C" void vqf_set_rest_thresholds(float th_gyr_dps, float th_acc_ms2)
     ahrs_ekf::set_profile(g_tau_acc,g_tau_mag,g_rest_th_gyr,g_rest_th_acc);
     if (g_vqf && !g_tuning_enabled) filter().setRestDetectionThresholds(g_rest_th_gyr, g_rest_th_acc);
 }
+
+#if APP_ESKF_REST_RELAX
+extern "C" void vqf_get_rest_thresholds(float *th_gyr_dps, float *th_acc_ms2)
+{
+    float values[2]={g_rest_th_gyr,g_rest_th_acc};
+#if APP_EXPERIMENTAL_ESKF8K
+    ahrs_eskf8k::rest_thresholds(values);
+#endif
+    if(th_gyr_dps) *th_gyr_dps=values[0];
+    if(th_acc_ms2) *th_acc_ms2=values[1];
+}
+#endif
 
 extern "C" void vqf_set_bias_sigmas(float sigma_init_dps, float sigma_rest_dps)
 {
@@ -201,6 +237,9 @@ extern "C" void vqf_seed_gyr_bias(const float gyr_bias[3], float sigma_dps)
 
 extern "C" float vqf_get_bias_sigma_dps(void)
 {
+#if APP_EXPERIMENTAL_ESKF8K
+    return ahrs_eskf8k::bias_sigma_dps();
+#endif
     if (!g_vqf) return 0;
     if(g_algorithm==FUSION_ALGORITHM_EKF) return ahrs_ekf::bias_sigma_dps();
     vqf_real_t b[3];
@@ -211,6 +250,9 @@ extern "C" void vqf_prime_rest(const float acc_ms2[3], const float gyr_bias[3])
 {
     if (!g_vqf) return;
     vqf_set_gyr_bias(gyr_bias);
+#if APP_EXPERIMENTAL_ESKF8K
+    ahrs_eskf8k::prime(acc_ms2);return;
+#endif
     if(g_algorithm==FUSION_ALGORITHM_EKF) {ahrs_ekf::prime(acc_ms2);return;}
 
     // Initialize Full VQF's second-order accelerometer filter and inclination
@@ -223,6 +265,10 @@ extern "C" void vqf_prime_rest(const float acc_ms2[3], const float gyr_bias[3])
 
 extern "C" void vqf_update_gyr(const float gyr[3])
 {
+#if APP_EXPERIMENTAL_ESKF8K
+    const float e[3]={gyr[0]-g_calibrated_bias[0],gyr[1]-g_calibrated_bias[1],gyr[2]-g_calibrated_bias[2]};
+    ahrs_eskf8k::gyro(e,1.f/APP_FUSION_HZ);return;
+#endif
     const vqf_real_t v[3] = {gyr[0] - g_calibrated_bias[0],
                            gyr[1] - g_calibrated_bias[1],
                            gyr[2] - g_calibrated_bias[2]};
@@ -235,6 +281,9 @@ extern "C" void vqf_update_gyr(const float gyr[3])
 
 extern "C" void vqf_update_acc(const float acc[3])
 {
+#if APP_EXPERIMENTAL_ESKF8K
+    ahrs_eskf8k::accel(acc);return;
+#endif
     if(g_algorithm==FUSION_ALGORITHM_EKF) {ahrs_ekf::accel(acc);return;}
     const vqf_real_t v[3] = {acc[0], acc[1], acc[2]};
     filter().updateAcc(v);
@@ -250,6 +299,9 @@ extern "C" void vqf_update(const float gyr[3], const float acc[3])
 
 extern "C" int vqf_update_mag(const float mag[3])
 {
+#if APP_EXPERIMENTAL_ESKF8K
+    return ahrs_eskf8k::mag(mag);
+#endif
     const float n2 = mag[0]*mag[0] + mag[1]*mag[1] + mag[2]*mag[2];
     if (!g_vqf || n2 < 1.0e-12f || n2 > 4000000.0f) return -1;
     if(g_algorithm==FUSION_ALGORITHM_EKF) return ahrs_ekf::mag(mag);
@@ -263,12 +315,18 @@ extern "C" void vqf_set_mag_rejection_enabled(int enabled)
 {
     g_mag_rejection_enabled = enabled != 0;
     ahrs_ekf::set_mag_rejection(g_mag_rejection_enabled);
+#if APP_EXPERIMENTAL_ESKF8K
+    ahrs_eskf8k::set_mag_rejection(g_mag_rejection_enabled);
+#endif
     if(g_vqf) filter().setMagDistRejectionEnabled(g_mag_rejection_enabled);
 }
 extern "C" int vqf_get_mag_rejection_enabled(void) { return g_mag_rejection_enabled ? 1 : 0; }
 
 extern "C" void vqf_reset_mag_reference(void)
 {
+#if APP_EXPERIMENTAL_ESKF8K
+    ahrs_eskf8k::reset_mag_reference();return;
+#endif
     if(!g_vqf) return;
     if(g_algorithm==FUSION_ALGORITHM_EKF) {ahrs_ekf::reset_mag_reference();return;}
     // Preserve inclination, gyro bias and current heading; relearn the magnetic
@@ -279,6 +337,9 @@ extern "C" void vqf_reset_mag_reference(void)
 
 extern "C" void vqf_get_quat6d(float q[4])
 {
+#if APP_EXPERIMENTAL_ESKF8K
+    ahrs_eskf8k::quat6(q);return;
+#endif
     if(g_algorithm==FUSION_ALGORITHM_EKF) {ahrs_ekf::quat6(q);return;}
     vqf_real_t out[4];
     filter().getQuat6D(out);
@@ -287,6 +348,9 @@ extern "C" void vqf_get_quat6d(float q[4])
 
 extern "C" void vqf_get_quat9d(float q[4])
 {
+#if APP_EXPERIMENTAL_ESKF8K
+    ahrs_eskf8k::quat9(q);return;
+#endif
     if(g_algorithm==FUSION_ALGORITHM_EKF) {ahrs_ekf::quat9(q);return;}
     vqf_real_t out[4];
     if (g_mag_ready) filter().getQuat9D(out);
@@ -310,6 +374,11 @@ extern "C" void vqf_get_euler_deg(float *roll_deg, float *pitch_deg, float *yaw_
 
 extern "C" void vqf_get_gyr_bias(float gyr_bias[3])
 {
+#if APP_EXPERIMENTAL_ESKF8K
+    ahrs_eskf8k::bias(gyr_bias);
+    for(unsigned i=0;i<3;++i)gyr_bias[i]+=g_calibrated_bias[i];
+    return;
+#endif
     if(g_algorithm==FUSION_ALGORITHM_EKF) {
         float b[3];ahrs_ekf::bias9(b);
         for(unsigned i=0;i<3;++i)gyr_bias[i]=g_calibrated_bias[i]+b[i];
@@ -323,6 +392,9 @@ extern "C" void vqf_get_gyr_bias(float gyr_bias[3])
 
 extern "C" void vqf_get_gyr_bias6d(float gyr_bias[3])
 {
+#if APP_EXPERIMENTAL_ESKF8K
+    vqf_get_gyr_bias(gyr_bias);return;
+#endif
     if(g_algorithm!=FUSION_ALGORITHM_EKF) {vqf_get_gyr_bias(gyr_bias);return;}
     float b[3];ahrs_ekf::bias(b);
     for(unsigned i=0;i<3;++i)gyr_bias[i]=g_calibrated_bias[i]+b[i];
@@ -332,6 +404,12 @@ extern "C" void vqf_get_bias_estimator_config(vqf_bias_estimator_config_t *out)
 {
     if (!out) return;
     std::memset(out, 0, sizeof(*out));
+#if APP_EXPERIMENTAL_ESKF8K
+    out->rest_bias_enabled=g_rest_bias_enabled?1U:0U;
+    out->bias_sigma_rest_dps=ahrs_eskf8k::bias_sigma_dps();
+    out->bias_clip_dps=2.f;
+    return;
+#endif
     if (!g_vqf) return;
     if(g_algorithm==FUSION_ALGORITHM_EKF) {
         out->motion_bias_enabled=APP_VQF_MOTION_BIAS_ENABLE?1U:0U;
@@ -354,7 +432,11 @@ extern "C" void vqf_get_bias_estimator_config(vqf_bias_estimator_config_t *out)
     out->tau_acc_s = static_cast<float>(p.tauAcc);
 }
 
-extern "C" float vqf_get_rest_time(void) { return g_algorithm==FUSION_ALGORITHM_EKF?ahrs_ekf::rest_time():g_rest_time; }
+extern "C" float vqf_get_rest_time(void) {
+#if APP_EXPERIMENTAL_ESKF8K
+return ahrs_eskf8k::rest_time();
+#endif
+return g_algorithm==FUSION_ALGORITHM_EKF?ahrs_ekf::rest_time():g_rest_time; }
 extern "C" int vqf_query_update_diagnostic(unsigned index,fusion_update_diagnostic_t* out)
 {
     if(!out||index>1)return 0;
@@ -363,23 +445,39 @@ extern "C" int vqf_query_update_diagnostic(unsigned index,fusion_update_diagnost
 }
 extern "C" unsigned vqf_get_ekf_health_flags(unsigned index)
 {
+#if APP_EXPERIMENTAL_ESKF8K
+    return ahrs_eskf8k::health(index);
+#endif
     return g_algorithm==FUSION_ALGORITHM_EKF?ahrs_ekf::health_flags(index):0U;
 }
 extern "C" int vqf_get_rest_detected(void)
 {
+#if APP_EXPERIMENTAL_ESKF8K
+    return ahrs_eskf8k::rest();
+#endif
     if(g_algorithm==FUSION_ALGORITHM_EKF) return ahrs_ekf::rest()?1:0;
     return g_vqf && filter().getRestDetected() ? 1 : 0;
 }
 extern "C" float vqf_get_tau_acc(void) { return g_algorithm==FUSION_ALGORITHM_VQF && g_vqf ? filter().getParams().tauAcc : g_tau_acc; }
 extern "C" float vqf_get_tau_mag(void) { return g_algorithm==FUSION_ALGORITHM_VQF && g_vqf ? filter().getParams().tauMag : g_tau_mag; }
-extern "C" int vqf_get_mag_ready(void) { return g_algorithm==FUSION_ALGORITHM_EKF?(ahrs_ekf::mag_ready()?1:0):(g_mag_ready?1:0); }
+extern "C" int vqf_get_mag_ready(void) {
+#if APP_EXPERIMENTAL_ESKF8K
+return ahrs_eskf8k::mag_ready();
+#endif
+return g_algorithm==FUSION_ALGORITHM_EKF?(ahrs_ekf::mag_ready()?1:0):(g_mag_ready?1:0); }
 extern "C" float vqf_get_mag_delta_deg(void)
 {
+#if APP_EXPERIMENTAL_ESKF8K
+    return ahrs_eskf8k::mag_delta_deg();
+#endif
     if(g_algorithm==FUSION_ALGORITHM_EKF) return ahrs_ekf::mag_delta_deg();
     return g_vqf && g_mag_ready ? static_cast<float>(filter().getDelta() * (180.0 / M_PI)) : 0.0f;
 }
 extern "C" int vqf_get_mag_dist_detected(void)
 {
+#if APP_EXPERIMENTAL_ESKF8K
+    return ahrs_eskf8k::mag_disturbed();
+#endif
     if(g_algorithm==FUSION_ALGORITHM_EKF) return ahrs_ekf::mag_disturbed()?1:0;
     return g_vqf && filter().getMagDistDetected() ? 1 : 0;
 }
@@ -392,6 +490,9 @@ extern "C" int vqf_get_mag_dist_detected(void)
 /* Read-only diagnostics at 20 Hz; no estimator parameter/state changes. */
 extern "C" void vqf_get_nine_diagnostic(float out[8])
 {
+#if APP_EXPERIMENTAL_ESKF8K
+    ahrs_eskf8k::diagnostic(out);return;
+#endif
     if(g_algorithm==FUSION_ALGORITHM_EKF) {ahrs_ekf::diagnostic(out);return;}
     vqf_real_t q[4];
     filter().getQuat6D(q);
@@ -407,4 +508,33 @@ extern "C" void vqf_get_nine_diagnostic(float out[8])
     out[6] = state.lastMagDisAngle * k;
     vqf_real_t bias[3];
     out[7] = filter().getBiasEstimate(bias) * k;
+}
+
+extern "C" void vqf_update_timed(const float gyr[3],const float acc[3],float dt,int acc_due) {
+#if APP_EXPERIMENTAL_ESKF8K
+    const float e[3]={gyr[0]-g_calibrated_bias[0],gyr[1]-g_calibrated_bias[1],gyr[2]-g_calibrated_bias[2]};
+    uint64_t h=hot_begin(H_PREDICT);
+    ahrs_eskf8k::gyro(e,dt);
+    hot_end(H_PREDICT,h);
+    if(acc_due){
+#if APP_ESKF8K_HOTSPOT
+        unsigned before=0;if(HOT_SELECTED(H_ACCEL))before=eskf8k_counts[3];
+#endif
+        h=hot_begin(H_ACCEL);ahrs_eskf8k::accel(acc);
+#if APP_ESKF8K_HOTSPOT
+        if(HOT_SELECTED(H_ACCEL))hot_end_acc(h,eskf8k_counts[3]!=before);
+        else
+#endif
+        hot_end(H_ACCEL,h);
+    }
+#else
+    (void)dt;(void)acc_due;vqf_update(gyr,acc);
+#endif
+}
+extern "C" void vqf_eskf8k_snapshot(float out[26]) {
+#if APP_EXPERIMENTAL_ESKF8K
+    ahrs_eskf8k::state_snapshot(out);
+#else
+    std::memset(out,0,26*sizeof(float));
+#endif
 }

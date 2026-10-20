@@ -21,12 +21,22 @@
 #define USBD_RX_SIZE 128
 #define USBD_EP0_TX_SIZE 24
 #define USBD_EP1_TX_SIZE 20
+#if APP_USB_FIFO_FIX
+/* EP2 is the <=8-byte CDC notification endpoint. The inherited 80-word
+ * allocation made all FIFOs total 352 words, above this controller's 320.
+ * 32 words retain ample notification capacity and keep the total at 304. */
+#define USBD_EP2_TX_SIZE 32
+#else
 #define USBD_EP2_TX_SIZE 80
+#endif
 #define USBD_EP3_TX_SIZE 20
 #define USBD_EP4_TX_SIZE 20
 #define USBD_EP5_TX_SIZE 20
 #define USBD_EP6_TX_SIZE 20
 #define USBD_EP7_TX_SIZE 20
+#if APP_USB_FIFO_FIX && (USBD_RX_SIZE+USBD_EP0_TX_SIZE+USBD_EP1_TX_SIZE+USBD_EP2_TX_SIZE+USBD_EP3_TX_SIZE+USBD_EP4_TX_SIZE+USBD_EP5_TX_SIZE+USBD_EP6_TX_SIZE+USBD_EP7_TX_SIZE > OTG_FIFO_SIZE)
+#error USB FIFO allocations exceed controller word capacity
+#endif
 
 void usb_delay_ms(uint32_t ms);
 void usb_delay_us(uint32_t us);

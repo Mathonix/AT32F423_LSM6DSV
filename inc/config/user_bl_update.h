@@ -14,6 +14,9 @@ typedef struct {
  * 5 program, 6 readback failure. No resets on failure. */
 uint32_t user_bl_crc(const void *data, uint32_t size);
 uint8_t user_bl_program(const uint8_t *image, uint32_t size, uint32_t crc);
+/* One-shot. user_bl_program clears it before the first erase. */
+void user_bl_arm(void);
+void user_bl_disarm(void);
 void user_bl_get_info(user_bl_info_t *info);
 int user_bl_request_valid(uint32_t magic, uint32_t size, uint32_t crc);
 void user_bl_apply(void);

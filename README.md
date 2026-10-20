@@ -1,75 +1,60 @@
-# AT32F423 AHRS
+# AT32F423 双套 8 kHz ESKF
 
-AT32F423KCU7-4 + LSM6DSV + IST8310 姿态固件，当前源码应用版本 `20261012g`。仓库保留固件、配套 Bootloader 与新版 gyroa 上位机的构建必需文件和许可证。
+本分支提供 `20261017j` ESKF 固件的可复现源码和 APP BIN，目标为 AT32F423KCU7-4（150 MHz）+ LSM6DSV + IST8310。默认构建已选择 J 版完整配置。
 
-## 构建固件
+- 六轴与九轴两套独立 ESKF，每个实际 IMU 样本执行 8 kHz 预测和完整 3×3 协方差传播。
+- 独立 1 kHz 姿态生成，保留 J 原有加速度、地磁观测调度和 USB/UART/CAN 接口。
+- VOFA+ 输出六轴 Yaw / Pitch / Roll；九轴滤波器仍独立运行。`VOFA_6AXIS=1` 与关闭九轴的 `SIX_AXIS=1` 含义不同，默认保留 `SIX_AXIS=0`。
+- 保留 SRAM 向量表、SRAM DRDY/SPI DMA 链路、256 帧 IMU 环形缓冲和 UART RX DMA。
+- 默认 ESKF 配置关闭温度补偿及温度学习，保留现有模型的存储格式与读取代码。
 
-需要 GNU Arm Embedded Toolchain、GNU Make，工具链加入 PATH。Windows 可使用 `mingw32-make`；主 Makefile 也支持本机 PlatformIO 工具链路径。
+这是历史实测 J 基线的源码发布分支。ABI5/Observer 等后续诊断实验未纳入；全功能生产验收尚未完成。本次发布只进行了离线构建和镜像一致性核验，没有连接或修改板卡。
+
+## 构建
+
+需要 GNU Arm Embedded Toolchain 和 GNU Make。复现所附 BIN 使用 `arm-none-eabi-gcc 7.2.1 20170904 (release)`；其他版本可能产生不同镜像。Windows 可使用 PlatformIO 的 `toolchain-gccarmnoneeabi` 和 `mingw32-make`。
 
 ```sh
-# 常用构建，具备九轴能力，可通过保存的配置切换六轴/九轴
-make -B DEBUG_BUILD=0 SIX_AXIS=0 all
-# 强制六轴构建
-make -B DEBUG_BUILD=0 SIX_AXIS=1 all
-# 配套 Bootloader
-make -C bootloader -B all
+# 默认：完整 J 配置，同时计算六轴和九轴
+make -j4 all
+
+# Windows
+mingw32-make -j4 all
 ```
 
-Windows 将命令中的 `make` 换成 `mingw32-make`。APP 输出在 `build/lsm6dsv_spi_test/release-9axis/` 或 `release-6axis/`，BL 输出在 `bootloader/build/`。生成 `.bin`、`.hex` 和 `.elf`。
+产物：`build/lsm6dsv_eskf8k_j/release-9axis/lsm6dsv_eskf8k_j.{bin,hex,elf,map}`。
+
+默认参数见 [make/eskf8k-j.mk](make/eskf8k-j.mk)，原始构建规则见 [make/firmware.mk](make/firmware.mk)。本分支没有调整 ESKF 数学、Q/R、静置门限或姿态调度。
+
+```sh
+# 保留原有 VQF/MEKF 路径，使用独立输出目录
+make PROFILE=legacy -j4 all
+```
+
+`PROFILE=legacy` 默认版本为 `20261012g`，不是 J 的 8 kHz 模式。旧版使用说明保留在 [docs/README_LEGACY.md](docs/README_LEGACY.md)，其中温度学习、控制命令和输出行为不能直接套用到 J。
+
+## APP 镜像与存储范围
+
+精确 J APP：[firmware/20261017j/lsm6dsv_eskf8k_j.bin](firmware/20261017j/lsm6dsv_eskf8k_j.bin)。
+
+```text
+SHA256 a5a7a67ecc84044255573c10c8222f744310d268fd86d41b776b2f26b02aaa0c
+```
 
 | 区域 | 地址 |
 | --- | --- |
 | Bootloader | `0x08000000`～`0x08007FFF` |
 | APP | `0x08008000`～`0x0803BFFF` |
-| 配置 / 校准 | `0x0803C000`～`0x0803FFFF` |
+| 设置、校准及模型保留区 | `0x0803C000`～`0x0803FFFF` |
 
-首次安装共享启动窗口须用 SWD 配套更新 BL 和 APP，保留配置 / 校准区。网页或串口升级仅更新 APP。已发布 BIN 在 [20261004d Release](https://github.com/Mathonix/AT32F423_LSM6DSV/releases/tag/20261004d)；配套 BL 与 20261003e 相同。
+所附 BIN 仅包含 APP，从 `0x08008000` 开始。升级应使用匹配现有 Bootloader 的 APP-only 流程，保留设置、校准和温度模型，不进行整片擦除。本次未执行烧录。
 
-## 上位机
+## 验证范围
 
-最新源码为 [upper/gyroa](upper/gyroa/README.md)，目标域名 `gyroa.233688.xyz`。需要 Node.js ≥22.12.0，在该目录执行：
+历史 J 正常 USB 测试曾测得约 83.22% 有效 CPU 占用；这是既定负载下的历史数据，不代表本次新实测或任意 USB/UART/CAN 组合均低于 85%。
 
-```sh
-npm ci
-npm run build
-npm run dev
-```
+UART 严格物理零丢帧、全负载 CAN 组合、Flash 并发、动态精度、宽温及长期生产验收仍须分别验证。六轴 Yaw 没有绝对航向观测，静置漂移与输出保持应独立评估。J 的运行时 rest-bias setter 未完整转发到 ESKF 控制路径，不能据命令 ACK 判断内部开关已改变；本分支保留其默认行为。
 
-可编辑页面在 `src/public/`，生成目录为 `dist/public/`，本地默认 `http://127.0.0.1:8833/`。真实 PCB 模型和页面所需脚本已包含，构建无需 STEP 原文件或转换工具。发布网站需自行登录目标 Cloudflare 账户后执行 `npm run deploy`。
+详细来源、构建记录和限制见 [docs/ESKF8K_J_BASELINE.md](docs/ESKF8K_J_BASELINE.md) 及 [firmware/20261017j/manifest.json](firmware/20261017j/manifest.json)。
 
-## 设备使用
-
-- VQF / EKF 姿态融合，六轴 / 九轴 / 九轴相对航向；四档滤波、运动零偏、静置零偏估计、静置参数校准与最多 50 条启动零偏历史。陀螺传播 2 kHz；EKF 的协方差和重力观测更新 200 Hz。标定基线独立保存，运行时估计基线之上的修正。
-- gyroa 设置页选择融合算法并“保存并重启”，ACK 和保存回读确认后自动重连原端口。旧配置默认 VQF；算法存储保持旧 BL 可读的 v8 主配置格式，无需为算法切换更新 BL。需 APP20261007a 或更新版本；`0x50` 查询、`0x51` 单字节设置，`0x52` 回复四字节(version/active/saved/restart-required)。
-- APP20261008a 与 gyroa 设置页支持“静置零偏估计”开关，VQF/EKF 六轴、九轴共用，立即生效并保存。关闭后保留启动/已学习的补偿和运动零偏估计，静置检测仍运行；重新开启后重新确认合格静置窗口。`0x55` 查询，`0x56` 设置单字节0/1，`0x57` 回复四字节(version/active/saved/reserved)。旧配置默认开启，无需更新 BL。
-- APP20261008b 针对 EKF 关闭静置零偏估计时调整重力观测噪声，并在加速度异常后连续确认 2 秒可靠观测再恢复运动零偏更新。确认不要求静止；启动/已学补偿保留，零角速更新仍关闭。静置估计开启时沿用原参数，VQF 不变。六轴平放时的不可观测航向零偏仍会累积，离线改善不代表实板长期精度。
-- 启动窗口 T=0～60 秒，默认 2 秒；BL 等待和零偏采集并行，到期采集不合格使用历史，不追加 APP 等待。T=0 使用历史立即启动，仍允许主动进入升级模式。
-- USB CDC 与 UART：2000000 baud；UART TX=PA0、RX=PA1，共地。USB D+=PA12、D-=PA11。
-- CAN2：RX=PA2、TX=PA3，需外接 CAN 收发器；可设置节点、输出字段和输出频率。
-- 空命令 `0x23` 查询版本（回复 `0x32`），`0x35` 查询型号（回复 `0x36`，ASCII `AT32`），`0x37` 查询实际启动零偏来源、初值及当前总补偿（回复 `0x38`）。历史回复 `0x34` v2 单位为 dps；旧 v1 为 rad/s。命令使用现有 AA55 二进制帧，不是直接发送 ASCII 命令编号。
-- 任一 USB/UART 输入 ASCII `vofa`，将两路输出切换为 JustFloat；无需空格或换行，不写入 Flash。
-- APP20261007f 的 EKF 重力更新按当前重力轴限制航向增益，静置零偏更新不回写姿态；运动加速度按方向/模长/瞬态偏差降权。`0x53` 携带一个字节(0=6D，1=9D)查询分项Yaw贡献，回复 `0x54` 60B；查询续租2秒诊断窗口，正常运行未查询时不增加诊断角度计算。回复含四类累计贡献/次数、加速度创新及权重；只有滤波器相同、generation相同且flags bit0/bit1均有效时可以比较。六轴真实正反转停检查及1000帧/s诊断负载检查已通过；短期复测不代表长期精度，六轴没有绝对航向参考。
-
-第三方许可证保留在 `LICENSES/`、SDK 的 `LICENSE` 和上位机 `THIRD-PARTY-NOTICES.txt`。构建产物、旧工程、采集数据及本机工具不纳入当前仓库目录。
-
-### 温度零偏学习与自动保存（20261012g）
-
-后台学习由固件独立运行，新学习范围为芯片温度 10～60°C；静止确认 10 秒后采集 30 秒，通过温度稳定性、噪声及已有记录一致性检查后更新工作表。记录保持 V4 A/B 格式与 26 槽布局，候选、确认和隔离状态分别保留；隔离节点不参与补偿，新模型在下一次启动生效。
-
-有待保存修改时，普通运行模式可以自动写入 Flash，无需上位机或设置模式。首次写入须启动满 30 分钟，后续间隔至少 30 分钟，每次启动最多 4 次尝试，且须连续合格静止 10 秒、无校准或采集等冲突。未读取的普通 USB/WebUSB 遥测不阻挡保存；已排队的控制回复仍须发送完成。保存会短暂停顿采样，沿用采样时间重建和跨间隔样本丢弃处理。
-
-定向检查、APP 编译及实板烧录、重启记录保留检查已通过。本次实板观察没有产生新的合格待保存记录，实际自动提交尚未覆盖，不代表全温度范围或长期姿态精度验证。
-
-### 加速度计量程（20261012a）
-
-上位机“设置 → 设备 → 加速度计量程”支持 ±2、±4、±8、±16 g。默认 ±4 g；与启动配置一起保存，勾选“保存后重启”可自动重启重连后生效。旧固件连接时禁用该选项。切换量程同时更新传感器 CTRL8、原始数据换算、姿态融合、六面校准和全部加速度遥测；现有校准参数保留。
-
-设备配置回复 `0x07` v5 长度 30B，前 28B 沿用 v4，偏移 28/29 是当前/已保存加速度计量程（单位 g）。`0x1E` 新增 8B 写入格式：`mode:u8, fast_start:u8, apply_now:u8, init_ms:u16LE, gyro_range_dps:u16LE, acc_range_g:u8`；旧 3/5/7B 格式保留已保存的加速度计量程。新配置存在 v8 设置日志的 292B 偏移、16B 独立 CRC 扩展，主记录保持旧 BL 可读；旧记录回退 ±4 g，无需更新 BL。
-
-### 20261012c 动态航向修正
-
-融合改为直接积分每个 2000 Hz 采样时刻的、经过温度和比例因子修正的陀螺仪读数。30 Hz 软件滤波保留用于静置校准和噪声诊断；显示仍沿用四元数姿态滤波。三轴角速度先分别低通会改变组合转动的路径，产生锥运动（coning）误差，回到相同物理姿态后仍可能有航向偏差。
-
-原生回归使用已知零航向、起止为同一姿态的 16 个多轴轨迹。6 Hz、±8° 的 10 秒闭合倾斜运动中，旧的 30 Hz 路径偏差约 3.0194°，当前路径低于 0.005°；另验证真实 1°/s 缓慢转动能正常输出。此结果验证了实现问题，不是对实物全部误差的精度承诺。六轴航向无绝对方向观测，残余零偏、比例误差和冲击仍需实物复测。
-
-采集期间仅对正在录制的端口限制普通显示遥测到最多 100 Hz，减少与九通道独立采集流的带宽竞争。命令回复、其他端口、采集频率和持久化参数保留；停止采集后自动恢复日常输出。
+新版上位机仍在 [upper/gyroa](upper/gyroa/README.md)，第三方许可证保留在 `LICENSES/`、SDK 的 `LICENSE` 与上位机的 notices 中。原始传感器录制、私有校准、温度模型及 Flash 备份不随本分支发布。

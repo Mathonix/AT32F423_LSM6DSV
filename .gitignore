@@ -4,6 +4,9 @@
 !/.gitignore
 !/README.md
 !/Makefile
+!/make/
+!/docs/
+!/firmware/
 !/LICENSES/
 !/src/
 !/inc/
@@ -149,3 +152,6 @@ Desktop.ini
 *.zip
 *.7z
 *.rar
+
+# Explicit public APP artifact; no device dumps or private model data.
+!/firmware/20261017j/lsm6dsv_eskf8k_j.bin

@@ -8,6 +8,9 @@
 #endif
 static uint8_t update_status;
 static uint32_t last_address;
+static volatile uint8_t user_bl_armed;
+void user_bl_arm(void) { user_bl_armed = 1U; }
+void user_bl_disarm(void) { user_bl_armed = 0U; }
 uint32_t user_bl_crc(const void *data, uint32_t size)
 {
   const uint8_t *p=data; uint32_t crc=0xFFFFFFFFU;
@@ -21,6 +24,10 @@ uint8_t user_bl_program(const uint8_t *image, uint32_t size, uint32_t crc)
   uint32_t sp,pc, primask;
   uintptr_t begin=(uintptr_t)image;
   update_status=3; last_address=0;
+  /* The vendor controller path is not the capture gate. Refuse unless the
+   * maintenance command armed this call. The latch is consumed before erase. */
+  if(!user_bl_armed) return update_status;
+  user_bl_armed = 0U;
   /* Embedded source must be wholly in the still-running APP partition. */
   if(size!=USER_BL_BYTES || begin<0x08008000U || begin>0x0803C000U-size ||
      *(const volatile uint32_t *)0xE0042000U!=0x700A3253U || user_bl_crc(image,size)!=crc) return update_status;

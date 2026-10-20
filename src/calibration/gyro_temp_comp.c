@@ -2,6 +2,7 @@
 #include "gyro_bias_history.h"
 #include "app_config.h"
 #include "at32f423_flash.h"
+#include "flash_sram.h"
 #include <math.h>
 #include <stddef.h>
 #include <string.h>

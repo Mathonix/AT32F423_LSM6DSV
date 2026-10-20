@@ -5,6 +5,7 @@
 
 #include "at32f423_clock.h"
 #include "bsp.h"
+#include "eskf8k_hotspot.h"
 #include "lsm6dsv.h"
 #include "ist8310.h"
 #include "ws2812.h"
@@ -13,6 +14,11 @@
 #include "zaru_heading_hold.h"
 #include "yaw_reference.h"
 #include "app_config.h"
+#include "static6_diag.h"
+#if APP_EXPERIMENTAL_ESKF8K
+#include "imu8k_capture.h"
+#include "eskf8k_validation.h"
+#endif
 #include "vqf_live.h"
 #include "mag_calibration.h"
 #include "acc_calibration.h"
@@ -25,10 +31,13 @@
 #include "vqf_static_cal.h"
 #include "can_test.h"
 #include "usb_cdc.h"
+#include "usb_diag.h"
+#include "uart_tx_diag.h"
 #include "protocol.h"
 #include "inertial_stream.h"
 #include "data_capture.h"
 #include "fusion_settings.h"
+#include "flash_gate.h"
 #include "gyro_range.h"
 #include "acc_range.h"
 #include "boot_request.h"
@@ -41,6 +50,11 @@ static uint32_t user_bl_requested_ms;
 #include <math.h>
 #include <string.h>
 
+#if APP_EXPERIMENTAL_ESKF8K
+#define SAMPLE_NOW_MS sample_ms
+#else
+#define SAMPLE_NOW_MS millis()
+#endif
 #define FUSION_RATE_HZ       APP_FUSION_HZ
 #define FUSION_HZ            ((float)FUSION_RATE_HZ)
 #if (APP_VOFA_OUTPUT_HZ == 0U)
@@ -69,10 +83,10 @@ static uint32_t user_bl_requested_ms;
 #define CAL_BIAS_TEMP_WINDOW_C APP_GYR_BIAS_TEMP_WINDOW_C
 #define GYR_LPF_CUTOFF_HZ APP_GYR_LPF_CUTOFF_HZ /* reduce gyro noise before integration */
 #define ERR_STREAK_RECOVER   20U
-#define MAG_PERIOD_N         40U /* read IST8310 at 50 Hz */
+#define MAG_PERIOD_N         (APP_FUSION_HZ / 50U) /* read IST8310 at 50 Hz */
 #define MAG_VQF_DIV          APP_MAG_VQF_UPDATE_DIV /* Full VQF update at 10 Hz */
 #define MAG_FUSION_ENABLE    APP_MAG_FUSION_ENABLE
-#define MAG_TIMEOUT_N        30U
+#define MAG_TIMEOUT_N        (APP_FUSION_HZ * 15U / 1000U)
 #define MAG_UT_PER_LSB       0.3f
 
 /* Separate startup diagnostic ABI; existing live telemetry stays unchanged. */
@@ -106,6 +120,25 @@ volatile struct {
   float yaw, pitch, roll, temperature_c;
 } vofa_pose_live = {0x56504F53U, 0U, 0U, 0.0f, 0.0f, 0.0f, 25.0f};
 
+#if APP_EXPERIMENTAL_ESKF8K
+/* Independent 1 ms pose schedule. Bit 31 of flags is the armed bit.
+ * Bit 0 is the rest flag copied with ax..gz at generation. */
+volatile struct {
+  uint32_t magic;
+  uint32_t due_count;
+  uint32_t generated_count;
+  uint32_t deadline_miss_count;
+  uint32_t skipped_due_count;
+  uint32_t seq;
+  uint32_t time_us;
+  uint32_t sample_age_us;
+  uint32_t max_lateness_us;
+  uint32_t next_due_us;
+  uint32_t flags;
+  float ax, ay, az, gx, gy, gz;
+} pose_sched_live = {0x31534F50U};
+#endif
+
 volatile vqf_live_t vqf_live;
 volatile vqf_tune_live_t vqf_tune_live;
 volatile yaw_kf_sync_live_t yaw_kf_sync_live = {
@@ -124,12 +157,74 @@ volatile struct {
 _Static_assert(VOFA_MAX_BYTES >= AHRS_FRAME_OVERHEAD + sizeof(ahrs_payload_imu_t),
                "IMU packet exceeds telemetry DMA buffer");
 
+#if !APP_UART_TX_QUEUE_FIX
 static uint8_t vofa_dma[2][VOFA_MAX_BYTES];
+#endif
+#if !APP_USB_DIAG
 static uint8_t usb_telemetry[VOFA_MAX_BYTES];
+#endif
+#if APP_UART_TX_QUEUE_FIX
+static uint8_t uart_stream32;
+#else
 static uint8_t vofa_sel;
+#endif
 static uint32_t vofa_late;
 static uint32_t app_sample_skips;
 static uint32_t app_gyro_clip_n;
+#if APP_EXPERIMENTAL_ESKF8K
+/* Standalone ABI; never changes the legacy live/USB packet layout. */
+volatile struct {
+  uint32_t magic,seq,start_ms,ms,clock_hz,samples,outputs,health_fault;
+  uint32_t dt_gap_n,dt_max_cycles,sample_age_max_cycles;
+  uint32_t spi_init_error;
+} eskf8k_app_live={0x384b4553U};
+#if APP_USB_BUFFER_FIX
+/* Free 4*128*4=2048 SRAM bytes for the measured USB latency budget.
+ * Count/sum/min/max unchanged, histogram range unchanged, bin width doubled.
+ * This changes only measurement resolution, never the measured workload. */
+#if APP_UART_TX_DIAG
+/* 384 B reclaimed for the 352 B foreground UART ledger + snapshot + ages.
+ * Only the histogram's saturating tail begins sooner; n/sum/min/max remain. */
+#if APP_STATIC6_DIAG
+/* 640 B of timing histogram tail bins fund 552 B of optional diagnostics.
+ * Counts/sums/min/max and bin widths are unchanged; tail saturates earlier. */
+#define ESKF8K_HIST_BINS 64U
+#else
+#define ESKF8K_HIST_BINS 104U
+#endif
+#else
+#define ESKF8K_HIST_BINS 128U
+#endif
+const volatile uint32_t eskf8k_hist_bins=ESKF8K_HIST_BINS;
+#else
+#define ESKF8K_HIST_BINS 256U
+#endif
+typedef struct { uint32_t n,min,max,hist[ESKF8K_HIST_BINS]; uint64_t sum; } eskf8k_time_t;
+volatile eskf8k_time_t eskf8k_app_times[4]; /* conversion, fusion, frame, service */
+/* Attempts are frames + drops. A separate offered word does not fit SRAM. */
+volatile uint32_t eskf8k_usb_frames,eskf8k_usb_drops;
+#if APP_USB_BUFFER_FIX
+const volatile uint32_t eskf8k_hist_width[4]={256U,256U,1024U,256U};
+#else
+const volatile uint32_t eskf8k_hist_width[4]={128U,128U,512U,128U};
+#endif
+volatile float eskf8k_app_state[26];
+volatile uint32_t eskf8k_capture_snapshot[38];
+static void eskf8k_time_add(unsigned slot,uint32_t cycles) {
+  volatile eskf8k_time_t* t=&eskf8k_app_times[slot];
+  if(!t->n||cycles<t->min)t->min=cycles;
+  if(cycles>t->max)t->max=cycles;
+  t->n++;t->sum+=cycles;unsigned b=cycles/eskf8k_hist_width[slot];
+#if APP_USB_BUFFER_FIX
+  unsigned bins=eskf8k_hist_bins; /* Retain explicit ABI word for host readers. */
+#else
+  unsigned bins=ESKF8K_HIST_BINS;
+#endif
+  if(b>=bins)b=bins-1U;
+  t->hist[b]++;
+}
+#endif
+
 
 static float wrap_deg(float angle)
 {
@@ -139,6 +234,11 @@ static float wrap_deg(float angle)
 }
 
 static float app_yaw_offset = 0.0f;
+#if APP_VOFA_6AXIS
+/* Output source only: keep both ESKF states and magnetic observations active.
+ * RAM-only selector is readable in the ELF;6=six-axis,9=nine-axis target. */
+static volatile uint8_t app_attitude_source = 6U;
+#endif
 static zaru_heading_hold_t app_zaru;
 static void app_zero_yaw(float current_yaw)
 {
@@ -178,6 +278,22 @@ static protocol_parser_t webusb_protocol_parser;
 static stream_mode_t app_stream_mode = STREAM_MODE_VOFA_3CH;
 static fusion_mode_t app_fusion_mode = FUSION_MODE_9AXIS;
 static device_settings_t app_saved_settings;
+enum { APP_RUN_STREAMING = 0, APP_RUN_SAVE_PENDING = 1, APP_RUN_MAINTENANCE = 2 };
+static device_settings_t app_pending_settings;
+static uint8_t app_pending_valid;
+static uint8_t app_run_mode;
+static uint8_t app_maint_hold_pose;
+static uint8_t app_flash_this_turn;
+static uint32_t app_pending_gen;
+static uint32_t app_settings_fail_gen;
+static uint8_t app_vqf_fail;
+#if APP_ACC_CAL_ENABLE
+static uint8_t app_acc_pending_valid;
+static uint8_t app_acc_fail;
+#endif
+static uint32_t app_maint_since_ms;
+static uint32_t app_realtime_session = 1U;
+static int32_t app_last_persist_error;
 static output_config_t app_outputs[2];
 static uint8_t app_fast_start;
 static uint8_t app_filter_profile = FUSION_PROFILE_DEFAULT;
@@ -213,7 +329,11 @@ static uint8_t app_temp_discard_sample;
 static uint32_t app_temp_safe_samples;
 static float app_temp_seed_dps[3]; /* Same compensated/scaled input domain as VQF. */
 static protocol_source_t app_temp_report_source=PROTOCOL_SOURCE_USB;
+#include "sram_capture.h"
 volatile uint32_t app_flash_pause_count, app_flash_pause_us;
+#if APP_SRAM_CAPTURE
+static uint32_t sram_sample_current;
+#endif
 
 static void app_request_reset(reset_request_t request)
 {
@@ -234,18 +354,95 @@ static void app_flash_pause_end(uint32_t start_cycles)
 static volatile uint8_t app_settings_mode;
 static volatile uint8_t app_settings_dirty;
 
-static int app_save_device_settings(const device_settings_t *settings)
+static const device_settings_t *app_settings_base(void)
+{
+  return app_pending_valid ? &app_pending_settings : &app_saved_settings;
+}
+
+static void app_note_persist(int result, uint8_t *status)
+{
+  if(result < 0) *status = AHRS_ACK_EXEC_FAILED;
+  else if(result > 0) *status = AHRS_ACK_PERSIST_PENDING;
+}
+
+static int app_flash_device_settings(const device_settings_t *settings)
 {
   uint32_t start = dwt_cycles();
+  uint32_t gen = app_pending_gen;
+#if APP_SRAM_CAPTURE
+  uint32_t begins = sram_live[SR_SAVE_BEGIN];
+  flash_gate_enter(FLASH_GATE_SETTINGS);
+#endif
   int result = device_settings_save(settings);
+#if APP_SRAM_CAPTURE
+  flash_gate_leave();
+  if(sram_live[SR_SAVE_BEGIN] != begins) {
+    app_flash_pause_end(start);
+    sram_live[SR_MAINT_FLASH_N]++;
+    app_maint_hold_pose = 1U;
+    app_flash_this_turn = 1U;
+  }
+#else
   app_flash_pause_end(start);
-  if(result == 0) app_saved_settings = *settings;
+#endif
+  app_last_persist_error = result;
+  if(result == 0) {
+    app_saved_settings = *settings;
+    if(app_pending_valid && app_pending_gen == gen &&
+       memcmp(&app_pending_settings, settings, sizeof(*settings)) == 0)
+      app_pending_valid = 0U;
+  } else {
+    app_settings_fail_gen = gen;
+  }
   return result;
+}
+
+static int app_save_device_settings(const device_settings_t *settings)
+{
+#if APP_SRAM_CAPTURE
+  /* Streaming keeps the 1 kHz loop. Maintenance is the only erase path. */
+  if(app_run_mode != APP_RUN_MAINTENANCE) {
+    app_pending_settings = *settings;
+    app_pending_valid = 1U;
+    if(++app_pending_gen == 0U) app_pending_gen = 1U;
+    if(app_run_mode == APP_RUN_STREAMING) app_run_mode = APP_RUN_SAVE_PENDING;
+    return 1;
+  }
+#endif
+  return app_flash_device_settings(settings);
+}
+
+static int app_mode_waiting(void)
+{
+  int waiting = app_pending_valid || gyro_temp_learning_wants_save() ||
+                gyro_temp_learning_saving() || vqf_static_cal_commit_pending();
+#if APP_ACC_CAL_ENABLE
+  waiting = waiting || app_acc_pending_valid;
+#endif
+  return waiting;
+}
+
+static void app_resume_streaming(void)
+{
+  if(app_run_mode == APP_RUN_MAINTENANCE) {
+    app_realtime_session++;
+#if APP_SRAM_CAPTURE
+    sram_live[SR_POSE_SESSION] = app_realtime_session;
+    sram_live[SR_POSE_STREAM_MIN_GAP] = 0U;
+    sram_live[SR_POSE_LAST_CY] = 0U;
+#endif
+#if APP_EXPERIMENTAL_ESKF8K
+    pose_sched_live.flags |= 0x80000000U;
+    pose_sched_live.next_due_us = micros() + 1000U;
+#endif
+  }
+  app_maint_hold_pose = 0U;
+  app_run_mode = app_mode_waiting() ? APP_RUN_SAVE_PENDING : APP_RUN_STREAMING;
 }
 
 static int app_save_settings(fusion_mode_t mode, uint16_t node_id)
 {
-  device_settings_t settings = app_saved_settings;
+  device_settings_t settings = *app_settings_base();
   settings.mode = mode;
   settings.can_node_id = node_id;
   settings.can.node_id = node_id;
@@ -254,20 +451,10 @@ static int app_save_settings(fusion_mode_t mode, uint16_t node_id)
 
 int can_test_save_config(const can_config_t *config)
 {
-  device_settings_t saved = app_saved_settings;
+  device_settings_t saved = *app_settings_base();
   saved.can = *config; saved.can_node_id = config->node_id;
   return app_save_device_settings(&saved);
 }
-
-#if APP_ACC_CAL_ENABLE
-static int app_save_acc_calibration(const acc_calibration_t *cal)
-{
-  uint32_t start = dwt_cycles();
-  int result = acc_calibration_save(cal);
-  app_flash_pause_end(start);
-  return result;
-}
-#endif
 
 static int app_save_gyro_bias(const float bias[3], float temp_c)
 {
@@ -563,6 +750,16 @@ static void protocol_reply_vqf_settings(protocol_source_t source, uint8_t seq)
   payload.default_sigma_rest_dps = defaults.bias_sigma_rest_dps;
   payload.default_rest_gyr_dps = defaults.rest_th_gyr_dps;
   payload.default_rest_acc_ms2 = defaults.rest_th_acc_ms2;
+#if APP_ESKF_REST_RELAX
+  /* This build's active ESKF gates are compiled independently of stored VQF
+   * calibration. Keep saved records intact and report what actually runs. */
+  float active_gyr_dps,active_acc_ms2;
+  vqf_get_rest_thresholds(&active_gyr_dps,&active_acc_ms2);
+  payload.rest_th_gyr_dps=active_gyr_dps;
+  payload.rest_th_acc_ms2=active_acc_ms2;
+  payload.default_rest_gyr_dps=APP_ESKF_REST_GYR_DPS;
+  payload.default_rest_acc_ms2=APP_ESKF_REST_ACC_MS2;
+#endif
   {
     uint16_t n = protocol_pack_frame(frame, sizeof(frame), AHRS_MSG_VQF_SETTINGS,
                                     seq, &payload, sizeof(payload));
@@ -570,18 +767,29 @@ static void protocol_reply_vqf_settings(protocol_source_t source, uint8_t seq)
   }
 }
 
+static void app_note_vqf_queue(void)
+{
+#if APP_SRAM_CAPTURE
+  if(vqf_static_cal_commit_pending() && app_run_mode == APP_RUN_STREAMING)
+    app_run_mode = APP_RUN_SAVE_PENDING;
+#endif
+}
+
 static void app_vqf_cal_service(uint32_t now_ms)
 {
   vqf_static_cal_status_t st;
   vqf_static_params_t params;
+#if !APP_SRAM_CAPTURE
   uint32_t start = dwt_cycles();
   int flashed = 0;
+#endif
   vqf_static_cal_tick(now_ms);
   if(!vqf_static_cal_poll(&st, &params)) {
     if(vqf_static_cal_active() && (uint32_t)(now_ms - app_vqf_cal_report_ms) >= 200U) {
       protocol_reply_vqf_cal(app_vqf_cal_port, 0U);
       app_vqf_cal_report_ms = now_ms;
     }
+    app_note_vqf_queue();
     return;
   }
   if(st.state == VQF_STATIC_CAL_DONE && st.error == VQF_STATIC_CAL_OK) {
@@ -595,14 +803,21 @@ static void app_vqf_cal_service(uint32_t now_ms)
     /* Explicit static VQF calibration remains in its compensated input
      * domain. It is not copied into the RAW temperature learning table. */
     gyro_temp_learning_gap(); app_temp_safe_samples=0U;
+#if !APP_SRAM_CAPTURE
     flashed = 1;
+#endif
     protocol_reply_vqf_cal(app_vqf_cal_port, 0U);
     protocol_reply_vqf_settings(app_vqf_cal_port, 0U);
   } else {
+#if !APP_SRAM_CAPTURE
     if(st.error == VQF_STATIC_CAL_ERR_FLASH_WRITE) flashed = 1;
+#endif
     protocol_reply_vqf_cal(app_vqf_cal_port, 0U);
   }
+#if !APP_SRAM_CAPTURE
   if(flashed) app_flash_pause_end(start);
+#endif
+  app_note_vqf_queue();
   app_vqf_cal_report_ms = now_ms;
 }
 
@@ -658,6 +873,24 @@ static void protocol_reply_ws2812(protocol_source_t source, uint8_t seq)
   uint8_t frame[AHRS_MAX_FRAME_LEN];
   uint16_t n=protocol_pack_frame(frame,sizeof(frame),AHRS_MSG_WS2812,seq,d,sizeof(d));
   if(n) (void)protocol_send_frame(source,frame,n);
+}
+
+static void protocol_reply_run_state(protocol_source_t source, uint8_t seq)
+{
+  ahrs_payload_run_state_t d;
+  uint8_t frame[AHRS_MAX_FRAME_LEN];
+  memset(&d, 0, sizeof(d));
+  d.version = 1U;
+  d.mode = app_run_mode;
+  d.settings_pending = app_pending_valid;
+  d.temp_pending = (uint8_t)(gyro_temp_learning_wants_save() || gyro_temp_learning_saving());
+  d.session = app_realtime_session;
+  d.pause_count = app_flash_pause_count;
+  d.last_pause_us = app_flash_pause_us;
+  d.pending_gen = app_pending_gen;
+  d.last_error = app_last_persist_error;
+  uint16_t n = protocol_pack_frame(frame, sizeof(frame), AHRS_MSG_RUN_STATE, seq, &d, sizeof(d));
+  if(n) (void)protocol_send_frame(source, frame, n);
 }
 
 static void protocol_reply_rest_bias(protocol_source_t source,uint8_t seq)
@@ -802,7 +1035,7 @@ static void protocol_vofa_received(void *user_data)
   }
 }
 
-static void protocol_frame_received(uint8_t msg_id, uint8_t seq,
+static void protocol_frame_dispatch(uint8_t msg_id, uint8_t seq,
                                     const uint8_t *payload, uint8_t len,
                                     void *user_data)
 {
@@ -831,7 +1064,9 @@ static void protocol_frame_received(uint8_t msg_id, uint8_t seq,
   if(msg_id==0x3DU) {
     uint32_t request[3]={0};if(len==sizeof(request))memcpy(request,payload,sizeof(request));
     if(len!=sizeof(request) || !user_bl_request_valid(request[0],request[1],request[2])) status=AHRS_ACK_INVALID_PARAM;
-    else if(source!=PROTOCOL_SOURCE_USB || !app_settings_mode || user_bl_pending || protocol_reset_pending!=RESET_NONE) status=AHRS_ACK_EXEC_FAILED;
+    else if(source!=PROTOCOL_SOURCE_USB || !app_settings_mode ||
+            app_run_mode != APP_RUN_MAINTENANCE || user_bl_pending ||
+            protocol_reset_pending!=RESET_NONE) status=AHRS_ACK_EXEC_FAILED;
     if(protocol_reply_ack(source,seq,msg_id,status,0)==0 && status==AHRS_ACK_SUCCESS) {user_bl_pending=1;user_bl_requested_ms=millis();}
     return;
   }
@@ -878,9 +1113,12 @@ static void protocol_frame_received(uint8_t msg_id, uint8_t seq,
       else if(!app_fusion_ready || vqf_static_cal_active() || acc_cal_rt.active ||
               inertial_stream_active(&app_ins_stream) || protocol_reset_pending!=RESET_NONE) status=AHRS_ACK_EXEC_FAILED;
       else {
-        device_settings_t saved=app_saved_settings;saved.rest_bias_enabled=payload[0];
-        if(app_save_device_settings(&saved)!=0) status=AHRS_ACK_EXEC_FAILED;
-        else vqf_set_rest_bias_enabled(saved.rest_bias_enabled);
+        device_settings_t saved=*app_settings_base();saved.rest_bias_enabled=payload[0];
+        {
+          int persist=app_save_device_settings(&saved);
+          app_note_persist(persist,&status);
+          if(persist>=0) vqf_set_rest_bias_enabled(saved.rest_bias_enabled);
+        }
       }
       protocol_reply_ack(source,seq,msg_id,status,0U);
       protocol_reply_rest_bias(source,seq);
@@ -890,12 +1128,16 @@ static void protocol_frame_received(uint8_t msg_id, uint8_t seq,
       else protocol_reply_algorithm(source,seq);
       break;
     case AHRS_CMD_SET_ALGORITHM:
+#if APP_EXPERIMENTAL_ESKF8K
+      protocol_reply_ack(source,seq,msg_id,AHRS_ACK_EXEC_FAILED,0U);
+      protocol_reply_algorithm(source,seq);break;
+#endif
       if(len!=1U || payload[0]>=FUSION_ALGORITHM_COUNT) status=AHRS_ACK_INVALID_PARAM;
       else if(!app_fusion_ready || vqf_static_cal_active() || acc_cal_rt.active ||
               inertial_stream_active(&app_ins_stream) || protocol_reset_pending!=RESET_NONE) status=AHRS_ACK_EXEC_FAILED;
       else {
-        device_settings_t saved=app_saved_settings;saved.fusion_algorithm=payload[0];
-        if(app_save_device_settings(&saved)!=0) status=AHRS_ACK_EXEC_FAILED;
+        device_settings_t saved=*app_settings_base();saved.fusion_algorithm=payload[0];
+        app_note_persist(app_save_device_settings(&saved),&status);
       }
       protocol_reply_ack(source,seq,msg_id,status,0U);
       protocol_reply_algorithm(source,seq);
@@ -928,9 +1170,12 @@ static void protocol_frame_received(uint8_t msg_id, uint8_t seq,
       if(status==AHRS_ACK_SUCCESS && (!app_fusion_ready || vqf_static_cal_active() || acc_cal_rt.active ||
           inertial_stream_active(&app_ins_stream) || protocol_reset_pending!=RESET_NONE))status=AHRS_ACK_EXEC_FAILED;
       if(status==AHRS_ACK_SUCCESS) {
-        device_settings_t saved=app_saved_settings;saved.mag_cal=cal;
-        if(app_save_device_settings(&saved)!=0)status=AHRS_ACK_EXEC_FAILED;
-        else {app_mag_sample_valid=0U;vqf_reset_mag_reference();}
+        device_settings_t saved=*app_settings_base();saved.mag_cal=cal;
+        {
+          int persist=app_save_device_settings(&saved);
+          app_note_persist(persist,&status);
+          if(persist>=0) {app_mag_sample_valid=0U;vqf_reset_mag_reference();}
+        }
       }
       protocol_reply_ack(source,seq,msg_id,status,0U);protocol_reply_mag_cal(source,seq);break;
     }
@@ -943,10 +1188,13 @@ static void protocol_frame_received(uint8_t msg_id, uint8_t seq,
       else if(!app_fusion_ready || vqf_static_cal_active() || acc_cal_rt.active ||
               inertial_stream_active(&app_ins_stream) || protocol_reset_pending!=RESET_NONE) status=AHRS_ACK_EXEC_FAILED;
       else {
-        device_settings_t saved=app_saved_settings;
+        device_settings_t saved=*app_settings_base();
         saved.mag_rejection_enabled=payload[0];
-        if(app_save_device_settings(&saved)!=0) status=AHRS_ACK_EXEC_FAILED;
-        else vqf_set_mag_rejection_enabled(saved.mag_rejection_enabled);
+        {
+          int persist=app_save_device_settings(&saved);
+          app_note_persist(persist,&status);
+          if(persist>=0) vqf_set_mag_rejection_enabled(saved.mag_rejection_enabled);
+        }
       }
       protocol_reply_ack(source,seq,msg_id,status,0U);
       protocol_reply_mag_rejection(source,seq);
@@ -959,13 +1207,122 @@ static void protocol_frame_received(uint8_t msg_id, uint8_t seq,
       if(len!=1U || payload[0]>1U) status=AHRS_ACK_INVALID_PARAM;
       else if(vqf_static_cal_active() || acc_cal_rt.active || protocol_reset_pending!=RESET_NONE) status=AHRS_ACK_EXEC_FAILED;
       else {
-        device_settings_t saved=app_saved_settings;
+        device_settings_t saved=*app_settings_base();
         saved.ws2812_enabled=payload[0];
-        if(app_save_device_settings(&saved)!=0) status=AHRS_ACK_EXEC_FAILED;
-        else ws2812_set_enabled(saved.ws2812_enabled);
+        {
+          int persist=app_save_device_settings(&saved);
+          app_note_persist(persist,&status);
+          if(persist>=0) ws2812_set_enabled(saved.ws2812_enabled);
+        }
       }
       protocol_reply_ack(source,seq,msg_id,status,ws2812_get_enabled());
       protocol_reply_ws2812(source,seq);
+      break;
+#if APP_UART_TX_DIAG
+    #if APP_UART_TX_PAD_TEST
+    case AHRS_CMD_UART_PADDING_TEST:
+      if(len!=2U || payload[0]!=1U ||
+         app_outputs[PROTOCOL_SOURCE_UART].format!=OUTPUT_FORMAT_CUSTOM ||
+         uart_tx_padding_set(payload[1])!=0) status=AHRS_ACK_INVALID_PARAM;
+      protocol_reply_ack(source,seq,msg_id,status,status?0U:payload[1]);break;
+    #endif
+    #if APP_UART_TX_QUEUE_FIX
+    case AHRS_CMD_UART_STREAM32:
+      if(len!=2U || payload[0]!=1U || payload[1]>1U ||
+         app_outputs[PROTOCOL_SOURCE_UART].format!=OUTPUT_FORMAT_CUSTOM)
+        status=AHRS_ACK_INVALID_PARAM;
+      else uart_stream32=payload[1];
+      protocol_reply_ack(source,seq,msg_id,status,uart_stream32);break;
+    #endif
+    case AHRS_CMD_UART_TX_DIAG:
+      if(len!=6U || payload[0]!=1U || payload[1]>2U) {
+        protocol_reply_ack(source,seq,msg_id,AHRS_ACK_INVALID_PARAM,0U);
+      } else {
+        uint32_t token;memcpy(&token,payload+2U,4U);
+        if(payload[1]==0U)token=uart_tx_diag_freeze();
+        else if(token!=uart_tx_diag_snapshot[UT_TOKEN]) {
+          protocol_reply_ack(source,seq,msg_id,AHRS_ACK_EXEC_FAILED,0U);break;
+        }
+        uint8_t reply[64],frame[AHRS_MAX_FRAME_LEN];
+        unsigned first=payload[1]*14U,count=UT_WORDS-first;
+        if(count>14U)count=14U;
+        reply[0]=1U;reply[1]=payload[1];reply[2]=(uint8_t)count;reply[3]=0U;
+        memcpy(reply+4U,&token,4U);
+        memcpy(reply+8U,uart_tx_diag_snapshot+first,4U*count);
+        uint16_t n=protocol_pack_frame(frame,sizeof(frame),AHRS_MSG_UART_TX_DIAG,seq,reply,(uint8_t)(8U+4U*count));
+        if(n)protocol_send_frame(source,frame,n);
+      }
+      break;
+#endif
+#if APP_USB_DIAG
+#if APP_STATIC6_DIAG
+    case 0x70U: /* RAM-only optional static diagnostics; no estimator changes. */
+      if(source!=PROTOCOL_SOURCE_USB || len!=2U || payload[0]!=1U || payload[1]>1U ||
+         app_outputs[PROTOCOL_SOURCE_USB].format!=OUTPUT_FORMAT_CUSTOM)
+        status=AHRS_ACK_INVALID_PARAM;
+      else {
+        if(static6_enabled!=payload[1])static6_work.n=0U;
+        static6_enabled=payload[1];
+      }
+      protocol_reply_ack(source,seq,msg_id,status,(uint16_t)static6_enabled);break;
+#endif
+    case AHRS_CMD_USB_DIAG:
+      if(len!=2U || payload[0]!=1U || payload[1]>2U) {
+        protocol_reply_ack(source,seq,msg_id,AHRS_ACK_INVALID_PARAM,0U);
+      } else {
+        uint8_t reply[60],frame[AHRS_MAX_FRAME_LEN];
+        unsigned first=payload[1]*14U, count=UD_WORDS-first;
+        if(count>14U)count=14U;
+        reply[0]=2U;reply[1]=payload[1];reply[2]=(uint8_t)count;reply[3]=0U;
+        for(unsigned i=0;i<count;++i) {
+          uint32_t word=usb_diag[first+i];
+          memcpy(reply+4U+4U*i,&word,4U);
+        }
+        uint16_t n=protocol_pack_frame(frame,sizeof(frame),AHRS_MSG_USB_DIAG,seq,reply,(uint8_t)(4U+4U*count));
+        if(n)protocol_send_frame(source,frame,n);
+      }
+      break;
+    case AHRS_CMD_USB_STREAM32:
+      if(source!=PROTOCOL_SOURCE_USB || len!=2U || payload[0]!=1U || payload[1]>1U ||
+         app_outputs[PROTOCOL_SOURCE_USB].format!=OUTPUT_FORMAT_CUSTOM) {
+        protocol_reply_ack(source,seq,msg_id,AHRS_ACK_INVALID_PARAM,0U);
+      } else {
+        usb_diag[UD_STREAM32]=payload[1];
+        protocol_reply_ack(source,seq,msg_id,AHRS_ACK_SUCCESS,(uint16_t)usb_diag[UD_STREAM32]);
+      }
+      break;
+#if APP_USB_TX_CHAIN
+    case AHRS_CMD_USB_PEAK_BOUNDARY:
+      if(source!=PROTOCOL_SOURCE_USB || len!=2U || payload[0]!=1U || payload[1]!=0x50U)
+        status=AHRS_ACK_INVALID_PARAM;
+      else if(usb_cdc_reset_peaks()!=0)status=AHRS_ACK_EXEC_FAILED;
+      protocol_reply_ack(source,seq,msg_id,status,0U);
+      break;
+#endif
+#endif
+    case AHRS_CMD_QUERY_RUN_STATE:
+      if(len != 0U) protocol_reply_ack(source, seq, msg_id, AHRS_ACK_INVALID_PARAM, 0U);
+      else protocol_reply_run_state(source, seq);
+      break;
+    case AHRS_CMD_SET_RUN_STATE:
+      if(len != 2U || payload == NULL || payload[0] != 1U || payload[1] < 1U || payload[1] > 2U)
+        status = AHRS_ACK_INVALID_PARAM;
+      else if(payload[1] == 1U) {
+        app_run_mode = APP_RUN_MAINTENANCE;
+        app_maint_since_ms = millis();
+        app_settings_fail_gen = 0U;
+        app_vqf_fail = 0U;
+#if APP_ACC_CAL_ENABLE
+        app_acc_fail = 0U;
+#endif
+#if APP_SRAM_CAPTURE
+        sram_live[SR_MAINT_ENTRIES]++;
+#endif
+      } else if(app_run_mode == APP_RUN_MAINTENANCE) {
+        app_resume_streaming();
+      }
+      protocol_reply_ack(source, seq, msg_id, status, app_run_mode);
+      protocol_reply_run_state(source, seq);
       break;
     case AHRS_CMD_QUERY_MAGNETOMETER:
       if(len != 0U) protocol_reply_ack(source,seq,msg_id,AHRS_ACK_INVALID_PARAM,0U);
@@ -1042,14 +1399,18 @@ static void protocol_frame_received(uint8_t msg_id, uint8_t seq,
         }
         else
         {
-          device_settings_t saved = app_saved_settings;
+          device_settings_t saved = *app_settings_base();
           saved.output_hz = hz;
-          if(app_save_device_settings(&saved) != 0) status = AHRS_ACK_EXEC_FAILED;
-          else { app_output_hz = hz; app_output_div = (uint16_t)(APP_FUSION_HZ / hz); }
+          {
+            int persist = app_save_device_settings(&saved);
+            app_note_persist(persist, &status);
+            if(persist >= 0) { app_output_hz = hz; app_output_div = (uint16_t)(APP_FUSION_HZ / hz); }
+          }
         }
       }
       protocol_reply_ack(source, seq, msg_id, status, app_output_hz);
-      if(status == AHRS_ACK_SUCCESS) protocol_reply_config(source, seq);
+      if(status == AHRS_ACK_SUCCESS || status == AHRS_ACK_PERSIST_PENDING)
+        protocol_reply_config(source, seq);
       break;
     case AHRS_CMD_QUERY_STATUS:
       if(len != 0U)
@@ -1087,14 +1448,11 @@ static void protocol_frame_received(uint8_t msg_id, uint8_t seq,
       {
         status = (app_settings_mode == 0U) ? AHRS_ACK_EXEC_FAILED : AHRS_ACK_INVALID_PARAM;
       }
-      else if(app_save_settings((fusion_mode_t)payload[0],
-                                can_test_get_node_id()) != 0)
-      {
-        status = AHRS_ACK_EXEC_FAILED;
-      }
       else
       {
-        app_settings_dirty = 1U;
+        int persist = app_save_settings((fusion_mode_t)payload[0], can_test_get_node_id());
+        app_note_persist(persist, &status);
+        if(persist >= 0) app_settings_dirty = 1U;
       }
       /* Do not reboot if the success reply could not enter the TX queue. */
       if(protocol_reply_ack(source, seq, msg_id, status,
@@ -1110,15 +1468,14 @@ static void protocol_frame_received(uint8_t msg_id, uint8_t seq,
       else
       {
         uint16_t node_id = (uint16_t)payload[0] | ((uint16_t)payload[1] << 8);
-        if((node_id > 0x7FFU) ||
-           (app_save_settings(app_saved_settings.mode, node_id) != 0) ||
-           (can_test_set_node_id(node_id) != 0))
-        {
-          status = (node_id > 0x7FFU) ? AHRS_ACK_INVALID_PARAM : AHRS_ACK_EXEC_FAILED;
-        }
-        else
-        {
+        int persist = 0;
+        if(node_id > 0x7FFU) status = AHRS_ACK_INVALID_PARAM;
+        else if((persist = app_save_settings(app_settings_base()->mode, node_id)) < 0 ||
+                can_test_set_node_id(node_id) != 0)
+          status = AHRS_ACK_EXEC_FAILED;
+        else {
           app_settings_dirty = 1U;
+          app_note_persist(persist, &status);
         }
       }
       protocol_reply_ack(source, seq, msg_id, status,
@@ -1176,10 +1533,12 @@ static void protocol_frame_received(uint8_t msg_id, uint8_t seq,
       else if(!payload || len!=2U || payload[0]>=FUSION_PROFILE_COUNT || payload[1]>1U)
         status=AHRS_ACK_INVALID_PARAM;
       else {
-        device_settings_t saved=app_saved_settings;
+        device_settings_t saved=*app_settings_base();
         saved.filter_profile=payload[0];
-        if(payload[1] && app_save_device_settings(&saved)) status=AHRS_ACK_EXEC_FAILED;
+        int persist = payload[1] ? app_save_device_settings(&saved) : 0;
+        if(persist < 0) status=AHRS_ACK_EXEC_FAILED;
         else {
+          app_note_persist(persist, &status);
           app_filter_profile=payload[0];
           vqf_apply_profile(app_filter_profile);
           if(vqf_static_cal_source() == VQF_STATIC_CAL_SOURCE_CAL) {
@@ -1226,10 +1585,13 @@ static void protocol_frame_received(uint8_t msg_id, uint8_t seq,
         if(req.persist > 1U || req.reserved != 0U || !zaru_limits_valid(&next))
           status = AHRS_ACK_INVALID_PARAM;
         else if(req.persist) {
-          device_settings_t saved = app_saved_settings;
+          device_settings_t saved = *app_settings_base();
           saved.zaru = next;
-          if(app_save_device_settings(&saved) != 0) status = AHRS_ACK_EXEC_FAILED;
-          else app_zaru_limits = next;
+          {
+            int persist = app_save_device_settings(&saved);
+            app_note_persist(persist, &status);
+            if(persist >= 0) app_zaru_limits = next;
+          }
         } else app_zaru_limits = next;
       }
       protocol_reply_ack(source, seq, msg_id, status, 0);
@@ -1244,10 +1606,13 @@ static void protocol_frame_received(uint8_t msg_id, uint8_t seq,
         zaru_limits_t next;
         zaru_limits_default(&next);
         if(payload[0]) {
-          device_settings_t saved = app_saved_settings;
+          device_settings_t saved = *app_settings_base();
           saved.zaru = next;
-          if(app_save_device_settings(&saved) != 0) status = AHRS_ACK_EXEC_FAILED;
-          else app_zaru_limits = next;
+          {
+            int persist = app_save_device_settings(&saved);
+            app_note_persist(persist, &status);
+            if(persist >= 0) app_zaru_limits = next;
+          }
         } else app_zaru_limits = next;
       }
       protocol_reply_ack(source, seq, msg_id, status, 0);
@@ -1267,14 +1632,15 @@ static void protocol_frame_received(uint8_t msg_id, uint8_t seq,
         can_test_get_config(&previous);
         if(!can_config_valid(&config)) status = AHRS_ACK_INVALID_PARAM;
         else {
-          uint32_t start = dwt_cycles();
+          int persist = 0;
           if(can_test_set_config(&config)) status = AHRS_ACK_EXEC_FAILED;
-          else if(payload[10] && can_test_save_config(&config)) {
-            (void)can_test_set_config(&previous);
-            status = AHRS_ACK_EXEC_FAILED;
+          else if(payload[10]) {
+            persist = can_test_save_config(&config);
+            if(persist < 0) {
+              (void)can_test_set_config(&previous);
+              status = AHRS_ACK_EXEC_FAILED;
+            } else app_note_persist(persist, &status);
           }
-          /* Freeze-mode transitions and flash saves must not distort fusion dt. */
-          app_flash_pause_end(start);
         }
       }
       protocol_reply_ack(source, seq, msg_id, status, 0);
@@ -1287,7 +1653,7 @@ static void protocol_frame_received(uint8_t msg_id, uint8_t seq,
               (!APP_MAG_FUSION_ENABLE && payload[0] != FUSION_MODE_6AXIS))
         status = AHRS_ACK_INVALID_PARAM;
       else {
-        device_settings_t saved = app_saved_settings;
+        device_settings_t saved = *app_settings_base();
         saved.mode = (fusion_mode_t)payload[0]; saved.fast_start = payload[1];
         if(len >= 5U) saved.gyro_init_ms = (uint16_t)payload[3] | ((uint16_t)payload[4] << 8);
         if(len >= 7U) saved.gyro_range_dps = (uint16_t)payload[5] | ((uint16_t)payload[6] << 8);
@@ -1295,8 +1661,11 @@ static void protocol_frame_received(uint8_t msg_id, uint8_t seq,
         saved.fast_start = saved.gyro_init_ms == 0U;
         if(saved.gyro_init_ms > APP_GYR_INIT_MAX_MS || !gyro_range_valid(saved.gyro_range_dps) || !acc_range_valid(saved.acc_range_g))
           status = AHRS_ACK_INVALID_PARAM;
-        else if(app_save_device_settings(&saved) != 0) status = AHRS_ACK_EXEC_FAILED;
-        else app_settings_dirty = (saved.mode != app_fusion_mode || saved.fast_start != app_fast_start || saved.gyro_init_ms != app_gyro_init_ms || saved.gyro_range_dps != app_gyro_range_dps || saved.acc_range_g != app_acc_range_g);
+        else {
+          int persist = app_save_device_settings(&saved);
+          app_note_persist(persist, &status);
+          if(persist >= 0) app_settings_dirty = (saved.mode != app_fusion_mode || saved.fast_start != app_fast_start || saved.gyro_init_ms != app_gyro_init_ms || saved.gyro_range_dps != app_gyro_range_dps || saved.acc_range_g != app_acc_range_g);
+        }
       }
       if(protocol_reply_ack(source, seq, msg_id, status, (uint16_t)app_saved_settings.mode) == 0 &&
          status == AHRS_ACK_SUCCESS && payload[2]) app_request_reset(RESET_APPLICATION);
@@ -1309,14 +1678,22 @@ static void protocol_frame_received(uint8_t msg_id, uint8_t seq,
         output_config_t output = {payload[1], 0U, (uint16_t)(payload[2] | ((uint16_t)payload[3] << 8))};
         if(!protocol_output_config_valid(&output)) status = AHRS_ACK_INVALID_PARAM;
         else {
-          device_settings_t saved = app_saved_settings;
+          device_settings_t saved = *app_settings_base();
           saved.outputs[payload[0]] = output;
-          if(payload[4] && app_save_device_settings(&saved) != 0) status = AHRS_ACK_EXEC_FAILED;
-          else app_outputs[payload[0]] = output;
+          int persist = payload[4] ? app_save_device_settings(&saved) : 0;
+          if(persist < 0) status = AHRS_ACK_EXEC_FAILED;
+          else {
+            app_note_persist(persist, &status); app_outputs[payload[0]] = output;
+#if APP_UART_TX_PAD_TEST
+            if(payload[0]==PROTOCOL_SOURCE_UART && output.format!=OUTPUT_FORMAT_CUSTOM)
+              (void)uart_tx_padding_set(0U);
+#endif
+          }
         }
       }
       protocol_reply_ack(source, seq, msg_id, status, (len == 5U && payload) ? payload[0] : 0U);
-      if(status == AHRS_ACK_SUCCESS) protocol_reply_config(source, seq);
+      if(status == AHRS_ACK_SUCCESS || status == AHRS_ACK_PERSIST_PENDING)
+        protocol_reply_config(source, seq);
       break;
     case AHRS_CMD_START_GYRO_CAL_60S:
       /* Runtime calibration is not yet a blocking operation. Reuse the
@@ -1391,8 +1768,8 @@ static void protocol_frame_received(uint8_t msg_id, uint8_t seq,
       if(status==AHRS_ACK_SUCCESS && (!app_fusion_ready || vqf_static_cal_active() || acc_cal_rt.active ||
           inertial_stream_active(&app_ins_stream) || protocol_reset_pending!=RESET_NONE)) status=AHRS_ACK_EXEC_FAILED;
       if(status==AHRS_ACK_SUCCESS) {
-        device_settings_t saved=app_saved_settings;saved.gyro_scale=parameters;
-        if(app_save_device_settings(&saved)!=0)status=AHRS_ACK_EXEC_FAILED;
+        device_settings_t saved=*app_settings_base();saved.gyro_scale=parameters;
+        app_note_persist(app_save_device_settings(&saved),&status);
       }
       protocol_reply_ack(source,seq,msg_id,status,0U);
       protocol_reply_gyro_scale(source,seq);
@@ -1413,9 +1790,9 @@ static void protocol_frame_received(uint8_t msg_id, uint8_t seq,
           vqf_static_cal_active() || acc_cal_rt.active || inertial_stream_active(&app_ins_stream) ||
           protocol_reset_pending!=RESET_NONE)) status=AHRS_ACK_EXEC_FAILED;
       if(status==AHRS_ACK_SUCCESS) {
-        device_settings_t saved=app_saved_settings;
+        device_settings_t saved=*app_settings_base();
         saved.vqf_tuning_enabled=1U; saved.vqf_tuning=parameters;
-        if(app_save_device_settings(&saved)!=0) status=AHRS_ACK_EXEC_FAILED;
+        app_note_persist(app_save_device_settings(&saved),&status);
       }
       protocol_reply_ack(source,seq,msg_id,status,0U);
       protocol_reply_vqf_tuning(source,seq);
@@ -1465,20 +1842,46 @@ static void protocol_frame_received(uint8_t msg_id, uint8_t seq,
       if(len) status = AHRS_ACK_INVALID_PARAM;
       else if(!app_settings_mode) status = AHRS_ACK_EXEC_FAILED;
       else {
-        uint32_t start = dwt_cycles();
         int restored = vqf_static_cal_restore_defaults();
-        if(restored == 0 || restored == -2) app_flash_pause_end(start);
-        if(restored != 0) status = AHRS_ACK_EXEC_FAILED;
+        if(restored < 0) status = AHRS_ACK_EXEC_FAILED;
         else {
-          vqf_static_params_t defaults;
-          vqf_static_cal_defaults(&defaults);
-          vqf_set_rest_thresholds(defaults.rest_th_gyr_dps, defaults.rest_th_acc_ms2);
-          vqf_set_bias_sigmas(defaults.bias_sigma_init_dps, defaults.bias_sigma_rest_dps);
-          if(app_vqf_pre_cal_bias_valid) {
-            vqf_seed_gyr_bias(app_vqf_pre_cal_bias_rad, defaults.bias_sigma_init_dps);
-            for(unsigned axis=0;axis<3;++axis)
-              app_temp_seed_dps[axis]=app_vqf_pre_cal_bias_rad[axis]/DEG2RAD;
-            gyro_temp_learning_gap(); app_temp_safe_samples=0U;
+#if APP_SRAM_CAPTURE
+          if(app_run_mode != APP_RUN_MAINTENANCE || !sram_flash_ready() || imu8k_pending() > 1U) {
+            if(app_run_mode == APP_RUN_STREAMING) app_run_mode = APP_RUN_SAVE_PENDING;
+            status = AHRS_ACK_PERSIST_PENDING;
+          } else {
+            uint32_t start = dwt_cycles();
+            uint32_t begins = sram_live[SR_SAVE_BEGIN];
+            flash_gate_enter(FLASH_GATE_RESERVED);
+            int committed = vqf_static_cal_commit_staged();
+            flash_gate_leave();
+            if(sram_live[SR_SAVE_BEGIN] != begins) {
+              app_flash_pause_end(start);
+              sram_live[SR_MAINT_FLASH_N]++;
+              app_maint_hold_pose = 1U;
+              app_flash_this_turn = 1U;
+            }
+            app_last_persist_error = committed;
+            if(committed != 0) {
+              app_vqf_fail = 1U;
+              status = AHRS_ACK_EXEC_FAILED;
+            }
+          }
+#else
+          uint32_t start = dwt_cycles();
+          if(restored == 0) app_flash_pause_end(start);
+#endif
+          {
+            vqf_static_params_t defaults;
+            vqf_static_cal_defaults(&defaults);
+            vqf_set_rest_thresholds(defaults.rest_th_gyr_dps, defaults.rest_th_acc_ms2);
+            vqf_set_bias_sigmas(defaults.bias_sigma_init_dps, defaults.bias_sigma_rest_dps);
+            if(app_vqf_pre_cal_bias_valid) {
+              vqf_seed_gyr_bias(app_vqf_pre_cal_bias_rad, defaults.bias_sigma_init_dps);
+              for(unsigned axis=0;axis<3;++axis)
+                app_temp_seed_dps[axis]=app_vqf_pre_cal_bias_rad[axis]/DEG2RAD;
+              gyro_temp_learning_gap(); app_temp_safe_samples=0U;
+            }
           }
         }
       }
@@ -1502,8 +1905,14 @@ static void acc_calibration_service_task(uint32_t now_ms)
 {
   unsigned i;
   acc_six_face_tick(&acc_cal_rt, now_ms);
-  if(acc_cal_rt.active && acc_cal_rt.phase == ACC_CAL_PHASE_SAVING)
-    acc_six_face_saved(&acc_cal_rt, app_save_acc_calibration(&acc_cal_rt.result));
+  if(acc_cal_rt.active && acc_cal_rt.phase == ACC_CAL_PHASE_SAVING) {
+    if(!app_acc_pending_valid) {
+      app_acc_pending_valid = 1U;
+      if(app_run_mode == APP_RUN_STREAMING) app_run_mode = APP_RUN_SAVE_PENDING;
+    }
+  } else {
+    app_acc_pending_valid = 0U;
+  }
   /* Keep the existing DAP status ABI, now with coherent odd/even sequence. */
   acc_cal_status_live.seq++; __DMB();
   acc_cal_status_live.millis = now_ms; acc_cal_status_live.status = acc_cal_rt.status;
@@ -1541,6 +1950,7 @@ static uint8_t temp_lpf_alpha_init;
  * noise. */
 static float update_temperature(int16_t raw_temp)
 {
+  uint64_t h=hot_begin(H_TEMP);
   const float raw_c = APP_GYR_TEMP_REF_C + ((float)raw_temp / 256.0f);
 
   if(!temp_lpf_alpha_init)
@@ -1572,7 +1982,7 @@ static float update_temperature(int16_t raw_temp)
   imu_temp_live.millis = millis();
   __DMB();
   imu_temp_live.seq++;
-  return temp_lpf_c;
+  hot_end(H_TEMP,h);return temp_lpf_c;
 }
 
 static float gyro_dps_from_raw(unsigned axis, int16_t raw, float temp_c)
@@ -1601,6 +2011,83 @@ static void protocol_reply_temp_learning(protocol_source_t source,uint8_t seq)
   if(n) (void)protocol_send_stream_frame(source,frame,n);
 }
 
+#if APP_SRAM_CAPTURE
+static int app_flash_turn_busy(void)
+{
+  return app_flash_this_turn || app_maint_hold_pose ||
+         !sram_flash_ready() || imu8k_pending() > 1U;
+}
+
+static void app_note_flash_ops(uint32_t start, uint32_t begins)
+{
+  if(sram_live[SR_SAVE_BEGIN] == begins) return;
+  app_flash_pause_end(start);
+  sram_live[SR_MAINT_FLASH_N]++;
+  app_maint_hold_pose = 1U;
+  app_flash_this_turn = 1U;
+}
+
+static void app_commit_acc_pending(void)
+{
+#if APP_ACC_CAL_ENABLE
+  uint32_t start, begins;
+  int result;
+  if(!app_acc_pending_valid || app_acc_fail || app_flash_turn_busy()) return;
+  start = dwt_cycles();
+  begins = sram_live[SR_SAVE_BEGIN];
+  flash_gate_enter(FLASH_GATE_RESERVED);
+  result = acc_calibration_save(&acc_cal_rt.result);
+  flash_gate_leave();
+  app_note_flash_ops(start, begins);
+  acc_six_face_saved(&acc_cal_rt, result);
+  app_acc_pending_valid = 0U;
+  app_last_persist_error = result;
+  if(result != 0) app_acc_fail = 1U;
+#endif
+}
+
+static void app_commit_vqf_pending(void)
+{
+  uint32_t start, begins;
+  int result;
+  if(!vqf_static_cal_commit_pending() || app_vqf_fail || app_flash_turn_busy()) return;
+  start = dwt_cycles();
+  begins = sram_live[SR_SAVE_BEGIN];
+  flash_gate_enter(FLASH_GATE_RESERVED);
+  result = vqf_static_cal_commit_staged();
+  flash_gate_leave();
+  app_note_flash_ops(start, begins);
+  app_last_persist_error = result;
+  if(result != 0) app_vqf_fail = 1U;
+}
+#endif
+
+static void app_maintenance_service(void)
+{
+#if APP_SRAM_CAPTURE
+  int settings_due = app_pending_valid && app_settings_fail_gen != app_pending_gen;
+  int acc_due = 0;
+  int vqf_due = vqf_static_cal_commit_pending() && !app_vqf_fail;
+#if APP_ACC_CAL_ENABLE
+  acc_due = app_acc_pending_valid && !app_acc_fail;
+#endif
+  if(app_run_mode != APP_RUN_MAINTENANCE) return;
+  if(app_flash_this_turn || app_maint_hold_pose) return;
+  if(settings_due) {
+    if(!sram_flash_ready() || imu8k_pending() > 1U) return;
+    (void)app_flash_device_settings(&app_pending_settings);
+    return;
+  }
+  if(acc_due) { app_commit_acc_pending(); return; }
+  if(vqf_due) { app_commit_vqf_pending(); return; }
+  if(gyro_temp_learning_wants_save() || gyro_temp_learning_saving()) return;
+  if((uint32_t)(millis() - app_maint_since_ms) < 50U) return;
+  app_resume_streaming();
+#else
+  (void)0;
+#endif
+}
+
 /* Automatic saves need no host/settings mode, but retain rest and wear gates.
  * Enter SAVING before waiting for TX so normal telemetry stops replenishing
  * the rings. Unread telemetry is preserved and never prevents the write;
@@ -1608,27 +2095,108 @@ static void protocol_reply_temp_learning(protocol_source_t source,uint8_t seq)
 static void app_temp_learning_service(uint32_t now)
 {
   uint8_t safe=(uint8_t)((app_settings_mode||APP_TEMP_FLASH_AUTO_SAVE_ENABLE)&&app_fusion_ready&&
-      app_temp_safe_samples>=APP_TEMP_LEARN_REST_MS*APP_FUSION_HZ/1000U&&
+      app_temp_safe_samples>=APP_TEMP_LEARN_REST_MS*APP_CAL_FEED_HZ/1000U&&
       !vqf_static_cal_active()&&!acc_cal_rt.active&&!inertial_stream_active(&app_ins_stream)&&
       !data_capture_active(&app_data_capture)&&protocol_reset_pending==RESET_NONE);
 #ifdef APP_USER_BL_UPDATE
   safe=0U;
 #endif
   gyro_temp_learning_environment(now,safe);
+#if APP_SRAM_CAPTURE
+  if(app_run_mode != APP_RUN_MAINTENANCE) {
+    if(gyro_temp_learning_wants_save() || gyro_temp_learning_saving()) {
+      if(app_run_mode == APP_RUN_STREAMING) app_run_mode = APP_RUN_SAVE_PENDING;
+    }
+    return;
+  }
+  if(app_flash_this_turn || app_maint_hold_pose ||
+     (app_pending_valid && app_settings_fail_gen != app_pending_gen) ||
+     vqf_static_cal_commit_pending()
+#if APP_ACC_CAL_ENABLE
+     || app_acc_pending_valid
+#endif
+     )
+    return;
+#endif
   int idle=uart_tx_idle()&&usb_cdc_control_tx_idle()&&webusb_control_tx_idle();
   if(gyro_temp_learning_saving()) {
     if(safe&&idle) {
       uint32_t start=dwt_cycles();
+#if APP_SRAM_CAPTURE
+      uint32_t begins = sram_live[SR_SAVE_BEGIN];
+      flash_gate_enter(FLASH_GATE_RESERVED);
+#endif
       gyro_temp_learning_save_finish(now);
+#if APP_SRAM_CAPTURE
+      flash_gate_leave();
+      if(sram_live[SR_SAVE_BEGIN] != begins) {
+        app_flash_pause_end(start);
+        app_temp_discard_sample=1U; app_temp_safe_samples=0U;
+        app_maint_hold_pose = 1U;
+        app_flash_this_turn = 1U;
+        sram_live[SR_MAINT_FLASH_N]++;
+      }
+#else
       app_flash_pause_end(start); app_temp_discard_sample=1U; app_temp_safe_samples=0U;
+#endif
       protocol_reply_temp_learning(app_temp_report_source,0U);
     }
   } else if(gyro_temp_learning_save_begin(now))
     protocol_reply_temp_learning(app_temp_report_source,0U);
 }
 
+#if APP_EXPERIMENTAL_ESKF8K
+/* Close 1 ms slots against a foreground microsecond clock. A sample publishes
+ * the one open slot. Idle leaves that open slot due: the next sample is the
+ * publication, and an idle poll must not spend it. Slots already closed for a
+ * full millisecond are counted and are not backfilled. Lateness below 2^31 us
+ * stays valid across the 32-bit wrap. */
+static int pose_take(uint32_t now_us, int allow_generate, uint32_t *lateness)
+{
+  uint32_t overdue_u, missed_full, slots;
+  int32_t overdue;
+  int maintenance;
+  if((pose_sched_live.flags & 0x80000000U) == 0U) {
+    if(!allow_generate) return 0;
+    pose_sched_live.flags |= 0x80000000U;
+    pose_sched_live.next_due_us = now_us;
+  }
+  overdue = (int32_t)(now_us - pose_sched_live.next_due_us);
+  if(overdue < 0) return 0;
+  overdue_u = (uint32_t)overdue;
+  missed_full = overdue_u / 1000U;
+  maintenance = app_run_mode == APP_RUN_MAINTENANCE;
+  if(!allow_generate) {
+    if(missed_full == 0U) return 0;
+    pose_sched_live.due_count += missed_full;
+    pose_sched_live.skipped_due_count += missed_full;
+    if(!maintenance) pose_sched_live.deadline_miss_count += missed_full;
+    pose_sched_live.next_due_us += missed_full * 1000U;
+    return 0;
+  }
+  slots = missed_full + 1U;
+  pose_sched_live.due_count += slots;
+  pose_sched_live.next_due_us += slots * 1000U;
+  if(missed_full != 0U) {
+    pose_sched_live.skipped_due_count += missed_full;
+    if(!maintenance) pose_sched_live.deadline_miss_count += missed_full;
+  }
+  if(lateness) *lateness = overdue_u - missed_full * 1000U;
+  return 1;
+}
+static void pose_on_idle(void)
+{
+  (void)pose_take(micros(), 0, 0);
+}
+#endif
+
 static void app_update_attitude(void)
 {
+#if APP_SRAM_CAPTURE
+  sram_pose_generated(sram_sample_current, app_run_mode == APP_RUN_MAINTENANCE);
+  if(app_maint_hold_pose && app_run_mode == APP_RUN_MAINTENANCE) app_maint_hold_pose = 0U;
+#endif
+  uint64_t h=hot_begin(H_ATTITUDE);
   static yaw_reference_t relative_yaw_reference;
   static uint32_t last_cy;
   const float nominal_dt = 1.0f / ATTITUDE_FILTER_HZ;
@@ -1639,11 +2207,23 @@ static void app_update_attitude(void)
     if(elapsed>=nominal_dt*.5f && elapsed<=nominal_dt*3) dt=elapsed;
   }
   last_cy=now;
+#if APP_VOFA_6AXIS
+  vqf_get_quat6d(q6);
+  if(app_attitude_source == 6U) {
+    memcpy(target,q6,sizeof(target));
+  } else {
+    if(app_relative_yaw_enabled)
+      measured_yaw=yaw_reference_apply(&relative_yaw_reference,measured_yaw,
+                                      vqf_get_mag_delta_deg(),(uint8_t)vqf_get_mag_ready());
+    attitude_from_euler(vqf_live.roll,vqf_live.pitch,measured_yaw,target);
+  }
+#else
   if(app_relative_yaw_enabled)
     measured_yaw=yaw_reference_apply(&relative_yaw_reference,measured_yaw,
                                     vqf_get_mag_delta_deg(),(uint8_t)vqf_get_mag_ready());
   attitude_from_euler(vqf_live.roll,vqf_live.pitch,measured_yaw,target);
   vqf_get_quat6d(q6);
+#endif
   float rate=sqrtf(app_residual_dps[0]*app_residual_dps[0]+
                    app_residual_dps[1]*app_residual_dps[1]+
                    app_residual_dps[2]*app_residual_dps[2]);
@@ -1695,20 +2275,37 @@ static void app_update_attitude(void)
                        app_output_q[0],app_output_q[1],app_output_q[2],app_output_q[3],
                        imu_temp_live.temperature_c,(uint8_t)vqf_live.rest_detected);
 #endif
+  hot_end(H_ATTITUDE,h);
 }
 
 static void vofa_send_justfloat(uint32_t fusion_n)
 {
+#if APP_USB_DIAG
+  /* USB enqueue copies synchronously; staging need not occupy permanent RAM.
+   * UART DMA retains its independent two static buffers. */
+  uint8_t usb_telemetry[VOFA_MAX_BYTES];
+#endif
   float output_yaw=vofa_pose_live.yaw, output_pitch=vofa_pose_live.pitch, output_roll=vofa_pose_live.roll;
   /* Independent UART DMA storage and USB copied ring storage. Never reuse an
    * in-flight UART slot for USB packing or a failed UART DMA submission. */
   {
+#if APP_EXPERIMENTAL_ESKF8K
+    const float ax = pose_sched_live.ax, ay = pose_sched_live.ay, az = pose_sched_live.az;
+    const float gx = pose_sched_live.gx, gy = pose_sched_live.gy, gz = pose_sched_live.gz;
+    const uint8_t flags = (pose_sched_live.flags & 1U) ? AHRS_FLAG_REST_DETECTED : 0U;
+#else
+    const float ax = vqf_live.ax, ay = vqf_live.ay, az = vqf_live.az;
+    const float gx = vqf_live.gx, gy = vqf_live.gy, gz = vqf_live.gz;
+    const uint8_t flags = vqf_live.rest_detected ? AHRS_FLAG_REST_DETECTED : 0U;
+#endif
     const float fields[AHRS_FIELD_COUNT] = {
       output_yaw, output_pitch, output_roll,
-      vqf_live.ax * G_TO_MS2, vqf_live.ay * G_TO_MS2, vqf_live.az * G_TO_MS2,
-      vqf_live.gx, vqf_live.gy, vqf_live.gz
+      ax * G_TO_MS2, ay * G_TO_MS2, az * G_TO_MS2,
+      gx, gy, gz
     };
-    const uint8_t flags = vqf_live.rest_detected ? AHRS_FLAG_REST_DETECTED : 0U;
+#if APP_UART_TX_QUEUE_FIX
+    uint16_t shared_n=0U,shared_mask=0U;uint8_t shared_seq=0U;
+#endif
     for(unsigned source = 0U; source < 2U; ++source) {
       const int cdc_due=data_capture_telemetry_due(&app_data_capture,source,fusion_n,APP_FUSION_HZ);
       const int web_due=source==PROTOCOL_SOURCE_USB &&
@@ -1720,20 +2317,132 @@ static void vofa_send_justfloat(uint32_t fusion_n)
         /* Preserve the historical presets' acceleration in g. The new
          * selected-channel protocols consistently use m/s^2. */
         memcpy(legacy_fields, fields, sizeof(fields));
-        legacy_fields[3] = vqf_live.ax; legacy_fields[4] = vqf_live.ay; legacy_fields[5] = vqf_live.az;
+        legacy_fields[3] = ax; legacy_fields[4] = ay; legacy_fields[5] = az;
         port_fields = legacy_fields;
       }
+#if APP_UART_TX_QUEUE_FIX
+      uint8_t *tx=usb_telemetry; /* Both enqueue APIs copy before returning. */
+      int extended=source==PROTOCOL_SOURCE_USB ? usb_diag[UD_STREAM32] : uart_stream32;
+#else
       uint8_t *tx = source == PROTOCOL_SOURCE_UART ? vofa_dma[vofa_sel] : usb_telemetry;
+#endif
+      uint64_t h=hot_begin(H_PACK);
+#if APP_USB_PACK_FIX
+      /* Extended CDC immediately replaces this legacy frame below. Avoid
+       * computing its CRC/copy twice. Preserve one sequence increment and
+       * the separate legacy WebUSB pack after CDC has copied its frame. */
+      uint8_t output_seq=app_stream_seq[source]++;
+      uint16_t n=0U;
+      if(!(
+#if APP_UART_TX_QUEUE_FIX
+           extended &&
+#else
+           source==PROTOCOL_SOURCE_USB && usb_diag[UD_STREAM32] &&
+#endif
+           app_outputs[source].format==OUTPUT_FORMAT_CUSTOM &&
+           app_outputs[source].field_mask))
+        n=protocol_pack_output(tx,VOFA_MAX_BYTES,output_seq,&app_outputs[source],port_fields,
+                               vofa_pose_live.temperature_c,flags,(uint16_t)millis());
+#else
       uint16_t n = protocol_pack_output(tx, VOFA_MAX_BYTES, app_stream_seq[source]++,
                                        &app_outputs[source], port_fields,
-                                       imu_temp_live.temperature_c, flags, (uint16_t)millis());
+                                       vofa_pose_live.temperature_c, flags, (uint16_t)millis());
+#endif
+#if APP_USB_DIAG
+#if APP_UART_TX_QUEUE_FIX
+      {
+        if(extended && app_outputs[source].format==OUTPUT_FORMAT_CUSTOM &&
+#else
+      if(source==PROTOCOL_SOURCE_USB) {
+        if(usb_diag[UD_STREAM32] && app_outputs[source].format==OUTPUT_FORMAT_CUSTOM &&
+#endif
+           app_outputs[source].field_mask) {
+#if APP_UART_TX_QUEUE_FIX
+          if(source==PROTOCOL_SOURCE_USB && shared_n && shared_mask==app_outputs[source].field_mask && shared_seq==output_seq
+#if APP_STATIC6_DIAG
+             && !static6_enabled
+#endif
+             )
+            n=shared_n;
+          else {
+#endif
+          uint8_t payload32[
+#if APP_STATIC6_DIAG
+            56
+#else
+            52
+#endif
+          ];uint16_t used32=16U;
+          uint16_t mask32=app_outputs[source].field_mask;
+          uint32_t seq32=pose_sched_live.seq, time32=pose_sched_live.time_us, ms32=vofa_pose_live.millis;
+          payload32[0]=1U;payload32[1]=flags;
+          memcpy(payload32+2,&mask32,2U);memcpy(payload32+4,&seq32,4U);
+          memcpy(payload32+8,&time32,4U);memcpy(payload32+12,&ms32,4U);
+          for(unsigned i=0;i<AHRS_FIELD_COUNT;++i)if(mask32&(1U<<i)) {
+            memcpy(payload32+used32,&fields[i],4U);used32+=4U;
+          }
+          uint8_t type32=AHRS_MSG_USB_SELECTED32;
+#if APP_STATIC6_DIAG
+          if(source==PROTOCOL_SOURCE_USB && static6_enabled) {
+            float q6[4];vqf_get_quat6d(q6);
+            payload32[2]=app_filter_profile;payload32[3]=(uint8_t)app_fusion_mode;
+            memcpy(payload32+16,q6,16);memcpy(payload32+32,fields,12);
+            /* v2 fits one64B USB packet. Temperature remains in the raw
+             *8000-frame moments and the existing20Hz diagnostic snapshot. */
+            payload32[0]=2U;
+            memcpy(payload32+44,fields+6,12);used32=56U;type32=0x71U;
+          }
+#endif
+          n=protocol_pack_frame(tx,VOFA_MAX_BYTES,type32,app_stream_seq[source]-1U,payload32,(uint8_t)used32);
+#if APP_UART_TX_QUEUE_FIX
+          }
+          if(source==PROTOCOL_SOURCE_UART) {shared_n=n;shared_mask=app_outputs[source].field_mask;shared_seq=output_seq;}
+#endif
+        }
+#if APP_UART_TX_QUEUE_FIX
+        if(source==PROTOCOL_SOURCE_USB)
+#endif
+        usb_diag[n?UD_PACK_OK:UD_PACK_FAIL]++;
+      }
+#endif
+      hot_end(H_PACK,h);
+#if APP_UART_TX_DIAG
+      if(source==PROTOCOL_SOURCE_UART)
+        uart_tx_diag_pack(n,pose_sched_live.seq,pose_sched_live.time_us,
+                          app_outputs[source].format,app_outputs[source].field_mask);
+#endif
       if(n == 0U) continue;
       if(source == PROTOCOL_SOURCE_UART) {
+        h=hot_begin(H_UART_ENQUEUE);
+#if APP_UART_TX_QUEUE_FIX
+        if(uart_dma_send(tx,n)!=0)vofa_late++;
+#else
         if(uart_dma_send(tx, n) == 0) vofa_sel ^= 1U;
         else vofa_late++;
+#endif
+        hot_end(H_UART_ENQUEUE,h);
       } else {
-        if(cdc_due)(void)usb_cdc_write(tx, n);
-        if(web_due)(void)webusb_write(tx, n);
+        h=hot_begin(H_USB_ENQUEUE);
+        if(cdc_due) {
+          int rc=usb_cdc_write(tx,n);
+#if APP_EXPERIMENTAL_ESKF8K
+          if(rc)eskf8k_usb_drops++;else eskf8k_usb_frames++;
+#else
+          (void)rc;
+#endif
+        }
+        if(web_due) {
+#if APP_USB_DIAG
+          /* Diagnostic selection belongs to CDC only. Its enqueue has already
+           * copied the frame, so restore the original vendor-port payload. */
+          if(usb_diag[UD_STREAM32])
+            n=protocol_pack_output(tx,VOFA_MAX_BYTES,app_stream_seq[source]-1U,
+                                   &app_outputs[source],port_fields,
+                                   vofa_pose_live.temperature_c,flags,(uint16_t)millis());
+#endif
+          (void)webusb_write(tx,n);
+        }
+        hot_end(H_USB_ENQUEUE,h);
       }
     }
   }
@@ -1839,14 +2548,53 @@ static void app_perform_reset(reset_request_t request)
   nvic_system_reset();
 }
 
+#if APP_SRAM_CAPTURE
+typedef struct { uint8_t msg,seq,len,source,payload[AHRS_MAX_PAYLOAD_LEN]; } queued_command_t;
+static queued_command_t sram_commands[4];
+static uint8_t sram_command_head,sram_command_tail,sram_command_n;
+static void protocol_frame_received(uint8_t msg,uint8_t seq,const uint8_t *payload,uint8_t len,void *user)
+{
+ /* Leave preparation/CRC time before the final <=8 erase guard. Dispatching
+  * at exactly 8 let new arrivals exhaust that margin before the guard ran. */
+ if(sram_command_n || !sram_flash_ready() || imu8k_pending()>1) {
+  if(sram_command_n==4 || len>AHRS_MAX_PAYLOAD_LEN) {
+   sram_live[SR_QUEUE_REJECTS]++;
+   protocol_reply_ack((protocol_source_t)(uintptr_t)user,seq,msg,AHRS_ACK_EXEC_FAILED,0xb001U);return;
+  }
+  queued_command_t *q=&sram_commands[sram_command_head];
+  q->msg=msg;q->seq=seq;q->len=len;q->source=(uint8_t)(uintptr_t)user;
+  memcpy(q->payload,payload,len);sram_command_head=(sram_command_head+1U)&3U;sram_command_n++;
+  sram_live[SR_SAVE_DEFERRED]++;
+  if(sram_command_n>sram_live[SR_QUEUE_HIGH])sram_live[SR_QUEUE_HIGH]=sram_command_n;
+  return; /* ACK is emitted by the original handler only after execution. */
+ }
+ protocol_frame_dispatch(msg,seq,payload,len,user);
+}
+static void sram_command_task(void)
+{
+ sram_recovery_poll();
+ if(sram_command_n && sram_flash_ready() && imu8k_pending()<=1) {
+  queued_command_t *q=&sram_commands[sram_command_tail];
+  protocol_frame_dispatch(q->msg,q->seq,q->payload,q->len,(void *)(uintptr_t)q->source);
+  sram_command_tail=(sram_command_tail+1U)&3U;sram_command_n--;
+ }
+}
+#else
+#define protocol_frame_received protocol_frame_dispatch
+#endif
+
 static void app_service_commands(void)
 {
+  uint64_t h=hot_begin(H_COMMANDS);
   uint8_t ch;
   uint16_t budget = 128U;
   static uint8_t uart_legacy_buf[4], uart_legacy_idx;
   static uint8_t usb_legacy_buf[4], usb_legacy_idx;
   static uint8_t webusb_legacy_buf[4], webusb_legacy_idx;
   usb_cdc_task();
+#if APP_SRAM_CAPTURE
+  sram_command_task();
+#endif
   while(budget-- && uart_read_byte(&ch)) {
     protocol_parser_feed_byte(&uart_protocol_parser, ch);
     legacy_command_feed(ch, uart_legacy_buf, &uart_legacy_idx);
@@ -1865,12 +2613,18 @@ static void app_service_commands(void)
 #ifdef APP_USER_BL_UPDATE
   if(user_bl_pending && ((uart_tx_idle() && usb_cdc_tx_idle() && webusb_tx_idle()) ||
      (uint32_t)(millis()-user_bl_requested_ms)>=100U)) {
-    user_bl_pending=0;user_bl_apply();
+    user_bl_pending=0;
+    if(app_run_mode==APP_RUN_MAINTENANCE && app_settings_mode) {
+      user_bl_arm();
+      user_bl_apply();
+      user_bl_disarm();
+    }
   }
 #endif
   if(protocol_reset_pending != RESET_NONE &&
      ((uart_tx_idle() && usb_cdc_tx_idle() && webusb_tx_idle()) || (uint32_t)(millis() - reset_requested_ms) >= 100U))
     app_perform_reset(protocol_reset_pending);
+  hot_end(H_COMMANDS,h);
 }
 
 int main(void)
@@ -1920,6 +2674,7 @@ int main(void)
   const float gyr_lpf_alpha = 1.0f - expf(-6.28318530718f * GYR_LPF_CUTOFF_HZ / FUSION_HZ);
 
   system_clock_config();
+  sram_capture_init();
   bsp_init();
   (void)device_settings_load(&app_saved_settings);
   ws2812_set_enabled(app_saved_settings.ws2812_enabled);
@@ -1944,6 +2699,9 @@ int main(void)
   protocol_parser_set_vofa_callback(&webusb_protocol_parser, protocol_vofa_received);
   {
     app_fusion_mode = app_saved_settings.mode;
+#if APP_EXPERIMENTAL_ESKF8K && APP_MAG_FUSION_ENABLE
+    app_fusion_mode=FUSION_MODE_9AXIS; /* RAM-only experiment, no settings save. */
+#endif
     /* Version 4 uses duration as the single startup control. */
     app_saved_settings.fast_start = app_saved_settings.gyro_init_ms == 0U;
     app_fast_start = app_saved_settings.fast_start;
@@ -1954,6 +2712,9 @@ int main(void)
     app_acc_range_g = app_saved_settings.acc_range_g;
     app_gyro_scale = app_saved_settings.gyro_scale;
     app_output_hz = app_saved_settings.output_hz;
+#if APP_EXPERIMENTAL_ESKF8K
+    app_output_hz=1000U;
+#endif
     app_output_div = (uint16_t)(APP_FUSION_HZ / app_output_hz);
     gyro_startup_live.duration_ms = app_gyro_init_ms;
     memcpy(app_outputs, app_saved_settings.outputs, sizeof(app_outputs));
@@ -1961,7 +2722,13 @@ int main(void)
     /* A six-axis image must not inherit a previously stored nine-axis mode. */
     app_fusion_mode = FUSION_MODE_6AXIS;
 #endif
+#if APP_ESKF8K_VALIDATE
+    can_config_t validation_can=app_saved_settings.can;
+    validation_can.active=0U; /* User excludes CAN; RAM only, preserve NVM. */
+    (void)can_test_set_config(&validation_can);
+#else
     (void)can_test_set_config(&app_saved_settings.can);
+#endif
   }
   app_relative_yaw_enabled = (app_fusion_mode == FUSION_MODE_9AXIS_RELATIVE) ? 1U : 0U;
   delay_ms(20);
@@ -1994,7 +2761,7 @@ int main(void)
   vqf_set_rest_bias_enabled(app_saved_settings.rest_bias_enabled);
   fusion_select_algorithm(app_saved_settings.fusion_algorithm);
   vqf_configure_tuning(app_saved_settings.vqf_tuning_enabled ? &app_saved_settings.vqf_tuning : NULL);
-  vqf_init(1.0f / FUSION_HZ, 1.0f / FUSION_HZ);
+  vqf_init(1.0f / FUSION_HZ, 1.0f / APP_CAL_FEED_HZ);
   zaru_heading_hold_reset(&app_zaru);
   {
     float startup_acc[3] = {0.0f, 0.0f, G_TO_MS2};
@@ -2083,14 +2850,40 @@ int main(void)
 
   {
     uint32_t last_sample_cy = dwt_cycles();
+#if !APP_EXPERIMENTAL_ESKF8K
     uint32_t err_streak = 0U;
+#endif
 
+#if APP_EXPERIMENTAL_ESKF8K
+    eskf8k_cpu_prepare();
+    err=imu8k_begin(app_gyro_range_dps,app_acc_range_g);
+    eskf8k_app_live.spi_init_error=(uint32_t)err;
+    while(err) {app_service_commands();ws2812_show_error(1U);}
+    eskf8k_app_live.start_ms=millis();eskf8k_app_live.clock_hz=system_core_clock;
+    last_sample_cy=0U;
+    eskf8k_cpu_start();
+#endif
     app_fusion_ready = 1U;
   while(1)
   {
     uint32_t now_cy;
     uint32_t dt_cy;
+#if APP_SRAM_CAPTURE
+    app_flash_this_turn = 0U;
+#endif
 
+#if APP_EXPERIMENTAL_ESKF8K
+    uint32_t frame_start,conversion_start;
+    if(!imu8k_pop(&raw,&now_cy)){pose_on_idle();continue;} /* DWT timebase stays awake. */
+#if APP_SRAM_CAPTURE
+    sram_sample_current=now_cy;
+#endif
+    eskf8k_cpu_main(1U);
+    frame_start=conversion_start=dwt_cycles();
+    const uint32_t sample_ms=millis();
+    uint32_t age=frame_start-now_cy;
+    if(age>eskf8k_app_live.sample_age_max_cycles)eskf8k_app_live.sample_age_max_cycles=age;
+#else
     if(lsm6dsv_wait_sample(2000U) != 0)
     {
       app_sample_skips++;
@@ -2106,16 +2899,26 @@ int main(void)
       goto recover_or_continue;
     }
 
+#endif
     /* Temperature is part of the same 14-byte SPI burst as gyro/accel.
      * temp_c is the filtered value used by the optional gyro compensation;
      * imu_temp_live.temperature_c remains the raw converted telemetry value. */
     temp_c = update_temperature(raw.temp_raw);
-    gyro_temp_comp_update(millis(),temp_c);
+    uint64_t h_temp=hot_begin(H_TEMP);
+    gyro_temp_comp_update(SAMPLE_NOW_MS,temp_c);
+    hot_end(H_TEMP,h_temp);
 
+#if !APP_EXPERIMENTAL_ESKF8K
     now_cy = dwt_cycles();
+#endif
     (void)inertial_stream_clock(&app_ins_stream,now_cy,system_core_clock);
-    dt_cy = now_cy - last_sample_cy;
+    dt_cy = last_sample_cy ? now_cy - last_sample_cy : SAMPLE_DT_CYCLES;
+#if APP_EXPERIMENTAL_ESKF8K
+    if(dt_cy>eskf8k_app_live.dt_max_cycles)eskf8k_app_live.dt_max_cycles=dt_cy;
+    if(dt_cy>DROP_DT_CYCLES){eskf8k_app_live.dt_gap_n++;gyro_temp_learning_gap();}
+#endif
     last_sample_cy = now_cy;
+#if !APP_EXPERIMENTAL_ESKF8K
     if(app_temp_discard_sample) {
       app_temp_discard_sample=0U; gyr_lpf_init=0U;
       gyro_temp_learning_gap(); goto service_tasks;
@@ -2127,8 +2930,16 @@ int main(void)
       err_streak = 0U;
       goto service_tasks;
     }
+#else
+    /* Flash gaps remain visible in hardware capture/dt counters. Never
+     * relabel the next sample as a nominal 125 us interval. */
+    app_temp_discard_sample=0U;
+#endif
+#if !APP_EXPERIMENTAL_ESKF8K
     err_streak = 0U;
+#endif
 
+    uint64_t h_convert=hot_begin(H_CONVERT);
     for(i = 0; i < 3U; i++)
     {
       if(raw.gyr[i]>=32700 || raw.gyr[i]<=-32700) app_gyro_clip_n++;
@@ -2140,15 +2951,20 @@ int main(void)
 #endif
     }
 
+    hot_end(H_CONVERT,h_convert);
+    uint64_t h_cal=hot_begin(H_CAL_FEED);
 #if APP_ACC_CAL_ENABLE
     { float raw_acc_g[3] = { (float)raw.acc[0] * ACC_G_PER_LSB, (float)raw.acc[1] * ACC_G_PER_LSB, (float)raw.acc[2] * ACC_G_PER_LSB };
       float gyr_dps_now[3] = { gyr[0] / DEG2RAD, gyr[1] / DEG2RAD, gyr[2] / DEG2RAD };
-      acc_calibration_sample_task(millis(), raw_acc_g, gyr_dps_now); }
+      if((fusion_n%(APP_FUSION_HZ/APP_CAL_FEED_HZ))==0U)
+        acc_calibration_sample_task(SAMPLE_NOW_MS, raw_acc_g, gyr_dps_now); }
 #endif
 
     /* Keep the 30 Hz rate filter for static calibration and diagnostics.
      * Fusion integrates the unsmoothed, scale/temperature-corrected samples:
      * body-axis smoothing loses coning motion and can accumulate yaw error. */
+    hot_end(H_CAL_FEED,h_cal);
+    uint64_t h_rate=hot_begin(H_RATE_FILTER);
     if(!gyr_lpf_init)
     {
       for(i = 0; i < 3U; i++) gyr_lpf[i] = gyr[i];
@@ -2162,16 +2978,34 @@ int main(void)
       }
     }
 
+    hot_end(H_RATE_FILTER,h_rate);
+    h_cal=hot_begin(H_CAL_FEED);
     {
       float gyr_dps_lpf[3];
       for(i = 0U; i < 3U; ++i) gyr_dps_lpf[i] = gyr_lpf[i] / DEG2RAD;
-      vqf_static_cal_feed(millis(), 1.0f / FUSION_HZ, gyr_dps_lpf, acc, temp_c);
+      if((fusion_n%(APP_FUSION_HZ/APP_CAL_FEED_HZ))==0U)
+        vqf_static_cal_feed(SAMPLE_NOW_MS,1.0f/APP_CAL_FEED_HZ,gyr_dps_lpf,acc,temp_c);
     }
+    hot_end(H_CAL_FEED,h_cal);
+#if APP_EXPERIMENTAL_ESKF8K
+    eskf8k_time_add(0U,dwt_cycles()-conversion_start);
+#endif
     t0 = dwt_cycles();
+#if APP_STATIC6_DIAG
+    if(static6_enabled)static6_raw(raw.gyr,raw.acc,raw.temp_raw,now_cy);
+#endif
+#if APP_EXPERIMENTAL_ESKF8K
+    vqf_update_timed(APP_GYR_FUSION_LPF_ENABLE?gyr_lpf:gyr,acc,
+                     (float)dt_cy/(float)system_core_clock,
+                     (fusion_n%(APP_FUSION_HZ/APP_CAL_FEED_HZ))==0U);
+    eskf8k_time_add(1U,dwt_cycles()-t0);
+#else
     vqf_update(APP_GYR_FUSION_LPF_ENABLE ? gyr_lpf : gyr, acc);
+#endif
 
     /* Independent, runtime-only stream. Average same-sample earth acceleration
      * before decimation; angle smoothing/zero/ZARU never enter INS. */
+    uint64_t h_ins=hot_begin(H_INS);
     if(app_settings_mode || vqf_static_cal_active() || acc_cal_rt.active || protocol_reset_pending!=RESET_NONE)
       inertial_stream_stop(&app_ins_stream);
     else if(inertial_stream_active(&app_ins_stream)) {
@@ -2180,7 +3014,7 @@ int main(void)
       for(unsigned axis=0;axis<3;axis++) ins_gyro[axis]=(gyr[axis]-ins_bias[axis])/DEG2RAD;
       inertial_stream_accumulate(&app_ins_stream,ins_q,acc,ins_gyro);
       uint8_t due[3], any=0U;
-      for(unsigned source=0;source<3;source++) { due[source]=(uint8_t)inertial_stream_due(&app_ins_stream,source,millis()); any|=due[source]; }
+      for(unsigned source=0;source<3;source++) { due[source]=(uint8_t)inertial_stream_due(&app_ins_stream,source,SAMPLE_NOW_MS); any|=due[source]; }
       if(any) {
         uint8_t flags=vqf_get_rest_detected() ? 2U : 0U;
 #if APP_ACC_CAL_ENABLE
@@ -2193,6 +3027,11 @@ int main(void)
       }
     }
 
+    hot_end(H_INS,h_ins);
+    uint64_t h_learn=hot_begin(H_TEMP_LEARN);
+#if APP_EXPERIMENTAL_ESKF8K
+    if(fusion_n%(APP_FUSION_HZ/APP_CAL_FEED_HZ)==0U)
+#endif
     /* Temperature learner sees actual RAW samples, never estimator bias.
      * Residual gates are separate; the startup seed and VQF retain ownership
      * of their respective input-domain bias terms. */
@@ -2210,18 +3049,20 @@ int main(void)
         if(raw.gyr[axis]>=32700||raw.gyr[axis]<=-32700||raw.acc[axis]>=32700||raw.acc[axis]<=-32700) blocked=1U;
       }
       uint8_t rest=(uint8_t)vqf_get_rest_detected();
-      gyro_temp_learning_sample(millis(),app_ins_stream.us,raw_dps,seed_residual,corrected,
+      gyro_temp_learning_sample(SAMPLE_NOW_MS,app_ins_stream.us,raw_dps,seed_residual,corrected,
                                acc,imu_temp_live.temperature_c,rest,blocked);
       float lo=G_TO_MS2-APP_TEMP_LEARN_ACC_DEV_MS2,hi=G_TO_MS2+APP_TEMP_LEARN_ACC_DEV_MS2;
       if(!blocked&&rest&&acc2>=lo*lo&&acc2<=hi*hi&&
          residual2<=APP_TEMP_LEARN_RESIDUAL_DPS*APP_TEMP_LEARN_RESIDUAL_DPS) {
-        if(app_temp_safe_samples<APP_TEMP_LEARN_REST_MS*APP_FUSION_HZ/1000U) app_temp_safe_samples++;
+        if(app_temp_safe_samples<APP_TEMP_LEARN_REST_MS*APP_CAL_FEED_HZ/1000U) app_temp_safe_samples++;
       } else app_temp_safe_samples=0U;
     }
     /* Non-blocking 50 Hz magnetometer scheduler: never wait 5 ms inside
      * the 2 kHz IMU/VQF path. Only the short I2C trigger/read transactions
      * occupy the loop. */
-    if(mag_ok)
+    hot_end(H_TEMP_LEARN,h_learn);
+    uint64_t h_mag=hot_begin(H_MAG_IO);
+    if(mag_ok && (fusion_n%(APP_FUSION_HZ/APP_CAL_FEED_HZ))==0U)
     {
 #if MAG_FUSION_ENABLE
       /* Keep magnetic fusion out of the bit-banged I2C read slot. The
@@ -2230,7 +3071,9 @@ int main(void)
       if(mag_fusion_pending)
       {
         mag_fusion_pending = 0U;
+        uint64_t h=hot_begin(H_MAG);
         if(vqf_update_mag(mag) == 0) mag_updates++;
+        hot_end(H_MAG,h);
       }
 #endif
       if(!mag_pending && ((fusion_n % MAG_PERIOD_N) == 0U))
@@ -2251,7 +3094,7 @@ int main(void)
         {
           mag_raw_live.seq++;
           __DMB();
-          mag_raw_live.millis = millis();
+          mag_raw_live.millis = SAMPLE_NOW_MS;
           mag_raw_live.x = mag_raw[0];
           mag_raw_live.y = mag_raw[1];
           mag_raw_live.z = mag_raw[2];
@@ -2293,6 +3136,7 @@ int main(void)
         mag_pending = 0U;
       }
     }
+    hot_end(H_MAG_IO,h_mag);
     vqf_us = (dwt_cycles() - t0) / (system_core_clock / 1000000U);
     fusion_n++;
     window_samples++;
@@ -2301,18 +3145,32 @@ int main(void)
     if(app_settings_mode || vqf_static_cal_active() || acc_cal_rt.active || protocol_reset_pending!=RESET_NONE)
       data_capture_stop(&app_data_capture);
     for(unsigned source=0;source<3;source++) {
-      capture_due[source]=(uint8_t)data_capture_due(&app_data_capture,source,millis(),fusion_n);
+      capture_due[source]=(uint8_t)data_capture_due(&app_data_capture,source,SAMPLE_NOW_MS,fusion_n);
       capture_any|=capture_due[source];
     }
 
-    if((fusion_n % (APP_FUSION_HZ / ATTITUDE_FILTER_HZ)) == 0U || (fusion_n % app_output_div) == 0U || capture_any)
+#if APP_EXPERIMENTAL_ESKF8K
+    uint32_t pose_late = 0U;
+    int pose_gen = pose_take(micros(), 1, &pose_late);
+#else
+    int pose_gen = 0;
+#endif
+    if(pose_gen || capture_any || (fusion_n % DAP_OUTPUT_DIV) == 0U
+#if !APP_EXPERIMENTAL_ESKF8K
+       || (fusion_n % (APP_FUSION_HZ / ATTITUDE_FILTER_HZ)) == 0U
+       || (fusion_n % app_output_div) == 0U
+#endif
+      )
     {
       /* Odd/even sequence lock lets DAPLink read a coherent live snapshot
        * without halting the 2 kHz fusion loop. */
+      uint64_t h_live=hot_begin(H_LIVE);
       vqf_live.seq++;
       __DMB();
       vqf_get_quat9d(q);
+      uint64_t h=hot_begin(H_EULER);
       vqf_get_euler_deg(&roll, &pitch, &yaw);
+      hot_end(H_EULER,h);
 
       vqf_live.roll = roll;
       vqf_live.pitch = pitch;
@@ -2369,10 +3227,12 @@ int main(void)
       vqf_live.vqf_us = vqf_us;
       vqf_live.fusion_n = fusion_n;
       vqf_live.skip_n = app_sample_skips;
-      vqf_live.millis = millis();
+      vqf_live.millis = SAMPLE_NOW_MS;
       __DMB();
       vqf_live.seq++;
+#if !APP_EXPERIMENTAL_ESKF8K
       if((fusion_n % app_output_div)==0U) out_n++;
+#endif
 
       if((fusion_n % DAP_OUTPUT_DIV) == 0U)
       {
@@ -2433,11 +3293,45 @@ int main(void)
         __DMB();
         vqf_nine_live.seq++;
       }
+      hot_end(H_LIVE,h_live);
+#if APP_EXPERIMENTAL_ESKF8K
+      if(pose_gen) {
+        pose_sched_live.ax = vqf_live.ax; pose_sched_live.ay = vqf_live.ay; pose_sched_live.az = vqf_live.az;
+        pose_sched_live.gx = vqf_live.gx; pose_sched_live.gy = vqf_live.gy; pose_sched_live.gz = vqf_live.gz;
+        pose_sched_live.flags = (pose_sched_live.flags & 0x80000000U) | (vqf_live.rest_detected ? 1U : 0U);
+        pose_sched_live.sample_age_us = (dwt_cycles() - now_cy) / (system_core_clock / 1000000U);
+        pose_sched_live.time_us = micros();
+        pose_sched_live.generated_count++;
+        pose_sched_live.seq++;
+        if(pose_late > pose_sched_live.max_lateness_us) pose_sched_live.max_lateness_us = pose_late;
+        app_update_attitude();
+        {
+          uint16_t div = 1U;
+          if(app_output_hz != 0U && (ATTITUDE_FILTER_HZ % app_output_hz) == 0U)
+            div = (uint16_t)(ATTITUDE_FILTER_HZ / app_output_hz);
+          if((pose_sched_live.seq % div) == 0U && protocol_reset_pending == RESET_NONE &&
+             !gyro_temp_learning_saving()) {
+            out_n++;
+            vofa_send_justfloat(fusion_n);
+          }
+        }
+      }
+#else
       if((fusion_n % (APP_FUSION_HZ / ATTITUDE_FILTER_HZ))==0U || capture_any) app_update_attitude();
+      if(protocol_reset_pending == RESET_NONE && !gyro_temp_learning_saving() && (fusion_n % app_output_div)==0U)
+        vofa_send_justfloat(fusion_n);
+#endif
       if(capture_any) {
+#if APP_EXPERIMENTAL_ESKF8K
+        const float values[9]={pose_sched_live.ax,pose_sched_live.ay,pose_sched_live.az,
+                              pose_sched_live.gx,pose_sched_live.gy,pose_sched_live.gz,
+                              vofa_pose_live.yaw,vofa_pose_live.pitch,vofa_pose_live.roll};
+        uint8_t flags=(pose_sched_live.flags & 1U) ? 2U : 0U,frame[AHRS_MAX_FRAME_LEN];
+#else
         const float values[9]={vqf_live.ax,vqf_live.ay,vqf_live.az,vqf_live.gx,vqf_live.gy,vqf_live.gz,
                               vofa_pose_live.yaw,vofa_pose_live.pitch,vofa_pose_live.roll};
         uint8_t flags=vqf_get_rest_detected() ? 2U : 0U,frame[AHRS_MAX_FRAME_LEN];
+#endif
 #if APP_ACC_CAL_ENABLE
         flags|=acc_calibration_active.valid ? 1U : 0U;
 #endif
@@ -2450,26 +3344,37 @@ int main(void)
           if(n)(void)protocol_send_stream_frame((protocol_source_t)source,frame,n);
         }
       }
-      if(protocol_reset_pending == RESET_NONE && !gyro_temp_learning_saving() && (fusion_n % app_output_div)==0U)
-        vofa_send_justfloat(fusion_n);
     }
 
-service_tasks:
+#if !APP_EXPERIMENTAL_ESKF8K
+service_tasks:;
+#endif
+#if APP_EXPERIMENTAL_ESKF8K
+    if(fusion_n%(APP_FUSION_HZ/APP_CAL_FEED_HZ)==0U) {
+    uint32_t service_start=dwt_cycles();
+#endif
     app_service_commands();
+    uint64_t h_service=hot_begin(H_CAL_SERVICE);
     app_vqf_cal_service(millis());
 #if APP_ACC_CAL_ENABLE
     acc_calibration_service_task(millis());
 #endif
+    hot_end(H_CAL_SERVICE,h_service);h_service=hot_begin(H_TEMP_SERVICE);
+    app_maintenance_service();
     app_temp_learning_service(millis());
+    hot_end(H_TEMP_SERVICE,h_service);
     if(app_sample_rebase != 0U)
     {
       app_sample_rebase = 0U;
       gyro_temp_learning_gap(); app_temp_safe_samples=0U;
+#if !APP_EXPERIMENTAL_ESKF8K
       last_sample_cy = dwt_cycles();
       app_sample_skips += (app_flash_pause_us * APP_FUSION_HZ) / 1000000U;
+#endif
     }
 
     {
+      uint64_t h=hot_begin(H_WS2812);
       ws2812_mode_t led_mode = WS2812_MODE_6AXIS;
       /* A magnetometer sample must have reached VQF before advertising 9D.
        * Relative yaw is only an output reference and does not change this
@@ -2508,8 +3413,10 @@ service_tasks:
                            app_settings_dirty,
                            bias_history_write_error);
       }
+      hot_end(H_WS2812,h);
     }
 #if APP_CAN_ENABLE
+    uint64_t h_can=hot_begin(H_CAN);
     /* CAN needs microsecond timing: the millisecond tick cannot schedule 1 kHz. */
     if(!gyro_temp_learning_saving()) can_test_task(micros());
     {
@@ -2529,6 +3436,7 @@ service_tasks:
         can_test_clear_cmd_flag(CAN_CMD_FLAG_RECAL);
       }
     }
+    hot_end(H_CAN,h_can);
 #endif
 
     if((millis() - last_ms) >= 1000U)
@@ -2545,7 +3453,41 @@ service_tasks:
       }
       out_n = 0;
     }
+#if APP_EXPERIMENTAL_ESKF8K
+    eskf8k_time_add(3U,dwt_cycles()-service_start);
+    }
+    if(fusion_n%(APP_FUSION_HZ/10U)==0U) {
+      eskf8k_app_live.seq++;__DMB();
+      float state[26];vqf_eskf8k_snapshot(state);
+      for(unsigned k=0;k<26;k++)eskf8k_app_state[k]=state[k];
+      /* Short coherent ISR-counter snapshot. A single asm block prevents
+       * GCC 7 from moving MRS past CPSID; the timer still timestamps edges. */
+      uint32_t mask;
+      __asm volatile("mrs %0, primask\n\tcpsid i":"=r"(mask)::"memory");
+      const volatile uint32_t* cap=(const volatile uint32_t*)&capture_stats;
+      for(unsigned k=0;k<30;k++)eskf8k_capture_snapshot[k]=cap[k];
+      for(unsigned k=0;k<7;k++)eskf8k_capture_snapshot[30+k]=capture_edge[k];
+      eskf8k_capture_snapshot[37]=lsm6dsv_8k_overruns();
+      __asm volatile("msr primask, %0"::"r"(mask):"memory");
+      eskf8k_app_live.ms=millis();eskf8k_app_live.samples=fusion_n;
+      eskf8k_app_live.outputs=eskf8k_usb_frames;
+      eskf8k_app_live.health_fault|=vqf_get_ekf_health_flags(0)|vqf_get_ekf_health_flags(1);
+      eskf8k_cpu_snapshot();
+      sram_capture_poll();
+      __DMB();eskf8k_app_live.seq++;
+    }
+#if APP_UART_TX_QUEUE_FIX && !APP_UART_TX_SERVICE_2K
+    uart_tx_task(); /* 8 kHz foreground pump; data/CRC generation stays at1kHz. */
+#endif
+    eskf8k_time_add(2U,dwt_cycles()-frame_start);
+    hot_sync();
+#if APP_STATIC6_DIAG
+    if(static6_enabled)static6_finish();
+#endif
+    eskf8k_cpu_main(0U);
+#endif
     continue;
+#if !APP_EXPERIMENTAL_ESKF8K
 recover_or_continue:
     if(err_streak >= ERR_STREAK_RECOVER)
     {
@@ -2555,6 +3497,7 @@ recover_or_continue:
       err_streak = 0U;
     }
     goto service_tasks;
+#endif
   }
   }
 }

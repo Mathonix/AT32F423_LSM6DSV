@@ -2,16 +2,122 @@
 #define APP_CONFIG_H
 
 /* Central application configuration. Keep all board-level tuning here. */
+#ifndef APP_EXPERIMENTAL_ESKF8K
+#define APP_EXPERIMENTAL_ESKF8K 0
+#endif
+#ifndef APP_STATIC6_DIAG
+#define APP_STATIC6_DIAG 0
+#endif
+#ifndef APP_ESKF_Q_COMP
+#define APP_ESKF_Q_COMP 0
+#endif
+#ifndef APP_ESKF_Q_COMP_FAST
+#define APP_ESKF_Q_COMP_FAST 0
+#endif
+#ifndef APP_VOFA_6AXIS
+#define APP_VOFA_6AXIS 0
+#endif
+#ifndef APP_ESKF_REST_RELAX
+#define APP_ESKF_REST_RELAX 0
+#endif
+/* ESKF uses instantaneous input after startup seed, before residual bias.
+ * These gates are independent of VQF tuning and the output rate guard. */
+#if APP_ESKF_REST_RELAX
+#define APP_ESKF_REST_GYR_DPS 0.8f
+#define APP_ESKF_REST_ACC_MS2 0.20f
+#else
+#define APP_ESKF_REST_GYR_DPS 0.6f
+#define APP_ESKF_REST_ACC_MS2 0.15f
+#endif
 
 /* Application label: YYYYMMDD and one letter. The first build of a day is
  * "a". Each later build on that same day uses the next letter. */
-#ifdef APP_USER_BL_UPDATE
+#if APP_VOFA_6AXIS
+#if APP_ESKF_REST_RELAX
+#define APP_FIRMWARE_VERSION "20261017j"
+#elif APP_ESKF_Q_COMP_FAST==2
+#define APP_FIRMWARE_VERSION "20261017i"
+#elif APP_ESKF_Q_COMP_FAST==1
+#define APP_FIRMWARE_VERSION "20261017g"
+#elif APP_STATIC6_DIAG
+#define APP_FIRMWARE_VERSION "20261017f"
+#else
+#define APP_FIRMWARE_VERSION "20261017e"
+#endif
+#elif APP_ESKF_Q_COMP
+#define APP_FIRMWARE_VERSION "20261017d"
+#elif APP_STATIC6_DIAG
+#define APP_FIRMWARE_VERSION "20261017b"
+#elif defined(APP_USER_BL_UPDATE)
 #define APP_FIRMWARE_VERSION "20261005j"
+#elif APP_EXPERIMENTAL_ESKF8K && APP_ESKF8K_HOTSPOT
+#define APP_FIRMWARE_VERSION "20261015f"
+#elif APP_EXPERIMENTAL_ESKF8K && APP_SRAM_CAPTURE
+#if APP_USB_DIAG
+#if APP_USB_TX_OWNERSHIP_FIX
+#if APP_USB_TX_CHAIN
+#if APP_USB_FIFO_FIX
+#if APP_USB_BUFFER_FIX
+#if APP_USB_PACK_FIX
+#if APP_UART_TX_PAD_TEST
+#define APP_FIRMWARE_VERSION "20261016s"
+#elif APP_UART_TX_BATCH
+#define APP_FIRMWARE_VERSION "20261016r"
+#elif APP_UART_TX_SERVICE_2K
+#define APP_FIRMWARE_VERSION "20261016q"
+#elif APP_COMM_POLL_FAST
+#define APP_FIRMWARE_VERSION "20261016p"
+#elif APP_CAN_TX_FAST
+#define APP_FIRMWARE_VERSION "20261016o"
+#elif APP_UART_TX_QUEUE_FIX
+#define APP_FIRMWARE_VERSION "20261016n"
+#elif APP_UART_TX_DIAG
+#define APP_FIRMWARE_VERSION "20261016m"
+#else
+#define APP_FIRMWARE_VERSION "20261016l"
+#endif
+#else
+#define APP_FIRMWARE_VERSION "20261016j"
+#endif
+#else
+#define APP_FIRMWARE_VERSION "20261016i"
+#endif
+#else
+#define APP_FIRMWARE_VERSION "20261016h"
+#endif
+#else
+#define APP_FIRMWARE_VERSION "20261016g"
+#endif
+#else
+#define APP_FIRMWARE_VERSION "20261016f"
+#endif
+#else
+#define APP_FIRMWARE_VERSION "20261016c"
+#endif
+#elif APP_EXPERIMENTAL_ESKF8K && APP_FLASH_TRACE
+#define APP_FIRMWARE_VERSION "20261015l"
+#elif APP_EXPERIMENTAL_ESKF8K && APP_UART_RX_DMA
+#define APP_FIRMWARE_VERSION "20261015j"
+#elif APP_EXPERIMENTAL_ESKF8K && APP_PROTOCOL_CRC_TABLE
+#define APP_FIRMWARE_VERSION "20261015i"
+#elif APP_EXPERIMENTAL_ESKF8K && APP_TIMEBASE_FAST
+#define APP_FIRMWARE_VERSION "20261015h"
+#elif APP_EXPERIMENTAL_ESKF8K && APP_ESKF_CAPTURE_OPT
+#define APP_FIRMWARE_VERSION "20261015g"
+#elif APP_EXPERIMENTAL_ESKF8K && APP_ESKF8K_VALIDATE
+#define APP_FIRMWARE_VERSION "20261015e"
+#elif APP_EXPERIMENTAL_ESKF8K
+#define APP_FIRMWARE_VERSION "20261015d"
 #else
 #define APP_FIRMWARE_VERSION "20261012g"
 #endif
 
+#if APP_EXPERIMENTAL_ESKF8K
+#define APP_FUSION_HZ             8000U
+#else
 #define APP_FUSION_HZ             2000U
+#endif
+#define APP_CAL_FEED_HZ           2000U
 #define APP_GYR_LPF_CUTOFF_HZ    30.0f
 /* Rate smoothing is for calibration/diagnostics. Filtering each body gyro
  * axis before quaternion integration changes multi-axis rotation paths. */
@@ -209,7 +315,7 @@
 #define APP_VQF_STATIC_FLASH_SLOT1        0x0803F000U
 /* 60 s at 2 kHz, with a 10 percent drop budget. */
 #define APP_VQF_STATIC_CAL_MIN_SAMPLES \
-  ((APP_VQF_STATIC_CAL_COLLECT_MS * APP_FUSION_HZ * 9U) / 10000U)
+  ((APP_VQF_STATIC_CAL_COLLECT_MS * APP_CAL_FEED_HZ * 9U) / 10000U)
 /* Output heading hold for FUSION_PROFILE_ZARU. Degrees/s are bias-corrected
  * gyro residual, not raw gyro and not the VQF rest gate. Enter is the 10 ms
  * RMS; exit is the unfiltered norm. These macros are the compiled defaults;

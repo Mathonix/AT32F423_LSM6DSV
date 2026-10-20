@@ -16,6 +16,9 @@ void vqf_apply_profile(unsigned profile);
 void vqf_set_tau_acc(float tau_acc);
 void vqf_set_tau_mag(float tau_mag);
 void vqf_set_rest_thresholds(float th_gyr_dps, float th_acc_ms2);
+#if APP_ESKF_REST_RELAX
+void vqf_get_rest_thresholds(float *th_gyr_dps, float *th_acc_ms2);
+#endif
 void vqf_set_bias_sigmas(float sigma_init_dps, float sigma_rest_dps);
 /* Stop only stationary bias adaptation; preserve startup/learned compensation. */
 void vqf_set_rest_bias_enabled(int enabled);
@@ -25,6 +28,9 @@ void vqf_seed_gyr_bias(const float gyr_bias[3], float sigma_dps);
 float vqf_get_bias_sigma_dps(void);
 void vqf_prime_rest(const float acc_ms2[3], const float gyr_bias[3]);
 void vqf_update(const float gyr[3], const float acc[3]);
+/* Experimental ESKF: actual DRDY interval, gyro every sample, accel at 2 kHz. */
+void vqf_update_timed(const float gyr[3], const float acc[3], float dt_s, int accel_due);
+void vqf_eskf8k_snapshot(float out[26]);
 void vqf_update_gyr(const float gyr[3]);
 void vqf_update_acc(const float acc[3]);
 int vqf_update_mag(const float mag[3]);

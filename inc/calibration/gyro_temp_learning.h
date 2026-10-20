@@ -25,6 +25,7 @@ void gyro_temp_learning_environment(uint32_t now_ms, uint8_t safe_to_save);
 int gyro_temp_learning_save_begin(uint32_t now_ms);
 void gyro_temp_learning_save_finish(uint32_t now_ms);
 int gyro_temp_learning_saving(void);
+int gyro_temp_learning_wants_save(void);
 void gyro_temp_learning_status(uint32_t now_ms, ahrs_payload_temp_learn_status_t *status);
 /* Pure command handling: control actions only queue work. */
 void gyro_temp_learning_command(uint8_t id, uint8_t len, const uint8_t *payload,

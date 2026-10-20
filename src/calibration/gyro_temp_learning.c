@@ -5,9 +5,9 @@
 #include <stddef.h>
 #include <string.h>
 
-#define DECIMATE (APP_FUSION_HZ/APP_TEMP_LEARN_HZ)
+#define DECIMATE (APP_CAL_FEED_HZ/APP_TEMP_LEARN_HZ)
 #define CAPTURE_BLOCKS (APP_TEMP_LEARN_CAPTURE_MS/1000U)
-_Static_assert(APP_FUSION_HZ%APP_TEMP_LEARN_HZ==0U,"learning decimation");
+_Static_assert(APP_CAL_FEED_HZ%APP_TEMP_LEARN_HZ==0U,"learning decimation");
 _Static_assert(APP_TEMP_LEARN_CAPTURE_MS%1000U==0U,"whole learning blocks");
 _Static_assert(APP_TEMP_LEARN_REST_MS%1000U==0U,"whole rest blocks");
 _Static_assert(APP_TEMP_LEARN_TEMP_RATE_BLOCKS>=3U,"temperature trend window");
@@ -244,11 +244,11 @@ void gyro_temp_learning_sample(uint32_t now_ms,uint32_t us,const float raw[3],
      corrected2>APP_TEMP_LEARN_GROSS_RESIDUAL_DPS*APP_TEMP_LEARN_GROSS_RESIDUAL_DPS)
     { cancel_round(TEMP_REJECT_MOTION,1); return; }
   if(!rest) {
-    const uint32_t grace=APP_TEMP_LEARN_REST_GRACE_MS*APP_FUSION_HZ/1000U;
+    const uint32_t grace=APP_TEMP_LEARN_REST_GRACE_MS*APP_CAL_FEED_HZ/1000U;
     if(rest_false_samples<=grace) rest_false_samples++;
     clear_decimation(); /* never admit non-rest samples or bridge a partial mean */
     if(!round_active||rest_false_samples>grace||
-       ++rest_pause_samples>APP_TEMP_LEARN_REST_PAUSE_MAX_MS*APP_FUSION_HZ/1000U)
+       ++rest_pause_samples>APP_TEMP_LEARN_REST_PAUSE_MAX_MS*APP_CAL_FEED_HZ/1000U)
       cancel_round(TEMP_REJECT_MOTION,0); /* VQF-only ambiguity is not independent movement */
     return;
   }
@@ -287,6 +287,7 @@ void gyro_temp_learning_save_finish(uint32_t now)
   if(result) { last_reject=TEMP_REJECT_FLASH; phase=TEMP_ERROR; }
 }
 int gyro_temp_learning_saving(void) { return saving; }
+int gyro_temp_learning_wants_save(void) { return pending_save && !saving; }
 void gyro_temp_learning_status(uint32_t now,ahrs_payload_temp_learn_status_t *s)
 {
   temp_comp_info_t info; gyro_temp_comp_info(&info);
@@ -353,6 +354,7 @@ void gyro_temp_learning_command(uint8_t id,uint8_t len,const uint8_t *payload,
     if(action==5U) gyro_temp_comp_clear();
     if(!gyro_temp_comp_save_allowed(now,1)) { reply_ack(r,id,AHRS_ACK_EXEC_FAILED,TEMP_DETAIL_RATE_LIMIT); return; }
     pending_save=1U; cancel_round(TEMP_REJECT_NONE,0);
+    reply_ack(r,id,AHRS_ACK_PERSIST_PENDING,0U); return;
   } else {
     gyro_temp_comp_discard_candidates(); cancel_round(TEMP_REJECT_NONE,0);
     for(unsigned i=0;i<TEMP_BIN_COUNT;++i) bin_episode[i]=episode;

@@ -1,10 +1,18 @@
 #include "protocol.h"
+#include "eskf8k_hotspot.h"
 #include <string.h>
 #include <math.h>
+#if APP_PROTOCOL_CRC_TABLE
+#include "crc16_ccitt_table.h"
+#endif
 
 uint16_t protocol_crc16(const uint8_t *data, uint16_t len)
 {
+  uint64_t h=hot_begin(H_CRC);
   uint16_t crc = 0xFFFFU;
+#if APP_PROTOCOL_CRC_TABLE
+  while(len--)crc=(uint16_t)((crc<<8)^crc16_ccitt_table[(crc>>8)^*data++]);
+#else
   uint16_t i;
   while(len--)
   {
@@ -21,7 +29,8 @@ uint16_t protocol_crc16(const uint8_t *data, uint16_t len)
       }
     }
   }
-  return crc;
+#endif
+  hot_end(H_CRC,h);return crc;
 }
 
 void protocol_parser_init(protocol_parser_t *parser, protocol_frame_cb_t cb, void *user_data)

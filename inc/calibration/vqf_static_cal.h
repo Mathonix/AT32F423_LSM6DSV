@@ -85,8 +85,14 @@ int vqf_static_cal_load(vqf_static_params_t *out);
 /* 0 started, -1 already active. Does not change the running parameters. */
 int vqf_static_cal_start(uint32_t now_ms);
 void vqf_static_cal_cancel(void);
-/* 0 invalidated, -1 active, -2 flash failed and the live source is unchanged. */
+/* 0 invalidated in Flash, 1 RAM accepted and Flash still queued,
+ * -1 active or another commit is queued, -2 Flash failed.
+ * On the SRAM-capture image, 1 means the live source already follows the
+ * request and the sector erase happens only from maintenance. */
 int vqf_static_cal_restore_defaults(void);
+int vqf_static_cal_commit_pending(void);
+/* 0 committed or nothing queued, -2 Flash failed and the queue remains. */
+int vqf_static_cal_commit_staged(void);
 int vqf_static_cal_active(void);
 uint8_t vqf_static_cal_source(void);
 void vqf_static_cal_get_applied(vqf_static_params_t *out);
@@ -94,7 +100,8 @@ void vqf_static_cal_feed(uint32_t now_ms, float dt_s,
                          const float gyr_dps[3], const float acc_ms2[3], float temp_c);
 void vqf_static_cal_tick(uint32_t now_ms);
 void vqf_static_cal_get_status(vqf_static_cal_status_t *out);
-/* 1 once, when a run reaches done or failed. Flash is written here, not in feed. */
+/* 1 once, when a run reaches done or failed. On the SRAM-capture image the
+ * record is only staged here; maintenance calls vqf_static_cal_commit_staged. */
 int vqf_static_cal_poll(vqf_static_cal_status_t *status, vqf_static_params_t *params);
 
 #endif

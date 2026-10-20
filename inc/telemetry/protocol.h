@@ -120,6 +120,18 @@ extern "C" {
 #define AHRS_CMD_QUERY_MAGNETOMETER 0x42U /* empty; read latest field, no stream/config/flash changes */
 #define AHRS_CMD_QUERY_WS2812       0x44U /* empty; reply 0x46 */
 #define AHRS_CMD_SET_WS2812         0x45U /* enabled:u8 (0/1); save then apply, ACK + 0x46 */
+#define AHRS_CMD_QUERY_RUN_STATE    0x64U /* empty; reply RUN_STATE, no legacy field change */
+#define AHRS_MSG_RUN_STATE          0x65U /* 24B: mode, pending flags, session, pause */
+#define AHRS_CMD_SET_RUN_STATE      0x66U /* v1, action: 1 enter maintenance, 2 resume */
+#define AHRS_CMD_USB_DIAG           0x67U /* experimental, read-only: v1,page 0..2 */
+#define AHRS_MSG_USB_DIAG           0x68U /* v1,page,word count,reserved + u32 words */
+#define AHRS_CMD_USB_STREAM32       0x69U /* experimental RAM-only: v1,enabled */
+#define AHRS_MSG_USB_SELECTED32     0x6AU /* v1,flags,mask,pose_seq,uS,mS,selected floats */
+#define AHRS_CMD_USB_PEAK_BOUNDARY  0x6BU /* H experimental: [1,0x50], reset maxima only */
+#define AHRS_CMD_UART_TX_DIAG       0x6CU /* M read-only: v1,page,token:u32; page0 freezes */
+#define AHRS_MSG_UART_TX_DIAG       0x6DU /* v1,page,count,0,token:u32,up to14 words */
+#define AHRS_CMD_UART_STREAM32      0x6EU /* RAM-only v1,enabled; compatible seq32 frame0x6A on UART */
+#define AHRS_CMD_UART_PADDING_TEST  0x6FU /* Experimental RAM-only [v1, 0|64]; CUSTOM only */
 
 #define AHRS_CONFIG_VERSION        5U /* v4 + active/saved accelerometer full scale, g */
 #define AHRS_FIELD_COUNT           9U
@@ -164,6 +176,8 @@ typedef enum
 #define AHRS_ACK_UNKNOWN_CMD       0x01U
 #define AHRS_ACK_INVALID_PARAM     0x02U
 #define AHRS_ACK_EXEC_FAILED       0x03U
+/* RAM accepted. Flash has not been written, so this is not persist success. */
+#define AHRS_ACK_PERSIST_PENDING   0x04U
 /* EXEC_FAILED detail while a static VQF initialization is in progress. */
 #define AHRS_VQF_CAL_BUSY          0x0701U
 #define AHRS_VQF_CAL_NOT_READY     0x0702U
@@ -200,6 +214,16 @@ static_assert(sizeof(ahrs_payload_temp_learn_page_t)==58U,"temperature page ABI"
 _Static_assert(sizeof(ahrs_payload_temp_learn_status_t)==60U,"temperature status ABI");
 _Static_assert(sizeof(ahrs_temp_learn_entry_t)==24U,"temperature entry ABI");
 _Static_assert(sizeof(ahrs_payload_temp_learn_page_t)==58U,"temperature page ABI");
+#endif
+typedef struct {
+  uint8_t version, mode, settings_pending, temp_pending;
+  uint32_t session, pause_count, last_pause_us, pending_gen;
+  int32_t last_error;
+} ahrs_payload_run_state_t;
+#ifdef __cplusplus
+static_assert(sizeof(ahrs_payload_run_state_t)==24U,"run state ABI");
+#else
+_Static_assert(sizeof(ahrs_payload_run_state_t)==24U,"run state ABI");
 #endif
 
 typedef struct {

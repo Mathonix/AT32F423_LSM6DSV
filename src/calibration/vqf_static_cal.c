@@ -1,6 +1,7 @@
 #include "vqf_static_cal.h"
 #include "app_config.h"
 #include "at32f423_flash.h"
+#include "flash_sram.h"
 
 #include <math.h>
 #include <string.h>
@@ -502,30 +503,63 @@ static void begin_validate(void)
   g_state = VQF_STATIC_CAL_VALIDATING;
 }
 
+/* 0 none, 1 candidate still in g_candidate, 2 restore-to-defaults.
+ * The 124-byte record is built on the maintenance stack, not kept in BSS. */
+enum { VQF_COMMIT_NONE = 0, VQF_COMMIT_CANDIDATE = 1, VQF_COMMIT_RESTORE = 2 };
+static uint8_t g_commit_kind;
+
+static void fill_candidate_record(vqf_static_record_t *rec)
+{
+  memset(rec, 0, sizeof(*rec));
+  rec->valid = 1U;
+  memcpy(rec->gyro_bias_dps, g_candidate.gyro_bias_dps, sizeof(rec->gyro_bias_dps));
+  memcpy(rec->acc_mean_ms2, g_candidate.acc_mean_ms2, sizeof(rec->acc_mean_ms2));
+  rec->bias_sigma_init_dps = g_candidate.bias_sigma_init_dps;
+  rec->bias_sigma_rest_dps = g_candidate.bias_sigma_rest_dps;
+  rec->rest_th_gyr_dps = g_candidate.rest_th_gyr_dps;
+  rec->rest_th_acc_ms2 = g_candidate.rest_th_acc_ms2;
+  rec->calibration_temp_c = g_candidate.calibration_temp_c;
+  memcpy(rec->gyro_std_dps, g_saved_gyr_std, sizeof(rec->gyro_std_dps));
+  memcpy(rec->acc_std_ms2, g_saved_acc_std, sizeof(rec->acc_std_ms2));
+  rec->gyro_dev_p95_dps = g_saved_gyr_p95;
+  rec->gyro_dev_p99_dps = g_saved_gyr_p99;
+  rec->acc_dev_p95_ms2 = g_saved_acc_p95;
+  rec->acc_dev_p99_ms2 = g_saved_acc_p99;
+  rec->temp_start_c = g_temp_start;
+  rec->temp_end_c = g_temp_end;
+  rec->temp_mean_c = g_candidate.calibration_temp_c;
+  rec->sample_count = g_sample_n;
+  rec->flags = 0U;
+}
+
+static void fill_restore_record(vqf_static_record_t *rec)
+{
+  vqf_static_params_t defaults;
+  vqf_static_cal_defaults(&defaults);
+  memset(rec, 0, sizeof(*rec));
+  rec->valid = 0U;
+  memcpy(rec->gyro_bias_dps, defaults.gyro_bias_dps, sizeof(rec->gyro_bias_dps));
+  memcpy(rec->acc_mean_ms2, defaults.acc_mean_ms2, sizeof(rec->acc_mean_ms2));
+  rec->bias_sigma_init_dps = defaults.bias_sigma_init_dps;
+  rec->bias_sigma_rest_dps = defaults.bias_sigma_rest_dps;
+  rec->rest_th_gyr_dps = defaults.rest_th_gyr_dps;
+  rec->rest_th_acc_ms2 = defaults.rest_th_acc_ms2;
+  rec->calibration_temp_c = 0.0f;
+}
+
+#if !APP_SRAM_CAPTURE
 static int save_candidate(void)
 {
   vqf_static_record_t rec;
-  memset(&rec, 0, sizeof(rec));
-  rec.valid = 1U;
-  memcpy(rec.gyro_bias_dps, g_candidate.gyro_bias_dps, sizeof(rec.gyro_bias_dps));
-  memcpy(rec.acc_mean_ms2, g_candidate.acc_mean_ms2, sizeof(rec.acc_mean_ms2));
-  rec.bias_sigma_init_dps = g_candidate.bias_sigma_init_dps;
-  rec.bias_sigma_rest_dps = g_candidate.bias_sigma_rest_dps;
-  rec.rest_th_gyr_dps = g_candidate.rest_th_gyr_dps;
-  rec.rest_th_acc_ms2 = g_candidate.rest_th_acc_ms2;
-  rec.calibration_temp_c = g_candidate.calibration_temp_c;
-  memcpy(rec.gyro_std_dps, g_saved_gyr_std, sizeof(rec.gyro_std_dps));
-  memcpy(rec.acc_std_ms2, g_saved_acc_std, sizeof(rec.acc_std_ms2));
-  rec.gyro_dev_p95_dps = g_saved_gyr_p95;
-  rec.gyro_dev_p99_dps = g_saved_gyr_p99;
-  rec.acc_dev_p95_ms2 = g_saved_acc_p95;
-  rec.acc_dev_p99_ms2 = g_saved_acc_p99;
-  rec.temp_start_c = g_temp_start;
-  rec.temp_end_c = g_temp_end;
-  rec.temp_mean_c = g_candidate.calibration_temp_c;
-  rec.sample_count = g_sample_n;
-  rec.flags = 0U;
+  fill_candidate_record(&rec);
   return commit_record(&rec);
+}
+#endif
+
+static int stage_candidate(void)
+{
+  g_commit_kind = VQF_COMMIT_CANDIDATE;
+  return 0;
 }
 
 static int moving_sample(float gyro_norm, float acc_off_gravity)
@@ -585,9 +619,42 @@ int vqf_static_cal_active(void)
          g_state == VQF_STATIC_CAL_VALIDATING;
 }
 
+int vqf_static_cal_commit_pending(void)
+{
+  return g_commit_kind != VQF_COMMIT_NONE;
+}
+
+int vqf_static_cal_commit_staged(void)
+{
+  vqf_static_record_t rec;
+  vqf_static_params_t defaults;
+  uint8_t kind = g_commit_kind;
+  if(kind == VQF_COMMIT_NONE) return 0;
+  if(kind == VQF_COMMIT_CANDIDATE) fill_candidate_record(&rec);
+  else if(kind == VQF_COMMIT_RESTORE) fill_restore_record(&rec);
+  else return -2;
+  if(commit_record(&rec) != 0) return -2;
+  if(rec.valid != 0U) {
+    g_applied = g_candidate;
+    g_source = VQF_STATIC_CAL_SOURCE_CAL;
+    g_state = VQF_STATIC_CAL_DONE;
+  } else {
+    vqf_static_cal_defaults(&defaults);
+    g_applied = defaults;
+    g_applied.calibration_temp_c = 0.0f;
+    g_source = VQF_STATIC_CAL_SOURCE_DEFAULT;
+    g_state = VQF_STATIC_CAL_IDLE;
+  }
+  g_error = VQF_STATIC_CAL_OK;
+  g_commit_kind = VQF_COMMIT_NONE;
+  g_pending = 1U;
+  g_sample_n = 0U;
+  return 0;
+}
+
 int vqf_static_cal_start(uint32_t now_ms)
 {
-  if(vqf_static_cal_active()) return -1;
+  if(vqf_static_cal_active() || g_commit_kind != VQF_COMMIT_NONE) return -1;
   g_state = VQF_STATIC_CAL_PRECHECK;
   g_error = VQF_STATIC_CAL_OK;
   g_pending = 0U;
@@ -608,9 +675,14 @@ int vqf_static_cal_start(uint32_t now_ms)
 
 void vqf_static_cal_cancel(void)
 {
+  int drop_stage = g_state == VQF_STATIC_CAL_PRECHECK ||
+                   g_state == VQF_STATIC_CAL_PRE_STABLE ||
+                   g_state == VQF_STATIC_CAL_COLLECTING ||
+                   g_state == VQF_STATIC_CAL_VALIDATING;
   g_state = VQF_STATIC_CAL_IDLE;
   g_error = VQF_STATIC_CAL_OK;
   g_pending = 0U;
+  if(drop_stage) g_commit_kind = VQF_COMMIT_NONE;
   g_stable = 0U;
   g_sample_n = 0U;
   g_gyro_rate = 0.0f;
@@ -621,20 +693,19 @@ void vqf_static_cal_cancel(void)
 
 int vqf_static_cal_restore_defaults(void)
 {
-  vqf_static_record_t rec;
   vqf_static_params_t defaults;
-  if(vqf_static_cal_active()) return -1;
+  if(vqf_static_cal_active() || g_commit_kind != VQF_COMMIT_NONE) return -1;
   vqf_static_cal_defaults(&defaults);
-  memset(&rec, 0, sizeof(rec));
-  rec.valid = 0U;
-  memcpy(rec.gyro_bias_dps, defaults.gyro_bias_dps, sizeof(rec.gyro_bias_dps));
-  memcpy(rec.acc_mean_ms2, defaults.acc_mean_ms2, sizeof(rec.acc_mean_ms2));
-  rec.bias_sigma_init_dps = defaults.bias_sigma_init_dps;
-  rec.bias_sigma_rest_dps = defaults.bias_sigma_rest_dps;
-  rec.rest_th_gyr_dps = defaults.rest_th_gyr_dps;
-  rec.rest_th_acc_ms2 = defaults.rest_th_acc_ms2;
-  rec.calibration_temp_c = 0.0f;
-  if(commit_record(&rec) != 0) return -2;
+#if APP_SRAM_CAPTURE
+  /* RAM accepts the restore. The sector erase waits for maintenance. */
+  g_commit_kind = VQF_COMMIT_RESTORE;
+#else
+  {
+    vqf_static_record_t rec;
+    fill_restore_record(&rec);
+    if(commit_record(&rec) != 0) return -2;
+  }
+#endif
   g_applied = defaults;
   g_applied.calibration_temp_c = 0.0f;
   g_source = VQF_STATIC_CAL_SOURCE_DEFAULT;
@@ -642,7 +713,11 @@ int vqf_static_cal_restore_defaults(void)
   g_error = VQF_STATIC_CAL_OK;
   g_pending = 0U;
   g_sample_n = 0U;
+#if APP_SRAM_CAPTURE
+  return 1;
+#else
   return 0;
+#endif
 }
 
 static void note_sample(const float gyr[3], const float acc[3], float temp)
@@ -746,10 +821,22 @@ void vqf_static_cal_get_status(vqf_static_cal_status_t *out)
 
 int vqf_static_cal_poll(vqf_static_cal_status_t *status, vqf_static_params_t *params)
 {
-  if(g_state == VQF_STATIC_CAL_VALIDATING) {
+  if(g_state == VQF_STATIC_CAL_VALIDATING && g_commit_kind == VQF_COMMIT_NONE) {
     uint8_t err = g_result_error;
     g_frozen_elapsed = g_last_now - g_collect_since;
     g_frozen_samples = g_sample_n;
+#if APP_SRAM_CAPTURE
+    if(err == VQF_STATIC_CAL_OK && stage_candidate() != 0) err = VQF_STATIC_CAL_ERR_FLASH_WRITE;
+    if(err == VQF_STATIC_CAL_OK) {
+      /* Stay in VALIDATING until maintenance commits the staged record. */
+      g_error = err;
+      g_pending = 1U;
+    } else {
+      g_state = VQF_STATIC_CAL_FAILED;
+      g_error = err;
+      g_pending = 1U;
+    }
+#else
     if(err == VQF_STATIC_CAL_OK && save_candidate() != 0) err = VQF_STATIC_CAL_ERR_FLASH_WRITE;
     if(err == VQF_STATIC_CAL_OK) {
       g_applied = g_candidate;
@@ -758,6 +845,7 @@ int vqf_static_cal_poll(vqf_static_cal_status_t *status, vqf_static_params_t *pa
     } else g_state = VQF_STATIC_CAL_FAILED;
     g_error = err;
     g_pending = 1U;
+#endif
   }
   if(!g_pending) return 0;
   g_pending = 0U;
