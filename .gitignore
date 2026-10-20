@@ -7,6 +7,7 @@
 !/make/
 !/docs/
 !/firmware/
+!/tools/
 !/LICENSES/
 !/src/
 !/inc/
@@ -155,3 +156,4 @@ Desktop.ini
 
 # Explicit public APP artifact; no device dumps or private model data.
 !/firmware/20261017j/lsm6dsv_eskf8k_j.bin
+!/firmware/20261020a/lsm6dsv_eskf8k_ram_bias.bin

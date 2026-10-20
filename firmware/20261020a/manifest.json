@@ -1,0 +1,82 @@
+{
+  "version": "20261020a",
+  "base": "20261017j",
+  "policy_tests": [
+    {
+      "case": "ram-only",
+      "result": "PASS",
+      "expected_queue_calls": 0,
+      "expected_auto_checks": 0
+    },
+    {
+      "case": "legacy-default",
+      "result": "PASS",
+      "expected_queue_calls": 1,
+      "expected_auto_checks": 1
+    },
+    {
+      "case": "protected-updater",
+      "result": "PASS",
+      "expected_queue_calls": 0,
+      "expected_auto_checks": 0
+    }
+  ],
+  "builds": [
+    {
+      "profile": "ram-bias",
+      "bin_sha256": "09962f1e265b7d67ae0c597f29bb3394e4a8446f73d18f43d3f70c2b7af7c951",
+      "bin_bytes": 171780,
+      "elapsed_seconds": 6.827,
+      "exit_code": 0
+    },
+    {
+      "profile": "exact-J",
+      "bin_sha256": "a5a7a67ecc84044255573c10c8222f744310d268fd86d41b776b2f26b02aaa0c",
+      "bin_bytes": 172204,
+      "elapsed_seconds": 6.562,
+      "exit_code": 0
+    }
+  ],
+  "protected_path_code_checks": {
+    "eskf8k.o": "ALLOC sections byte-identical to exact J",
+    "vqf_wrapper.o": "ALLOC sections byte-identical to exact J",
+    "imu8k_capture.o": "ALLOC sections byte-identical to exact J",
+    "sram_capture.o": "ALLOC sections byte-identical to exact J",
+    "attitude_output.o": "ALLOC sections byte-identical to exact J"
+  },
+  "hardware_installation": "NOT AUTHORIZED / NOT PERFORMED",
+  "fresh_CPU_and_real_time": "NOT VERIFIED",
+  "board_operations": false,
+  "source_base_commit": "2f9ca81118b3a1fec85a354426c019358d2e6c06",
+  "branch": "codex/eskf8k-disable-temp-autosave",
+  "app_address": "0x08008000",
+  "artifacts": {
+    "bin": {
+      "bytes": 171780,
+      "sha256": "09962f1e265b7d67ae0c597f29bb3394e4a8446f73d18f43d3f70c2b7af7c951"
+    },
+    "elf": {
+      "bytes": 1545204,
+      "sha256": "edda4200ccb84c6e31e9d6244840cf406904ef63c502e630cd9a17173aa4dbe2"
+    },
+    "map": {
+      "bytes": 471944,
+      "sha256": "81b2d3ddd68758fdb30bbd5f5cba60615d63c0e0fbf965b191e78f5fd8999230"
+    }
+  },
+  "flags": {
+    "APP_GYR_TEMP_COMP_ENABLE": 0,
+    "APP_GYR_TEMP_LEARNING_ENABLE": 0,
+    "APP_GYR_STARTUP_BIAS_SAVE_ENABLE": 0,
+    "APP_TEMP_FLASH_AUTO_SAVE_ENABLE": 0
+  },
+  "resources": {
+    "ebss": "0x2000B0E4",
+    "heap_limit": "0x2000B2E8",
+    "estack": "0x2000BF00",
+    "static_stack_space_bytes": 3096,
+    "min_stack_reserve_bytes": 3072,
+    "main_static_frame_bytes": 688,
+    "runtime_stack_high_water": "NOT VERIFIED"
+  }
+}

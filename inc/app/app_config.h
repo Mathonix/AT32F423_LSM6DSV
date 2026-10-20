@@ -20,6 +20,11 @@
 #ifndef APP_ESKF_REST_RELAX
 #define APP_ESKF_REST_RELAX 0
 #endif
+/* Fresh startup bias always seeds the running filter. Persistence is a
+ * separate policy: the ESKF RAM-only profile must not dirty the V4 model. */
+#ifndef APP_GYR_STARTUP_BIAS_SAVE_ENABLE
+#define APP_GYR_STARTUP_BIAS_SAVE_ENABLE 1U
+#endif
 /* ESKF uses instantaneous input after startup seed, before residual bias.
  * These gates are independent of VQF tuning and the output rate guard. */
 #if APP_ESKF_REST_RELAX
@@ -32,7 +37,9 @@
 
 /* Application label: YYYYMMDD and one letter. The first build of a day is
  * "a". Each later build on that same day uses the next letter. */
-#if APP_VOFA_6AXIS
+#if APP_EXPERIMENTAL_ESKF8K && !APP_GYR_STARTUP_BIAS_SAVE_ENABLE
+#define APP_FIRMWARE_VERSION "20261020a"
+#elif APP_VOFA_6AXIS
 #if APP_ESKF_REST_RELAX
 #define APP_FIRMWARE_VERSION "20261017j"
 #elif APP_ESKF_Q_COMP_FAST==2

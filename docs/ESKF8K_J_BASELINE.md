@@ -1,5 +1,7 @@
 # 20261017j 基线与发布范围
 
+本文记录父提交 `2f9ca81118b3a1fec85a354426c019358d2e6c06` 的 J 发布基线。当前默认构建已改为 `20261020a`；使用 `PROFILE=eskf8k-j` 可复现本页所述精确 J BIN。新策略见 [TEMP_AUTOSAVE_OFF_20261020A.md](TEMP_AUTOSAVE_OFF_20261020A.md)。
+
 ## 来源
 
 - 冻结固件源码提交：`7d7a09a61c98227bda1efd44b260ee4c0a88f9c0`。

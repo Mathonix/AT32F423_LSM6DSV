@@ -458,8 +458,9 @@ int can_test_save_config(const can_config_t *config)
 
 static int app_save_gyro_bias(const float bias[3], float temp_c)
 {
-#ifdef APP_USER_BL_UPDATE
-  /* Temporary maintenance APP must not alter the persistent bias journal. */
+#if defined(APP_USER_BL_UPDATE) || !APP_GYR_STARTUP_BIAS_SAVE_ENABLE
+  /* Keep the measured seed in the running filter only. Do not dirty the V4
+   * fallback or enqueue temperature-model persistence. Existing Flash stays. */
   (void)bias; (void)temp_c; return 0;
 #else
   float nominal_bias[3];
