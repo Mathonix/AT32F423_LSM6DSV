@@ -9,6 +9,7 @@ extern "C" {
  * IRQ performs blocking 14-byte SPI read; future DMA migration possible.
  * Never call any other lsm6dsv SPI read/write while the capture is enabled.
  */
+int lsm6dsv_8k_set_odr_8k(void);
 void lsm6dsv_8k_capture_start(void);
 void lsm6dsv_8k_capture_stop(void);
 int lsm6dsv_8k_pop(lsm6dsv_raw_t *raw,uint32_t *drdy_cycles);

@@ -29,6 +29,17 @@ static sample_t ring[RING_LEN];
 static volatile uint32_t write_n,read_n,overrun_n,irq_n,spi_error_n;
 static volatile uint8_t active;
 
+/* High-accuracy 8 kHz. These are the same four writes the branch's
+ * imu8k_begin() makes; 0x1C is the HA01 8 kHz code, 0x1A was 2 kHz.
+ * CTRL1/CTRL2 go to zero first so the ODR change is a clean re-arm. */
+int lsm6dsv_8k_set_odr_8k(void)
+{
+  if(lsm6dsv_write_reg(0x10U,0x00U) || lsm6dsv_write_reg(0x11U,0x00U) ||
+     lsm6dsv_write_reg(0x62U,0x01U) || lsm6dsv_write_reg(0x13U,0x0AU)) return -1;
+  if(lsm6dsv_write_reg(0x10U,0x1CU) || lsm6dsv_write_reg(0x11U,0x1CU)) return -2;
+  return 0;
+}
+
 void lsm6dsv_8k_capture_stop(void) {
   EXINT_INTEN &= ~LINE0;
   nvic_irq_disable(EXINT0_IRQn);

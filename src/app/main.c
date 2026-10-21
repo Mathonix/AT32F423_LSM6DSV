@@ -1929,11 +1929,6 @@ int main(void)
   ws2812_init();
   live_init();
   lsm6dsv_spi_init();
-#if APP_IMU8K_CAPTURE_TEST
-  /* Stage-1 capture check: arm the EXINT0 -> SPI burst path and leave the
-   * normal polling loop untouched. Counters are read over SWD. */
-  lsm6dsv_8k_capture_start();
-#endif
 #if APP_ACC_CAL_ENABLE
   acc_calibration_load();
 #endif
@@ -2094,6 +2089,14 @@ int main(void)
     uint32_t err_streak = 0U;
 
     app_fusion_ready = 1U;
+#if APP_IMU8K_CAPTURE_TEST
+  /* Capture inspection: the ODR must be raised here, after the startup bias
+   * calibration, because that calibration rewrites CTRL1/CTRL2 back to 2 kHz.
+   * The polling loop keeps running so the measurement stays comparable. */
+  (void)lsm6dsv_8k_set_odr_8k();
+  delay_ms(30);
+  lsm6dsv_8k_capture_start();
+#endif
   while(1)
   {
     uint32_t now_cy;
