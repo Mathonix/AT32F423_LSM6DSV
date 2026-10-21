@@ -33,6 +33,7 @@ float g_rest_time = 0.0f;
 bool g_mag_ready = false;
 bool g_mag_rejection_enabled = true;
 bool g_rest_bias_enabled = APP_VQF_REST_BIAS_ENABLE != 0U;
+bool g_mag_fusion_enabled = true;
 uint8_t g_algorithm = FUSION_ALGORITHM_VQF;
 float g_calibrated_bias[3] = {0.0f, 0.0f, 0.0f};
 
@@ -269,6 +270,7 @@ extern "C" void vqf_update(const float gyr[3], const float acc[3])
 
 extern "C" int vqf_update_mag(const float mag[3])
 {
+    if(!g_mag_fusion_enabled) return -1;
     const float n2 = mag[0]*mag[0] + mag[1]*mag[1] + mag[2]*mag[2];
     if (!g_vqf || n2 < 1.0e-12f || n2 > 4000000.0f) return -1;
     if(g_algorithm==FUSION_ALGORITHM_EKF) return ahrs_ekf::mag(mag);
@@ -287,6 +289,14 @@ extern "C" void vqf_set_mag_rejection_enabled(int enabled)
     if(g_vqf) filter().setMagDistRejectionEnabled(g_mag_rejection_enabled);
 }
 extern "C" int vqf_get_mag_rejection_enabled(void) { return g_mag_rejection_enabled ? 1 : 0; }
+/* Runtime six/nine-axis switch. The magnetometer path is gated here so every
+ * engine stops observing the field immediately, without a reboot. */
+extern "C" void vqf_set_magnetic_fusion(int enabled)
+{
+    g_mag_fusion_enabled = enabled != 0;
+    ahrs_eskf8k::set_magnetic_fusion(g_mag_fusion_enabled);
+}
+extern "C" int vqf_get_magnetic_fusion(void) { return g_mag_fusion_enabled ? 1 : 0; }
 
 extern "C" void vqf_reset_mag_reference(void)
 {

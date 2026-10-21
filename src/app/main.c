@@ -1102,7 +1102,11 @@ static void protocol_frame_received(uint8_t msg_id, uint8_t seq,
       }
       else
       {
-        app_settings_dirty = 1U;
+        /* Apply the mode without waiting for a reboot: the wrapper gates the
+         * magnetometer path and every engine honours it. */
+        app_fusion_mode = (fusion_mode_t)payload[0];
+        app_relative_yaw_enabled = (app_fusion_mode == FUSION_MODE_9AXIS_RELATIVE) ? 1U : 0U;
+        vqf_set_magnetic_fusion(app_fusion_mode != FUSION_MODE_6AXIS);
       }
       /* Do not reboot if the success reply could not enter the TX queue. */
       if(protocol_reply_ack(source, seq, msg_id, status,
@@ -1989,7 +1993,9 @@ int main(void)
   }
 
   mag_err = ist8310_init();
-  mag_ok = ((mag_err == 0) && (app_fusion_mode != FUSION_MODE_6AXIS)) ? 1U : 0U;
+  /* Hardware presence only: the six/nine-axis choice is a runtime flag so a
+   * mode change applies without a reboot. */
+  mag_ok = (mag_err == 0U) ? 1U : 0U;
   mag_pending = 0U;
   mag_start_n = 0U;
   mag_updates = 0U;
@@ -2003,6 +2009,9 @@ int main(void)
   fusion_select_algorithm(app_saved_settings.fusion_algorithm);
   vqf_configure_tuning(app_saved_settings.vqf_tuning_enabled ? &app_saved_settings.vqf_tuning : NULL);
   vqf_init(1.0f / FUSION_HZ, 1.0f / FUSION_HZ);
+  /* The engine starts with magnetic fusion off; apply the stored mode so a
+   * nine-axis start actually uses the field. */
+  vqf_set_magnetic_fusion(app_fusion_mode != FUSION_MODE_6AXIS);
   zaru_heading_hold_reset(&app_zaru);
   {
     float startup_acc[3] = {0.0f, 0.0f, G_TO_MS2};
@@ -2284,7 +2293,7 @@ int main(void)
     /* Non-blocking 50 Hz magnetometer scheduler: never wait 5 ms inside
      * the 2 kHz IMU/VQF path. Only the short I2C trigger/read transactions
      * occupy the loop. */
-    if(mag_ok)
+    if(mag_ok && vqf_get_magnetic_fusion())
     {
 #if MAG_FUSION_ENABLE
       /* Keep magnetic fusion out of the bit-banged I2C read slot. The

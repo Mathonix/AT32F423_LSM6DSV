@@ -30,6 +30,9 @@ void vqf_update_acc(const float acc[3]);
 int vqf_update_mag(const float mag[3]);
 void vqf_reset_mag_reference(void);
 void vqf_set_mag_rejection_enabled(int enabled);
+/* Runtime six/nine-axis switch; takes effect without a reboot. */
+void vqf_set_magnetic_fusion(int enabled);
+int vqf_get_magnetic_fusion(void);
 int vqf_get_mag_rejection_enabled(void);
 void vqf_get_quat6d(float q[4]);
 void vqf_get_quat9d(float q[4]);
