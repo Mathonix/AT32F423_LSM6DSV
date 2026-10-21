@@ -2119,7 +2119,14 @@ int main(void)
         /* The engine takes every sample. VQF is fed every fourth one so its
          * 2 kHz cadence matches the dt it was initialised with. */
         if(fusion_get_algorithm() == FUSION_ALGORITHM_ESKF) vqf_update_gyr(gyr);
-        else if((pop_n & 3U) == 0U) vqf_update_gyr(gyr);
+        else if((pop_n & 3U) == 0U)
+        {
+          /* VQF wants gyro and accelerometer together at 2 kHz. */
+          float acc_now[3];
+          for(i = 0U; i < 3U; i++)
+            acc_now[i] = acc_calibrate_g(i, (float)raw.acc[i] * ACC_G_PER_LSB) * G_TO_MS2;
+          vqf_update(gyr, acc_now);
+        }
         pop_n++; popped++;
       }
       if(popped == 0U)
@@ -2212,9 +2219,9 @@ int main(void)
 #if APP_IMU8K_ENGINE
     /* The engine already integrated this pass's gyro samples at 8 kHz; only
      * the accelerometer observation is missing. VQF still needs both. */
-    /* Gyro already entered at the right cadence; only the accelerometer
-     * observation is still due for whichever engine is selected. */
-    vqf_update_acc(acc);
+    /* The engine takes only the accelerometer here; VQF was fed whole in the
+     * drain so its 2 kHz cadence stays exact. */
+    if(fusion_get_algorithm() == FUSION_ALGORITHM_ESKF) vqf_update_acc(acc);
 #else
     vqf_update(APP_GYR_FUSION_LPF_ENABLE ? gyr_lpf : gyr, acc);
 #endif
