@@ -676,14 +676,7 @@ static void protocol_reply_rest_bias(protocol_source_t source,uint8_t seq)
 }
 static void protocol_reply_algorithm(protocol_source_t source,uint8_t seq)
 {
-#if APP_IMU8K_ENGINE
-  /* This build runs the ESKF only, so that is also its only saved choice. A
-   * settings byte left over from a 2 kHz image must not look like a pending
-   * change the host would offer to apply on reboot. */
-  const uint8_t saved=FUSION_ALGORITHM_ESKF;
-#else
   const uint8_t saved=app_saved_settings.fusion_algorithm;
-#endif
   uint8_t data[4]={1U,fusion_get_algorithm(),saved,
       (uint8_t)(fusion_get_algorithm()!=saved)};
   uint8_t frame[AHRS_MAX_FRAME_LEN];
@@ -906,10 +899,6 @@ static void protocol_frame_received(uint8_t msg_id, uint8_t seq,
       break;
     case AHRS_CMD_SET_ALGORITHM:
       if(len!=1U || payload[0]>=FUSION_ALGORITHM_COUNT) status=AHRS_ACK_INVALID_PARAM;
-#if APP_IMU8K_ENGINE
-            /* The 8 kHz build runs the ESKF only; VQF and EKF cannot keep up. */
-            else if(payload[0]!=FUSION_ALGORITHM_ESKF) status=AHRS_ACK_INVALID_PARAM;
-#endif
       else if(!app_fusion_ready || vqf_static_cal_active() || acc_cal_rt.active ||
               inertial_stream_active(&app_ins_stream) || protocol_reset_pending!=RESET_NONE) status=AHRS_ACK_EXEC_FAILED;
       else {
@@ -2011,13 +2000,7 @@ int main(void)
   vqf_apply_profile(app_filter_profile);
   vqf_set_mag_rejection_enabled(app_saved_settings.mag_rejection_enabled);
   vqf_set_rest_bias_enabled(app_saved_settings.rest_bias_enabled);
-#if APP_IMU8K_ENGINE
-  /* Only the ESKF sustains the capture rate on this MCU. VQF and EKF live on
-   * the 2 kHz build; a saved VQF/EKF choice is ignored here. */
-  fusion_select_algorithm(FUSION_ALGORITHM_ESKF);
-#else
   fusion_select_algorithm(app_saved_settings.fusion_algorithm);
-#endif
   vqf_configure_tuning(app_saved_settings.vqf_tuning_enabled ? &app_saved_settings.vqf_tuning : NULL);
   vqf_init(1.0f / FUSION_HZ, 1.0f / FUSION_HZ);
   zaru_heading_hold_reset(&app_zaru);
@@ -2130,7 +2113,7 @@ int main(void)
      * newest sample further below. */
     unsigned popped = 0U;
     {
-      while(popped < 8U && lsm6dsv_8k_pop(&raw, &now_cy))
+      while(popped < 16U && lsm6dsv_8k_pop(&raw, &now_cy))
       {
         for(i = 0U; i < 3U; i++)
           gyr[i] = gyro_dps_from_raw(i, raw.gyr[i], temp_c) * DEG2RAD;
@@ -2377,14 +2360,14 @@ int main(void)
     window_samples += popped;
     app_output_phase += popped;
     app_attitude_phase += popped;
-    uint8_t out_due = 0U, att_due = 0U;
-    while(app_output_phase >= app_output_div) { app_output_phase -= app_output_div; out_due = 1U; }
+    uint8_t out_slots = 0U, att_due = 0U;
+    while(app_output_phase >= app_output_div) { app_output_phase -= app_output_div; if(out_slots < 4U) out_slots++; }
     const uint16_t att_div = (uint16_t)(APP_SAMPLE_RATE_HZ / ATTITUDE_FILTER_HZ);
     while(app_attitude_phase >= att_div) { app_attitude_phase -= att_div; att_due = 1U; }
 #else
     fusion_n++;
     window_samples++;
-    const uint8_t out_due = ((fusion_n % app_output_div) == 0U);
+    const uint8_t out_slots = ((fusion_n % app_output_div) == 0U) ? 1U : 0U;
     const uint8_t att_due = ((fusion_n % (APP_FUSION_HZ / ATTITUDE_FILTER_HZ)) == 0U);
 #endif
 
@@ -2396,7 +2379,7 @@ int main(void)
       capture_any|=capture_due[source];
     }
 
-    if(out_due || att_due || capture_any)
+    if(out_slots || att_due || capture_any)
     {
       /* Odd/even sequence lock lets DAPLink read a coherent live snapshot
        * without halting the 2 kHz fusion loop. */
@@ -2463,7 +2446,7 @@ int main(void)
       vqf_live.millis = millis();
       __DMB();
       vqf_live.seq++;
-      if(out_due) out_n++;
+      out_n += out_slots;
 
       if((fusion_n % DAP_OUTPUT_DIV) == 0U)
       {
@@ -2541,8 +2524,8 @@ int main(void)
           if(n)(void)protocol_send_stream_frame((protocol_source_t)source,frame,n);
         }
       }
-      if(protocol_reset_pending == RESET_NONE && !gyro_temp_learning_saving() && out_due)
-        vofa_send_justfloat(fusion_n);
+      if(protocol_reset_pending == RESET_NONE && !gyro_temp_learning_saving())
+        for(unsigned slot=0U; slot<out_slots; slot++) vofa_send_justfloat(fusion_n);
     }
 
 service_tasks:
