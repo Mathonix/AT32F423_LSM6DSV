@@ -157,7 +157,7 @@
 #ifndef APP_MAG_FUSION_ENABLE
 #define APP_MAG_FUSION_ENABLE     1U
 #endif
-#define APP_MAG_VQF_UPDATE_DIV    5U
+#define APP_MAG_VQF_UPDATE_DIV    1U
 /* Relative-yaw output reference: 0 = VQF/KF yaw, 1 = yaw relative to boot.
  * This changes only the published yaw reference; VQF remains 9-axis. */
 #define APP_RELATIVE_YAW_ENABLE     0U

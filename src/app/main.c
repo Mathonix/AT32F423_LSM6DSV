@@ -72,7 +72,7 @@ static uint32_t user_bl_requested_ms;
 #define CAL_BIAS_TEMP_WINDOW_C APP_GYR_BIAS_TEMP_WINDOW_C
 #define GYR_LPF_CUTOFF_HZ APP_GYR_LPF_CUTOFF_HZ /* reduce gyro noise before integration */
 #define ERR_STREAK_RECOVER   20U
-#define MAG_PERIOD_N         (APP_SAMPLE_RATE_HZ / 50U) /* read IST8310 at 50 Hz */
+#define MAG_PERIOD_N         (APP_SAMPLE_RATE_HZ / 100U) /* read IST8310 at 100 Hz */
 #define MAG_VQF_DIV          APP_MAG_VQF_UPDATE_DIV /* Full VQF update at 10 Hz */
 #define MAG_FUSION_ENABLE    APP_MAG_FUSION_ENABLE
 #define MAG_TIMEOUT_N        ((APP_SAMPLE_RATE_HZ * 15U) / 1000U) /* 15 ms in samples */
