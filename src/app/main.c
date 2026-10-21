@@ -676,8 +676,16 @@ static void protocol_reply_rest_bias(protocol_source_t source,uint8_t seq)
 }
 static void protocol_reply_algorithm(protocol_source_t source,uint8_t seq)
 {
-  uint8_t data[4]={1U,fusion_get_algorithm(),app_saved_settings.fusion_algorithm,
-      (uint8_t)(fusion_get_algorithm()!=app_saved_settings.fusion_algorithm)};
+#if APP_IMU8K_ENGINE
+  /* This build runs the ESKF only, so that is also its only saved choice. A
+   * settings byte left over from a 2 kHz image must not look like a pending
+   * change the host would offer to apply on reboot. */
+  const uint8_t saved=FUSION_ALGORITHM_ESKF;
+#else
+  const uint8_t saved=app_saved_settings.fusion_algorithm;
+#endif
+  uint8_t data[4]={1U,fusion_get_algorithm(),saved,
+      (uint8_t)(fusion_get_algorithm()!=saved)};
   uint8_t frame[AHRS_MAX_FRAME_LEN];
   uint16_t n=protocol_pack_frame(frame,sizeof(frame),AHRS_MSG_ALGORITHM,seq,data,sizeof(data));
   if(n)(void)protocol_send_frame(source,frame,n);
