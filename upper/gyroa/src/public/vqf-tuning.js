@@ -128,7 +128,7 @@
       $('vqfTuningRestore').disabled=disabled;
       $('vqfTuningRead').disabled=!c.connected||busy;
       $('vqfTuningDiscard').disabled=busy||!s.dirty;
-      $('vqfTuningState').textContent=s.data?(s.data.algorithm===1?'当前 EKF · 切换 VQF 后可调参':s.data.restartRequired?'已保存 · 等待重启生效':s.data.custom?'自定义参数':'档位 / 静置初始化参数'):'--';
+      $('vqfTuningState').textContent=s.data?(s.data.algorithm!==0?'当前 '+(globalThis.GyroFusionAlgorithm?.NAMES?.[s.data.algorithm]||'非 VQF')+' · 切换 VQF 后可调参':s.data.restartRequired?'已保存 · 等待重启生效':s.data.custom?'自定义参数':'档位 / 静置初始化参数'):'--';
       $('vqfTuningMessage').textContent=!c.connected?'请先连接设备':s.pending?s.message:c.busy?'请先结束其他操作或保存、撤销其他配置修改':validate(s.draft)&&s.dirty?validate(s.draft):s.message;
       $('vqfTuningDirty').hidden=!s.dirty;
     }
