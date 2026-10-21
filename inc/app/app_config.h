@@ -15,7 +15,9 @@
  * the app clock (APP_FUSION_HZ) stays at 2 kHz so every derived timer and
  * decimator keeps its meaning. */
 #ifndef APP_IMU8K_ENGINE
-#define APP_IMU8K_ENGINE 0
+/* Default: the 8 kHz capture feeds the ESKF. Build with
+ * -DAPP_IMU8K_ENGINE=0 for the 2 kHz VQF/EKF image. */
+#define APP_IMU8K_ENGINE 1
 #endif
 /* Rate at which the loop advances its sample counter: the capture rate when
  * the ring is drained, otherwise the fusion rate. Sample-count decimators

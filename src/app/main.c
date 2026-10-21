@@ -898,6 +898,10 @@ static void protocol_frame_received(uint8_t msg_id, uint8_t seq,
       break;
     case AHRS_CMD_SET_ALGORITHM:
       if(len!=1U || payload[0]>=FUSION_ALGORITHM_COUNT) status=AHRS_ACK_INVALID_PARAM;
+#if APP_IMU8K_ENGINE
+            /* The 8 kHz build runs the ESKF only; VQF and EKF cannot keep up. */
+            else if(payload[0]!=FUSION_ALGORITHM_ESKF) status=AHRS_ACK_INVALID_PARAM;
+#endif
       else if(!app_fusion_ready || vqf_static_cal_active() || acc_cal_rt.active ||
               inertial_stream_active(&app_ins_stream) || protocol_reset_pending!=RESET_NONE) status=AHRS_ACK_EXEC_FAILED;
       else {
@@ -1717,9 +1721,9 @@ static void vofa_send_justfloat(uint32_t fusion_n)
     };
     const uint8_t flags = vqf_live.rest_detected ? AHRS_FLAG_REST_DETECTED : 0U;
     for(unsigned source = 0U; source < 2U; ++source) {
-      const int cdc_due=data_capture_telemetry_due(&app_data_capture,source,fusion_n,APP_FUSION_HZ);
+      const int cdc_due=data_capture_telemetry_due(&app_data_capture,source,fusion_n,APP_SAMPLE_RATE_HZ);
       const int web_due=source==PROTOCOL_SOURCE_USB &&
-        data_capture_telemetry_due(&app_data_capture,PROTOCOL_SOURCE_WEBUSB,fusion_n,APP_FUSION_HZ);
+        data_capture_telemetry_due(&app_data_capture,PROTOCOL_SOURCE_WEBUSB,fusion_n,APP_SAMPLE_RATE_HZ);
       if(!cdc_due && !web_due)continue;
       float legacy_fields[AHRS_FIELD_COUNT];
       const float *port_fields = fields;
@@ -1999,7 +2003,13 @@ int main(void)
   vqf_apply_profile(app_filter_profile);
   vqf_set_mag_rejection_enabled(app_saved_settings.mag_rejection_enabled);
   vqf_set_rest_bias_enabled(app_saved_settings.rest_bias_enabled);
+#if APP_IMU8K_ENGINE
+  /* Only the ESKF sustains the capture rate on this MCU. VQF and EKF live on
+   * the 2 kHz build; a saved VQF/EKF choice is ignored here. */
+  fusion_select_algorithm(FUSION_ALGORITHM_ESKF);
+#else
   fusion_select_algorithm(app_saved_settings.fusion_algorithm);
+#endif
   vqf_configure_tuning(app_saved_settings.vqf_tuning_enabled ? &app_saved_settings.vqf_tuning : NULL);
   vqf_init(1.0f / FUSION_HZ, 1.0f / FUSION_HZ);
   zaru_heading_hold_reset(&app_zaru);
@@ -2121,7 +2131,8 @@ int main(void)
         if(fusion_get_algorithm() == FUSION_ALGORITHM_ESKF) vqf_update_gyr(gyr);
         else if((pop_n & 3U) == 0U)
         {
-          /* VQF wants gyro and accelerometer together at 2 kHz. */
+          /* VQF cannot keep up at 8 kHz on this MCU; it is fed complete
+           * gyro+accelerometer pairs at 2 kHz instead. */
           float acc_now[3];
           for(i = 0U; i < 3U; i++)
             acc_now[i] = acc_calibrate_g(i, (float)raw.acc[i] * ACC_G_PER_LSB) * G_TO_MS2;
