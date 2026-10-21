@@ -5,6 +5,11 @@
 /* 8 kHz ESKF engine switches (ported 2026-10-22). Everything here is inert
  * until the runtime engine selector chooses the engine. */
 #include "eskf8k_config.h"
+/* Stage-1 bring-up of the 8 kHz EXINT capture path: arms the interrupt and
+ * counts edges without changing the fusion loop. Off in shipped builds. */
+#ifndef APP_IMU8K_CAPTURE_TEST
+#define APP_IMU8K_CAPTURE_TEST 0
+#endif
 
 /* Application label: YYYYMMDD and one letter. The first build of a day is
  * "a". Each later build on that same day uses the next letter. */

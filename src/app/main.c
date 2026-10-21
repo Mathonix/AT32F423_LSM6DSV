@@ -7,6 +7,9 @@
 #include "bsp.h"
 #include "lsm6dsv.h"
 #include "ist8310.h"
+#if APP_IMU8K_CAPTURE_TEST
+#include "lsm6dsv_8k.h"
+#endif
 #include "ws2812.h"
 #include "vqf.h"
 #include "attitude_output.h"
@@ -1926,6 +1929,11 @@ int main(void)
   ws2812_init();
   live_init();
   lsm6dsv_spi_init();
+#if APP_IMU8K_CAPTURE_TEST
+  /* Stage-1 capture check: arm the EXINT0 -> SPI burst path and leave the
+   * normal polling loop untouched. Counters are read over SWD. */
+  lsm6dsv_8k_capture_start();
+#endif
 #if APP_ACC_CAL_ENABLE
   acc_calibration_load();
 #endif

@@ -40,6 +40,7 @@ SRCS := \
   $(SRC_DIR)/$(APP_MAIN) \
   $(SRC_DIR)/bsp/bsp.c \
   $(SRC_DIR)/drivers/lsm6dsv.c \
+  $(SRC_DIR)/drivers/lsm6dsv_8k.c \
   $(SRC_DIR)/drivers/ist8310.c \
   $(SRC_DIR)/calibration/gyro_bias_history.c \
   $(SRC_DIR)/calibration/gyro_temp_comp.c \
@@ -74,6 +75,7 @@ SRCS := \
   $(LIB)/libraries/drivers/src/at32f423_gpio.c \
   $(LIB)/libraries/drivers/src/at32f423_misc.c \
   $(LIB)/libraries/drivers/src/at32f423_spi.c \
+  $(LIB)/libraries/drivers/src/at32f423_scfg.c \
   $(LIB)/libraries/drivers/src/at32f423_usart.c \
   $(LIB)/libraries/drivers/src/at32f423_flash.c \
   $(LIB)/libraries/drivers/src/at32f423_pwc.c \
