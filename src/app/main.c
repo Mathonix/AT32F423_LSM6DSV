@@ -179,6 +179,11 @@ static protocol_parser_t uart_protocol_parser;
 static protocol_parser_t usb_protocol_parser;
 static protocol_parser_t webusb_protocol_parser;
 static stream_mode_t app_stream_mode = STREAM_MODE_VOFA_3CH;
+/* Diagnostics for the magnetometer path; readable over SWD. */
+volatile uint32_t dbg_mag_read, dbg_mag_fuse, dbg_mag_err, dbg_mag_init, dbg_mag_addr, dbg_mag_gate;
+/* Magnetometer cadence accumulator: loop passes advance by a variable number
+ * of samples, so a modulo test on fusion_n does not fire evenly. */
+static uint32_t mag_phase;
 static fusion_mode_t app_fusion_mode = FUSION_MODE_9AXIS;
 static device_settings_t app_saved_settings;
 static output_config_t app_outputs[2];
@@ -1996,6 +2001,7 @@ int main(void)
   /* Hardware presence only: the six/nine-axis choice is a runtime flag so a
    * mode change applies without a reboot. */
   mag_ok = (mag_err == 0U) ? 1U : 0U;
+  dbg_mag_init = (uint32_t)(int32_t)mag_err; dbg_mag_addr = (uint32_t)ist8310_get_addr();
   mag_pending = 0U;
   mag_start_n = 0U;
   mag_updates = 0U;
@@ -2293,6 +2299,7 @@ int main(void)
     /* Non-blocking 50 Hz magnetometer scheduler: never wait 5 ms inside
      * the 2 kHz IMU/VQF path. Only the short I2C trigger/read transactions
      * occupy the loop. */
+    dbg_mag_gate = (uint32_t)((mag_ok ? 1U : 0U) | (vqf_get_magnetic_fusion() ? 2U : 0U));
     if(mag_ok && vqf_get_magnetic_fusion())
     {
 #if MAG_FUSION_ENABLE
@@ -2302,10 +2309,17 @@ int main(void)
       if(mag_fusion_pending)
       {
         mag_fusion_pending = 0U;
-        if(vqf_update_mag(mag) == 0) mag_updates++;
+        if(vqf_update_mag(mag) == 0) { mag_updates++; dbg_mag_fuse++; } else dbg_mag_err++;
       }
 #endif
-      if(!mag_pending && ((fusion_n % MAG_PERIOD_N) == 0U))
+#if APP_IMU8K_ENGINE
+      mag_phase += popped;
+#else
+      mag_phase += 1U;
+#endif
+      uint8_t mag_due = 0U;
+      while(mag_phase >= MAG_PERIOD_N) { mag_phase -= MAG_PERIOD_N; mag_due = 1U; }
+      if(!mag_pending && mag_due)
       {
         mag_err = ist8310_start_measurement();
         if(mag_err == 0)
@@ -2318,6 +2332,7 @@ int main(void)
       {
         int16_t mag_raw[3];
         mag_err = ist8310_read_ready(mag_raw);
+        if(mag_err == 0) dbg_mag_read++; else dbg_mag_err++;
         mag_pending = 0U;
         if(mag_err == 0)
         {
