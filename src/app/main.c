@@ -2170,6 +2170,10 @@ int main(void)
       app_temp_discard_sample=0U; gyr_lpf_init=0U;
       gyro_temp_learning_gap(); goto service_tasks;
     }
+#if !APP_IMU8K_ENGINE
+    /* The gap heuristic assumes one sample per loop pass at the fusion rate.
+     * With the capture ring a pass consumes several samples, so a long pass is
+     * not a dropped sample; overruns are counted by the capture driver. */
     if((fusion_n > 0U) && (dt_cy > DROP_DT_CYCLES))
     {
       app_sample_skips++;
@@ -2177,6 +2181,7 @@ int main(void)
       err_streak = 0U;
       goto service_tasks;
     }
+#endif
     err_streak = 0U;
 
     for(i = 0; i < 3U; i++)
