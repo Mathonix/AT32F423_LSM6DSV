@@ -421,7 +421,7 @@
             <label class="field">JustFloat 通道<select id="justChannels"><option value="3" selected>3（Yaw / Pitch / Roll）</option><option value="6">6（Yaw / Pitch / Roll / Gz / Az / Temp）</option></select></label>
           </section><section class="card" id="algorithmPanel" data-fw-inert>
             <div class="card-h"><h2>融合算法</h2><span class="filter-state" id="algorithmState">当前 -- · 已保存 --</span></div>
-            <label class="field">算法<select id="algorithmSelect" disabled><option value="0">VQF</option><option value="1">EKF（扩展卡尔曼）</option></select></label>
+            <label class="field">算法<select id="algorithmSelect" disabled><option value="0">VQF</option><option value="1">EKF（扩展卡尔曼）</option><option value="2">ESKF（8 kHz 单状态）</option></select></label>
             <p>六轴、九轴及九轴相对角均可使用。保存后自动重启设备，并重新连接原 USB / 串口。</p>
             <div class="filter-actions"><button id="algorithmRead" type="button" disabled>读取</button><button id="algorithmApply" type="button" class="primary" disabled>保存并重启</button></div>
             <p id="algorithmMessage" role="status" aria-live="polite">请先连接设备</p>

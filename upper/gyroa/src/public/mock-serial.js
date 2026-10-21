@@ -246,7 +246,7 @@
         case 0x50: return this.algorithmUnsupported?this.seqAck(id,seq,1,0):pl.length?this.seqAck(id,seq,BAD,0):this.algorithmFrame(seq);
         case 0x51: {
           if(this.algorithmUnsupported)return this.seqAck(id,seq,1,0);
-          if(pl.length!==1||pl[0]>1)return this.seqAck(id,seq,BAD,0);
+          if(pl.length!==1||pl[0]>2)return this.seqAck(id,seq,BAD,0);
           if(this.failSave||this.acc.status===1||this.insActive)return this.seqAck(id,seq,FAIL,0);
           this.savedAlgorithm=pl[0];return Uint8Array.from([...this.seqAck(id,seq,S,0),...this.algorithmFrame(seq)]);
         }

@@ -1,9 +1,10 @@
 (() => {
   'use strict';
-  const QUERY=0x50,SET=0x51,MSG=0x52,NAMES=['VQF','EKF'];
+  const QUERY=0x50,SET=0x51,MSG=0x52,NAMES=['VQF','EKF','ESKF'];
+  const LAST=NAMES.length-1;
   function decode(p) {
     if(p.length!==4)return {type:'badLength',id:MSG,length:p.length,expected:4};
-    if(p[0]!==1||p[1]>1||p[2]>1||p[3]!==Number(p[1]!==p[2]))return {type:'unknown',id:MSG};
+    if(p[0]!==1||p[1]>LAST||p[2]>LAST||p[3]!==Number(p[1]!==p[2]))return {type:'unknown',id:MSG};
     return {type:'fusionAlgorithm',active:p[1],saved:p[2],restartRequired:!!p[3]};
   }
   function createController(io) {
@@ -13,7 +14,7 @@
     function finish(message){clearTimeout(timer);timer=null;state.pending=null;state.message=message;changed();}
     function reset(){clearTimeout(timer);timer=null;Object.assign(state,{supported:null,data:null,draft:null,pending:null,message:'请先连接设备'});changed();}
     function request(kind) {
-      if(state.pending||!io.connected()||(kind==='set'&&(state.supported!==true||io.busy()||![0,1].includes(state.draft))))return false;
+      if(state.pending||!io.connected()||(kind==='set'&&(state.supported!==true||io.busy()||!([0,1,2].includes(state.draft)))))return false;
       const req=state.pending={kind,seq:io.nextSeq(),value:state.draft,acked:false};
       state.message=kind==='set'?'正在保存融合算法…':'正在读取融合算法…';changed();
       timer=setTimeout(()=>{if(state.pending===req)finish(kind==='set'?'保存未确认，请读取核对；设备尚未自动重启':'未收到融合算法，请读取重试');},3000);
@@ -36,7 +37,7 @@
         Promise.resolve().then(()=>io.restart()).then(ok=>{if(!ok&&io.connected()) {state.message='算法已保存，暂未重启；请在设备空闲时重启';changed();}},()=>{state.message='算法已保存，自动重启未完成；请重启设备';changed();});
       } else finish(`${p.kind==='set'?'已保存，':''}当前 ${NAMES[data.active]}${data.restartRequired?'；已保存 '+NAMES[data.saved]+'，重启后生效':''}`);
     }
-    return {state,reset,query:()=>request('query'),choose:value=>{if(!state.pending&&[0,1].includes(value)){state.draft=value;changed();}},apply:()=>request('set'),onAck,onState};
+    return {state,reset,query:()=>request('query'),choose:value=>{if(!state.pending&&[0,1,2].includes(value)){state.draft=value;changed();}},apply:()=>request('set'),onAck,onState};
   }
   function createView(controller,context,doc=document) {
     const select=doc.getElementById('algorithmSelect'),apply=doc.getElementById('algorithmApply'),read=doc.getElementById('algorithmRead'),status=doc.getElementById('algorithmMessage'),current=doc.getElementById('algorithmState');
