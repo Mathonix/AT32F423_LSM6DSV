@@ -1,7 +1,10 @@
-﻿#ifndef APP_CONFIG_H
+#ifndef APP_CONFIG_H
 #define APP_CONFIG_H
 
 /* Central application configuration. Keep all board-level tuning here. */
+/* 8 kHz ESKF engine switches (ported 2026-10-22). Everything here is inert
+ * until the runtime engine selector chooses the engine. */
+#include "eskf8k_config.h"
 
 /* Application label: YYYYMMDD and one letter. The first build of a day is
  * "a". Each later build on that same day uses the next letter. */

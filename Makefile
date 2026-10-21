@@ -51,6 +51,7 @@ SRCS := \
   $(SRC_DIR)/calibration/fusion_settings.c \
   $(SRC_DIR)/calibration/vqf_static_cal.c \
   $(SRC_DIR)/fusion/attitude_output.c \
+  $(SRC_DIR)/bsp/static6_diag.c \
   $(SRC_DIR)/fusion/zaru_heading_hold.c \
   $(SRC_DIR)/bsp/ws2812.c \
   $(SRC_DIR)/drivers/can_test.c \
@@ -84,6 +85,7 @@ SRCS := \
 CPPSRCS := \
   $(SRC_DIR)/fusion/ekf.cpp \
   $(SRC_DIR)/fusion/vqf_wrapper.cpp \
+  $(SRC_DIR)/fusion/eskf8k.cpp \
   $(SRC_DIR)/fusion/vqf_full.cpp
 
 INCLUDES := \
