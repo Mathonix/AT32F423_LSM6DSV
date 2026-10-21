@@ -75,7 +75,7 @@ static uint32_t user_bl_requested_ms;
 #define MAG_PERIOD_N         (APP_SAMPLE_RATE_HZ / 50U) /* read IST8310 at 50 Hz */
 #define MAG_VQF_DIV          APP_MAG_VQF_UPDATE_DIV /* Full VQF update at 10 Hz */
 #define MAG_FUSION_ENABLE    APP_MAG_FUSION_ENABLE
-#define MAG_TIMEOUT_N        30U
+#define MAG_TIMEOUT_N        ((APP_SAMPLE_RATE_HZ * 15U) / 1000U) /* 15 ms in samples */
 #define MAG_UT_PER_LSB       0.3f
 
 /* Separate startup diagnostic ABI; existing live telemetry stays unchanged. */
@@ -180,7 +180,7 @@ static protocol_parser_t usb_protocol_parser;
 static protocol_parser_t webusb_protocol_parser;
 static stream_mode_t app_stream_mode = STREAM_MODE_VOFA_3CH;
 /* Diagnostics for the magnetometer path; readable over SWD. */
-volatile uint32_t dbg_mag_read, dbg_mag_fuse, dbg_mag_err, dbg_mag_init, dbg_mag_addr, dbg_mag_gate;
+volatile uint32_t dbg_mag_read, dbg_mag_fuse, dbg_mag_err, dbg_mag_init, dbg_mag_addr, dbg_mag_gate, dbg_mag_trig, dbg_mag_trig_err, dbg_mag_pending, dbg_mag_due;
 /* Magnetometer cadence accumulator: loop passes advance by a variable number
  * of samples, so a modulo test on fusion_n does not fire evenly. */
 static uint32_t mag_phase;
@@ -2319,9 +2319,13 @@ int main(void)
 #endif
       uint8_t mag_due = 0U;
       while(mag_phase >= MAG_PERIOD_N) { mag_phase -= MAG_PERIOD_N; mag_due = 1U; }
+      dbg_mag_pending = mag_pending;
+      if(mag_due) dbg_mag_due++;
       if(!mag_pending && mag_due)
       {
+        dbg_mag_trig++;
         mag_err = ist8310_start_measurement();
+        if(mag_err != 0) dbg_mag_trig_err++;
         if(mag_err == 0)
         {
           mag_pending = 1U;
