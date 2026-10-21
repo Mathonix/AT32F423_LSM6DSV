@@ -58,7 +58,7 @@ static uint32_t user_bl_requested_ms;
 #if ((APP_FUSION_HZ % DAP_OUTPUT_HZ) != 0U)
 #error "DAP_OUTPUT_HZ must divide APP_FUSION_HZ exactly"
 #endif
-#define DAP_OUTPUT_DIV       ((FUSION_RATE_HZ >= DAP_OUTPUT_HZ) ? (FUSION_RATE_HZ / DAP_OUTPUT_HZ) : 1U)
+#define DAP_OUTPUT_DIV       ((APP_SAMPLE_RATE_HZ >= DAP_OUTPUT_HZ) ? (APP_SAMPLE_RATE_HZ / DAP_OUTPUT_HZ) : 1U)
 #define YAW_KF_SYNC_DIV      1U   /* VOFA output is now the synchronized 200 Hz stream */
 
 #define GYR_DPS_PER_LSB      gyro_range_dps_per_lsb(app_gyro_range_dps)
@@ -72,7 +72,7 @@ static uint32_t user_bl_requested_ms;
 #define CAL_BIAS_TEMP_WINDOW_C APP_GYR_BIAS_TEMP_WINDOW_C
 #define GYR_LPF_CUTOFF_HZ APP_GYR_LPF_CUTOFF_HZ /* reduce gyro noise before integration */
 #define ERR_STREAK_RECOVER   20U
-#define MAG_PERIOD_N         40U /* read IST8310 at 50 Hz */
+#define MAG_PERIOD_N         (APP_SAMPLE_RATE_HZ / 50U) /* read IST8310 at 50 Hz */
 #define MAG_VQF_DIV          APP_MAG_VQF_UPDATE_DIV /* Full VQF update at 10 Hz */
 #define MAG_FUSION_ENABLE    APP_MAG_FUSION_ENABLE
 #define MAG_TIMEOUT_N        30U
@@ -2498,7 +2498,7 @@ int main(void)
         __DMB();
         vqf_nine_live.seq++;
       }
-      if((fusion_n % (APP_FUSION_HZ / ATTITUDE_FILTER_HZ))==0U || capture_any) app_update_attitude();
+      if(att_due || capture_any) app_update_attitude();
       if(capture_any) {
         const float values[9]={vqf_live.ax,vqf_live.ay,vqf_live.az,vqf_live.gx,vqf_live.gy,vqf_live.gz,
                               vofa_pose_live.yaw,vofa_pose_live.pitch,vofa_pose_live.roll};
