@@ -10,7 +10,7 @@
 /* EXINT0_IRQHandler below is referenced by the vector table, so an unguarded
  * definition would pull this module -- and its ring -- into every image even
  * when nothing arms it. Compile it only for builds that use the capture. */
-#if APP_IMU8K_CAPTURE_TEST
+#if APP_IMU8K_CAPTURE_TEST || APP_IMU8K_ENGINE
 
 #if APP_SRAM_CAPTURE
 #define RING_LEN 256U

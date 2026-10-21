@@ -10,6 +10,21 @@
 #ifndef APP_IMU8K_CAPTURE_TEST
 #define APP_IMU8K_CAPTURE_TEST 0
 #endif
+/* Consume the 8 kHz ring and step the ESKF on every sample. VQF keeps its
+ * 2 kHz cadence because only the newest sample of each loop pass reaches it;
+ * the app clock (APP_FUSION_HZ) stays at 2 kHz so every derived timer and
+ * decimator keeps its meaning. */
+#ifndef APP_IMU8K_ENGINE
+#define APP_IMU8K_ENGINE 0
+#endif
+/* Rate at which the loop advances its sample counter: the capture rate when
+ * the ring is drained, otherwise the fusion rate. Sample-count decimators
+ * (output, capture cadences) must divide by this, not by APP_FUSION_HZ. */
+#if APP_IMU8K_ENGINE
+#define APP_SAMPLE_RATE_HZ 8000U
+#else
+#define APP_SAMPLE_RATE_HZ APP_FUSION_HZ
+#endif
 
 /* Application label: YYYYMMDD and one letter. The first build of a day is
  * "a". Each later build on that same day uses the next letter. */

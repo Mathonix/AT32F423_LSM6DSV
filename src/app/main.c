@@ -7,7 +7,7 @@
 #include "bsp.h"
 #include "lsm6dsv.h"
 #include "ist8310.h"
-#if APP_IMU8K_CAPTURE_TEST
+#if APP_IMU8K_CAPTURE_TEST || APP_IMU8K_ENGINE
 #include "lsm6dsv_8k.h"
 #endif
 #include "ws2812.h"
@@ -207,6 +207,10 @@ static uint8_t app_relative_yaw_enabled;
 /* Common UART/USB telemetry rate, applied live and restored from Flash. */
 static uint16_t app_output_hz = APP_VOFA_OUTPUT_HZ;
 static uint16_t app_output_div = OUTPUT_DIV;
+/* Sample-based output phases; only used when the capture ring drives the
+ * sample clock, where loop passes no longer align with sample counts. */
+static uint32_t app_output_phase, app_attitude_phase;
+static uint32_t pop_n;
 static uint8_t app_stream_seq[2];
 typedef enum { RESET_NONE, RESET_APPLICATION, RESET_BOOTLOADER } reset_request_t;
 static volatile reset_request_t protocol_reset_pending;
@@ -1048,7 +1052,7 @@ static void protocol_frame_received(uint8_t msg_id, uint8_t seq,
           device_settings_t saved = app_saved_settings;
           saved.output_hz = hz;
           if(app_save_device_settings(&saved) != 0) status = AHRS_ACK_EXEC_FAILED;
-          else { app_output_hz = hz; app_output_div = (uint16_t)(APP_FUSION_HZ / hz); }
+          else { app_output_hz = hz; app_output_div = (uint16_t)(APP_SAMPLE_RATE_HZ / hz); }
         }
       }
       protocol_reply_ack(source, seq, msg_id, status, app_output_hz);
@@ -1957,7 +1961,7 @@ int main(void)
     app_acc_range_g = app_saved_settings.acc_range_g;
     app_gyro_scale = app_saved_settings.gyro_scale;
     app_output_hz = app_saved_settings.output_hz;
-    app_output_div = (uint16_t)(APP_FUSION_HZ / app_output_hz);
+    app_output_div = (uint16_t)(APP_SAMPLE_RATE_HZ / app_output_hz);
     gyro_startup_live.duration_ms = app_gyro_init_ms;
     memcpy(app_outputs, app_saved_settings.outputs, sizeof(app_outputs));
 #if !APP_MAG_FUSION_ENABLE
@@ -2089,8 +2093,8 @@ int main(void)
     uint32_t err_streak = 0U;
 
     app_fusion_ready = 1U;
-#if APP_IMU8K_CAPTURE_TEST
-  /* Capture inspection: the ODR must be raised here, after the startup bias
+#if APP_IMU8K_CAPTURE_TEST || APP_IMU8K_ENGINE
+  /* Capture arm: the ODR must be raised here, the ODR must be raised here, after the startup bias
    * calibration, because that calibration rewrites CTRL1/CTRL2 back to 2 kHz.
    * The polling loop keeps running so the measurement stays comparable. */
   (void)lsm6dsv_8k_set_odr_8k();
@@ -2102,6 +2106,31 @@ int main(void)
     uint32_t now_cy;
     uint32_t dt_cy;
 
+#if APP_IMU8K_ENGINE
+    /* Drain the capture ring: the ISR produced these at 8 kHz. The ESKF is
+     * stepped on every sample; VQF keeps its 2 kHz cadence and only sees the
+     * newest sample further below. */
+    unsigned popped = 0U;
+    {
+      while(popped < 8U && lsm6dsv_8k_pop(&raw, &now_cy))
+      {
+        for(i = 0U; i < 3U; i++)
+          gyr[i] = gyro_dps_from_raw(i, raw.gyr[i], temp_c) * DEG2RAD;
+        /* The engine takes every sample. VQF is fed every fourth one so its
+         * 2 kHz cadence matches the dt it was initialised with. */
+        if(fusion_get_algorithm() == FUSION_ALGORITHM_ESKF) vqf_update_gyr(gyr);
+        else if((pop_n & 3U) == 0U) vqf_update_gyr(gyr);
+        pop_n++; popped++;
+      }
+      if(popped == 0U)
+      {
+        app_sample_skips++;
+        err_streak++;
+        gyro_temp_learning_gap(); app_temp_safe_samples=0U;
+        goto recover_or_continue;
+      }
+    }
+#else
     if(lsm6dsv_wait_sample(2000U) != 0)
     {
       app_sample_skips++;
@@ -2116,6 +2145,7 @@ int main(void)
       gyro_temp_learning_gap(); app_temp_safe_samples=0U;
       goto recover_or_continue;
     }
+#endif
 
     /* Temperature is part of the same 14-byte SPI burst as gyro/accel.
      * temp_c is the filtered value used by the optional gyro compensation;
@@ -2179,7 +2209,15 @@ int main(void)
       vqf_static_cal_feed(millis(), 1.0f / FUSION_HZ, gyr_dps_lpf, acc, temp_c);
     }
     t0 = dwt_cycles();
+#if APP_IMU8K_ENGINE
+    /* The engine already integrated this pass's gyro samples at 8 kHz; only
+     * the accelerometer observation is missing. VQF still needs both. */
+    /* Gyro already entered at the right cadence; only the accelerometer
+     * observation is still due for whichever engine is selected. */
+    vqf_update_acc(acc);
+#else
     vqf_update(APP_GYR_FUSION_LPF_ENABLE ? gyr_lpf : gyr, acc);
+#endif
 
     /* Independent, runtime-only stream. Average same-sample earth acceleration
      * before decimation; angle smoothing/zero/ZARU never enter INS. */
@@ -2305,8 +2343,24 @@ int main(void)
       }
     }
     vqf_us = (dwt_cycles() - t0) / (system_core_clock / 1000000U);
+#if APP_IMU8K_ENGINE
+    /* Advance the app clock by the samples actually consumed, not by loop
+     * passes: a pass drains anything from one to eight samples and every
+     * decimator below is expressed against this counter. */
+    fusion_n += popped;
+    window_samples += popped;
+    app_output_phase += popped;
+    app_attitude_phase += popped;
+    uint8_t out_due = 0U, att_due = 0U;
+    while(app_output_phase >= app_output_div) { app_output_phase -= app_output_div; out_due = 1U; }
+    const uint16_t att_div = (uint16_t)(APP_SAMPLE_RATE_HZ / ATTITUDE_FILTER_HZ);
+    while(app_attitude_phase >= att_div) { app_attitude_phase -= att_div; att_due = 1U; }
+#else
     fusion_n++;
     window_samples++;
+    const uint8_t out_due = ((fusion_n % app_output_div) == 0U);
+    const uint8_t att_due = ((fusion_n % (APP_FUSION_HZ / ATTITUDE_FILTER_HZ)) == 0U);
+#endif
 
     uint8_t capture_due[3],capture_any=0;
     if(app_settings_mode || vqf_static_cal_active() || acc_cal_rt.active || protocol_reset_pending!=RESET_NONE)
@@ -2316,7 +2370,7 @@ int main(void)
       capture_any|=capture_due[source];
     }
 
-    if((fusion_n % (APP_FUSION_HZ / ATTITUDE_FILTER_HZ)) == 0U || (fusion_n % app_output_div) == 0U || capture_any)
+    if(out_due || att_due || capture_any)
     {
       /* Odd/even sequence lock lets DAPLink read a coherent live snapshot
        * without halting the 2 kHz fusion loop. */
@@ -2383,7 +2437,7 @@ int main(void)
       vqf_live.millis = millis();
       __DMB();
       vqf_live.seq++;
-      if((fusion_n % app_output_div)==0U) out_n++;
+      if(out_due) out_n++;
 
       if((fusion_n % DAP_OUTPUT_DIV) == 0U)
       {
@@ -2461,7 +2515,7 @@ int main(void)
           if(n)(void)protocol_send_stream_frame((protocol_source_t)source,frame,n);
         }
       }
-      if(protocol_reset_pending == RESET_NONE && !gyro_temp_learning_saving() && (fusion_n % app_output_div)==0U)
+      if(protocol_reset_pending == RESET_NONE && !gyro_temp_learning_saving() && out_due)
         vofa_send_justfloat(fusion_n);
     }
 

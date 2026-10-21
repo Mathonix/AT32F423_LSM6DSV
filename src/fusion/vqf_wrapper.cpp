@@ -75,7 +75,13 @@ extern "C" void vqf_init(float gyr_dt, float acc_dt)
         g_vqf = nullptr;
     }
     g_acc_dt = acc_dt;
+#if APP_IMU8K_ENGINE
+    /* The app loop still runs at APP_FUSION_HZ, but the capture ring feeds the
+     * engine four gyro samples per pass, so its step is the capture period. */
+    g_gyr_dt = 1.0f / 8000.0f;
+#else
     g_gyr_dt = gyr_dt;
+#endif
 
     VQFParams params;
     params.tauAcc = g_tau_acc;
