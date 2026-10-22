@@ -2401,7 +2401,7 @@ int main(void)
      * emitted below, and a skipped emit (settings mode, flash save) must not
      * throw the slot away. */
     { const uint32_t pending = app_output_phase / (app_output_div ? app_output_div : 1U);
-      out_slots = (uint8_t)(pending > 4U ? 4U : pending); }
+      out_slots = (uint8_t)(pending > 16U ? 16U : pending); }
     const uint16_t att_div = (uint16_t)(APP_SAMPLE_RATE_HZ / ATTITUDE_FILTER_HZ);
     while(app_attitude_phase >= att_div) { app_attitude_phase -= att_div; att_due = 1U; }
 #else
