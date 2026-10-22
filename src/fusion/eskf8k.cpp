@@ -81,6 +81,7 @@ unsigned accel_age_steps=0;
 bool is_rest=false,mag_valid=false,mag_bad=false,rest_bias_on=true,mag_reject_on=true;
 /* Consecutive hard-band rejections; see the validation block in mag(). */
 unsigned mag_reject_n=0;
+float mag_ref_dip=0; /* reference inclination in the world frame */
 #if APP_ESKF_REST_WINDOW
 /* packed into existing bool padding: bit0 rest, bits1-3 off-count; block index from eskf8k_counts[0] */
 uint8_t rw_state;
@@ -638,6 +639,7 @@ int mag(const float mag_ut[3]){
 #endif
 #endif
     world(nine.q,measured,mag_ref);
+    mag_ref_dip=asinf(fmaxf(-1.f,fminf(1.f,mag_ref[2])));
     mag_valid=true;mag_bad=false;mag_reject_n=0;
     return 0;
   }
@@ -646,8 +648,14 @@ int mag(const float mag_ut[3]){
    * being rejected outright instead of locking the engine out for good, which
    * is what used to happen when the board changed environment. */
   const float dev=std::fabs(n-mag_norm)/mag_norm;
-  const bool soft=dev>APP_ESKF_MAG_SOFT_BAND;
-  const bool hard=dev>APP_ESKF_MAG_HARD_BAND;
+  /* Inclination check, as the VQF implementation does: a field that keeps its
+   * magnitude but tilts is still a disturbance, and the norm test alone cannot
+   * see it. */
+  float meas_w[3];world(nine.q,measured,meas_w);
+  const float dip_now=asinf(fmaxf(-1.f,fminf(1.f,meas_w[2])));
+  const float dip_dev=std::fabs(dip_now-mag_ref_dip);
+  const bool soft=dev>APP_ESKF_MAG_SOFT_BAND||dip_dev>APP_ESKF_MAG_SOFT_DIP;
+  const bool hard=dev>APP_ESKF_MAG_HARD_BAND||dip_dev>APP_ESKF_MAG_HARD_DIP;
 #if APP_ESKF_SINGLE_QR
   if(!magnetic_enabled)return 0;
 #endif

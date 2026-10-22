@@ -153,4 +153,10 @@
 #ifndef APP_ESKF_MAG_ALPHA_SOFT
 #define APP_ESKF_MAG_ALPHA_SOFT 0.001f
 #endif
+#ifndef APP_ESKF_MAG_SOFT_DIP
+#define APP_ESKF_MAG_SOFT_DIP   0.087f /* 5 deg */
+#endif
+#ifndef APP_ESKF_MAG_HARD_DIP
+#define APP_ESKF_MAG_HARD_DIP   0.175f /* 10 deg */
+#endif
 #endif /* ESKF8K_CONFIG_H */
