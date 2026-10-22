@@ -79,6 +79,8 @@ unsigned acc_decim=0,mag_count=0;
 unsigned accel_age_steps=0;
 #endif
 bool is_rest=false,mag_valid=false,mag_bad=false,rest_bias_on=true,mag_reject_on=true;
+/* Consecutive hard-band rejections; see the validation block in mag(). */
+unsigned mag_reject_n=0;
 #if APP_ESKF_REST_WINDOW
 /* packed into existing bool padding: bit0 rest, bits1-3 off-count; block index from eskf8k_counts[0] */
 uint8_t rw_state;
@@ -415,7 +417,7 @@ void init() {
   std::memset(last_gyro,0,sizeof(last_gyro));
   mag_ref[0]=0;mag_ref[1]=1;mag_ref[2]=0;
   mag_norm=rest_seconds=mag_warmup=max_dt_seen=mag_err=0;
-  acc_decim=mag_count=0;is_rest=mag_valid=mag_bad=false;
+  acc_decim=mag_count=0;is_rest=mag_valid=mag_bad=false;mag_reject_n=0;
 #if APP_ESKF_MAG_LAYERED
   /* No accelerometer has been accepted yet: gravity is not trusted until one
    * lands, so the first magnetic update cannot take the heading-only path. */
@@ -636,20 +638,34 @@ int mag(const float mag_ut[3]){
 #endif
 #endif
     world(nine.q,measured,mag_ref);
-    mag_valid=true;mag_bad=false;
+    mag_valid=true;mag_bad=false;mag_reject_n=0;
     return 0;
   }
-  const bool disturbed=std::fabs(n-mag_norm)>mag_norm*.2f;
-  mag_bad=mag_reject_on&&disturbed;
+  /* Validation fused from the VQF implementation. A soft band lets the
+   * reference follow a slowly changing field; a sustained hard excursion stops
+   * being rejected outright instead of locking the engine out for good, which
+   * is what used to happen when the board changed environment. */
+  const float dev=std::fabs(n-mag_norm)/mag_norm;
+  const bool soft=dev>APP_ESKF_MAG_SOFT_BAND;
+  const bool hard=dev>APP_ESKF_MAG_HARD_BAND;
 #if APP_ESKF_SINGLE_QR
   if(!magnetic_enabled)return 0;
 #endif
-  if(mag_bad){eskf8k_counts[6]++;return 0;}
+  if(hard&&mag_reject_on){
+    if(mag_reject_n<APP_ESKF_MAG_REJECT_LIMIT){
+      mag_reject_n++;mag_bad=true;eskf8k_counts[6]++;return 0;
+    }
+    mag_reject_n=0;
+  } else {
+    mag_reject_n=0;
+  }
+  mag_bad=false;mag_reject_n=0;
 #if APP_MAG_200HZ
-  mag_norm+=APP_MAG_ALPHA_STEADY*(n-mag_norm);
+  const float steady_alpha=APP_MAG_ALPHA_STEADY;
 #else
-  mag_norm+=.01f*(n-mag_norm);
+  const float steady_alpha=.01f;
 #endif
+  mag_norm+=(soft?APP_ESKF_MAG_ALPHA_SOFT:steady_alpha)*(n-mag_norm);
   float predicted[3];body(nine.q,mag_ref,predicted);
   const float err=std::sqrt(fmaxf(0.f,2.f-2.f*dot(predicted,measured)));
   mag_err=err/RAD;
@@ -686,7 +702,7 @@ float rest_time(){return rest()?(APP_ESKF_SINGLE_QR>=2?rest_seconds:rest_seconds
 int mag_ready(){return mag_valid;}
 int mag_disturbed(){return mag_bad;}
 float mag_delta_deg(){return mag_valid?wrap(yaw(nine.q)-yaw(six.q))/RAD:0;}
-void reset_mag_reference(){mag_valid=false;mag_count=0;mag_bad=false;}
+void reset_mag_reference(){mag_valid=false;mag_count=0;mag_bad=false;mag_reject_n=0;}
 void set_rest_bias_enabled(bool enabled){rest_bias_on=enabled;
 #if APP_ESKF_SINGLE_QR >= 2
   tracker.enabled=enabled;

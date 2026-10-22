@@ -136,4 +136,21 @@
 #endif
 
 
+
+/* Magnetic validation fused from the VQF implementation: inside the soft band
+ * the reference tracker follows slowly, and a hard excursion that persists for
+ * REJECT_LIMIT observations is accepted with that slow tracker instead of being
+ * rejected forever (which used to lock the engine out after the board moved). */
+#ifndef APP_ESKF_MAG_SOFT_BAND
+#define APP_ESKF_MAG_SOFT_BAND  0.10f
+#endif
+#ifndef APP_ESKF_MAG_HARD_BAND
+#define APP_ESKF_MAG_HARD_BAND  0.20f
+#endif
+#ifndef APP_ESKF_MAG_REJECT_LIMIT
+#define APP_ESKF_MAG_REJECT_LIMIT 500U
+#endif
+#ifndef APP_ESKF_MAG_ALPHA_SOFT
+#define APP_ESKF_MAG_ALPHA_SOFT 0.001f
+#endif
 #endif /* ESKF8K_CONFIG_H */
