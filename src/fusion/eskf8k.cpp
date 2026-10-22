@@ -81,6 +81,7 @@ unsigned accel_age_steps=0;
 bool is_rest=false,mag_valid=false,mag_bad=false,rest_bias_on=true,mag_reject_on=true;
 /* Consecutive hard-band rejections; see the validation block in mag(). */
 unsigned mag_reject_n=0;
+bool mag_degraded=false; /* latched after a sustained hard excursion */
 float mag_ref_dip=0; /* reference inclination in the world frame */
 #if APP_ESKF_REST_WINDOW
 /* packed into existing bool padding: bit0 rest, bits1-3 off-count; block index from eskf8k_counts[0] */
@@ -418,7 +419,7 @@ void init() {
   std::memset(last_gyro,0,sizeof(last_gyro));
   mag_ref[0]=0;mag_ref[1]=1;mag_ref[2]=0;
   mag_norm=rest_seconds=mag_warmup=max_dt_seen=mag_err=0;
-  acc_decim=mag_count=0;is_rest=mag_valid=mag_bad=false;mag_reject_n=0;
+  acc_decim=mag_count=0;is_rest=mag_valid=mag_bad=false;mag_reject_n=0;mag_degraded=false;
 #if APP_ESKF_MAG_LAYERED
   /* No accelerometer has been accepted yet: gravity is not trusted until one
    * lands, so the first magnetic update cannot take the heading-only path. */
@@ -659,21 +660,26 @@ int mag(const float mag_ut[3]){
 #if APP_ESKF_SINGLE_QR
   if(!magnetic_enabled)return 0;
 #endif
-  if(hard&&mag_reject_on){
+  /* Once the limit is reached the engine latches into degraded mode and keeps
+   * accepting, otherwise a still-off reference would reject another full window
+   * immediately after every single accepted sample. The latch clears as soon as
+   * the deviation returns inside the bands, which is when the reference has
+   * caught up. */
+  if(hard&&mag_reject_on&&!mag_degraded){
     if(mag_reject_n<APP_ESKF_MAG_REJECT_LIMIT){
       mag_reject_n++;mag_bad=true;eskf8k_counts[6]++;return 0;
     }
-    mag_reject_n=0;
-  } else {
-    mag_reject_n=0;
+    mag_degraded=true;mag_reject_n=0;
+  } else if(!hard){
+    mag_reject_n=0;mag_degraded=false;
   }
-  mag_bad=false;mag_reject_n=0;
+  mag_bad=false;
 #if APP_MAG_200HZ
   const float steady_alpha=APP_MAG_ALPHA_STEADY;
 #else
   const float steady_alpha=.01f;
 #endif
-  mag_norm+=(soft?APP_ESKF_MAG_ALPHA_SOFT:steady_alpha)*(n-mag_norm);
+  mag_norm+=((soft||mag_degraded)?APP_ESKF_MAG_ALPHA_SOFT:steady_alpha)*(n-mag_norm);
   float predicted[3];body(nine.q,mag_ref,predicted);
   const float err=std::sqrt(fmaxf(0.f,2.f-2.f*dot(predicted,measured)));
   mag_err=err/RAD;
