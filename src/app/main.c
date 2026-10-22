@@ -184,6 +184,8 @@ static protocol_parser_t webusb_protocol_parser;
 static stream_mode_t app_stream_mode = STREAM_MODE_VOFA_3CH;
 /* Diagnostics for the magnetometer path; readable over SWD. */
 volatile uint32_t dbg_mag_read, dbg_mag_fuse, dbg_mag_err, dbg_mag_init, dbg_mag_addr, dbg_mag_gate, dbg_mag_trig, dbg_mag_trig_err, dbg_mag_pending, dbg_mag_due;
+/* Output-path diagnostics: passes, blocks entered, frames actually queued. */
+volatile uint32_t dbg_pass_n, dbg_emit_entries, dbg_emit_frames;
 /* Magnetometer cadence accumulator: loop passes advance by a variable number
  * of samples, so a modulo test on fusion_n does not fire evenly. */
 static uint32_t mag_phase;
@@ -2137,6 +2139,10 @@ int main(void)
           gyr[i] = gyro_dps_from_raw(i, raw.gyr[i], temp_c) * DEG2RAD;
         /* The engine takes every sample. VQF is fed every fourth one so its
          * 2 kHz cadence matches the dt it was initialised with. */
+        /* Service USB inside the drain: with the capture ring a pass covers
+         * several samples, and the transmit path used to be serviced once per
+         * pass, which cannot drain 1 kHz when the pass rate drops below it. */
+        if((popped & 3U) == 0U) usb_cdc_task();
         if(fusion_get_algorithm() == FUSION_ALGORITHM_ESKF) vqf_update_gyr(gyr);
         else if((pop_n & 3U) == 0U)
         {
@@ -2394,6 +2400,7 @@ int main(void)
      * decimator below is expressed against this counter. */
     fusion_n += popped;
     window_samples += popped;
+    dbg_pass_n++;
     app_output_phase += popped;
     app_attitude_phase += popped;
     uint8_t out_slots = 0U, att_due = 0U;
@@ -2565,7 +2572,8 @@ int main(void)
         }
       }
       if(protocol_reset_pending == RESET_NONE && !gyro_temp_learning_saving())
-        for(unsigned slot=0U; slot<out_slots; slot++) { vofa_send_justfloat(fusion_n); app_output_phase -= app_output_div; }
+        { dbg_emit_entries++;
+          for(unsigned slot=0U; slot<out_slots; slot++) { vofa_send_justfloat(fusion_n); app_output_phase -= app_output_div; dbg_emit_frames++; } }
     }
 
 service_tasks:
