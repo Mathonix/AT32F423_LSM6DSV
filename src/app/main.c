@@ -220,6 +220,8 @@ static uint16_t app_output_div = OUTPUT_DIV;
 /* Sample-based output phases; only used when the capture ring drives the
  * sample clock, where loop passes no longer align with sample counts. */
 static uint32_t app_output_phase, app_attitude_phase;
+/* Retry timestamp for a magnetometer that did not answer at boot. */
+static uint32_t mag_retry_ms;
 static uint32_t pop_n;
 static uint8_t app_stream_seq[2];
 typedef enum { RESET_NONE, RESET_APPLICATION, RESET_BOOTLOADER } reset_request_t;
@@ -2003,6 +2005,10 @@ int main(void)
   }
 
   mag_err = ist8310_init();
+  /* A single failure used to disable the magnetometer for the whole session:
+   * the bus can still be busy after a reset and the sensor may need longer than
+   * the fixed power-up delay. Retry before giving up. */
+  for(unsigned mag_try=0U; mag_err!=0 && mag_try<4U; ++mag_try){ delay_ms(120); mag_err = ist8310_init(); }
   /* Hardware presence only: the six/nine-axis choice is a runtime flag so a
    * mode change applies without a reboot. */
   mag_ok = (mag_err == 0U) ? 1U : 0U;
@@ -2309,6 +2315,11 @@ int main(void)
      * the 2 kHz IMU/VQF path. Only the short I2C trigger/read transactions
      * occupy the loop. */
     dbg_mag_gate = (uint32_t)((mag_ok ? 1U : 0U) | (vqf_get_magnetic_fusion() ? 2U : 0U));
+    if(!mag_ok && (millis() - mag_retry_ms) > 2000U)
+    {
+      mag_retry_ms = millis();
+      if(ist8310_init() == 0) mag_ok = 1U;
+    }
     if(mag_ok && vqf_get_magnetic_fusion())
     {
 #if MAG_FUSION_ENABLE
