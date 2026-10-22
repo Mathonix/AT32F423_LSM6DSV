@@ -2397,7 +2397,11 @@ int main(void)
     app_output_phase += popped;
     app_attitude_phase += popped;
     uint8_t out_slots = 0U, att_due = 0U;
-    while(app_output_phase >= app_output_div) { app_output_phase -= app_output_div; if(out_slots < 4U) out_slots++; }
+    /* Count what is due but do not consume it yet: the frame is only really
+     * emitted below, and a skipped emit (settings mode, flash save) must not
+     * throw the slot away. */
+    { const uint32_t pending = app_output_phase / (app_output_div ? app_output_div : 1U);
+      out_slots = (uint8_t)(pending > 4U ? 4U : pending); }
     const uint16_t att_div = (uint16_t)(APP_SAMPLE_RATE_HZ / ATTITUDE_FILTER_HZ);
     while(app_attitude_phase >= att_div) { app_attitude_phase -= att_div; att_due = 1U; }
 #else
@@ -2561,7 +2565,7 @@ int main(void)
         }
       }
       if(protocol_reset_pending == RESET_NONE && !gyro_temp_learning_saving())
-        for(unsigned slot=0U; slot<out_slots; slot++) vofa_send_justfloat(fusion_n);
+        for(unsigned slot=0U; slot<out_slots; slot++) { vofa_send_justfloat(fusion_n); app_output_phase -= app_output_div; }
     }
 
 service_tasks:
