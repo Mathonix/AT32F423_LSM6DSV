@@ -73,7 +73,10 @@ static uint32_t user_bl_requested_ms;
 #define GYR_LPF_CUTOFF_HZ APP_GYR_LPF_CUTOFF_HZ /* reduce gyro noise before integration */
 #define ERR_STREAK_RECOVER   20U
 #define MAG_PERIOD_N         (APP_SAMPLE_RATE_HZ / 100U) /* read IST8310 at 100 Hz */
-#define MAG_VQF_DIV          APP_MAG_VQF_UPDATE_DIV /* Full VQF update at 10 Hz */
+#define MAG_VQF_DIV          APP_MAG_VQF_UPDATE_DIV
+/* Effective magnetic observation rate; VQF needs the real period for its
+ * gain and disturbance-rejection timing. */
+#define MAG_OBS_HZ           ((APP_SAMPLE_RATE_HZ / MAG_PERIOD_N) / MAG_VQF_DIV)
 #define MAG_FUSION_ENABLE    APP_MAG_FUSION_ENABLE
 #define MAG_TIMEOUT_N        ((APP_SAMPLE_RATE_HZ * 15U) / 1000U) /* 15 ms in samples */
 #define MAG_UT_PER_LSB       0.3f
@@ -2014,7 +2017,7 @@ int main(void)
   vqf_set_rest_bias_enabled(app_saved_settings.rest_bias_enabled);
   fusion_select_algorithm(app_saved_settings.fusion_algorithm);
   vqf_configure_tuning(app_saved_settings.vqf_tuning_enabled ? &app_saved_settings.vqf_tuning : NULL);
-  vqf_init(1.0f / FUSION_HZ, 1.0f / FUSION_HZ);
+  vqf_init(1.0f / FUSION_HZ, 1.0f / FUSION_HZ, 1.0f / (float)MAG_OBS_HZ);
   /* The engine starts with magnetic fusion off; apply the stored mode so a
    * nine-axis start actually uses the field. */
   vqf_set_magnetic_fusion(app_fusion_mode != FUSION_MODE_6AXIS);

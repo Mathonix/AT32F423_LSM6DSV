@@ -69,7 +69,7 @@ extern "C" void vqf_get_tuning(vqf_tuning_t *out)
     std::memcpy(out->value,values,sizeof(values));
 }
 extern "C" int vqf_tuning_is_custom(void) { return g_tuning_enabled?1:0; }
-extern "C" void vqf_init(float gyr_dt, float acc_dt)
+extern "C" void vqf_init(float gyr_dt, float acc_dt, float mag_ts)
 {
     if (g_vqf) {
         g_vqf->~VQF();
@@ -116,7 +116,7 @@ extern "C" void vqf_init(float gyr_dt, float acc_dt)
     }
     // IST8310 is read at 50 Hz; main.c feeds the compute-heavy Full VQF
     // magnetic update at 10 Hz to preserve every 2 kHz gyro sample.
-    g_vqf = new (g_storage) VQF(params, gyr_dt, acc_dt, 0.1f);
+    g_vqf = new (g_storage) VQF(params, gyr_dt, acc_dt, mag_ts);
     g_rest_time = 0.0f;
     g_mag_ready = false;
     std::memset(g_calibrated_bias, 0, sizeof(g_calibrated_bias));

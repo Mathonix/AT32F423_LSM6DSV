@@ -7,7 +7,7 @@
 #ifdef __cplusplus
 extern "C" {
 #endif
-void vqf_init(float gyr_dt, float acc_dt);
+void vqf_init(float gyr_dt, float acc_dt, float mag_ts);
 /* Constructor-only settings: configure before init, then reboot to apply. */
 void vqf_configure_tuning(const vqf_tuning_t *parameters);
 void vqf_get_tuning(vqf_tuning_t *out);
