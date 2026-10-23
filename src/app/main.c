@@ -966,6 +966,18 @@ static void protocol_frame_received(uint8_t msg_id, uint8_t seq,
 
   switch(msg_id)
   {
+    case 0x82U: /* Query-only SPI DMA acquisition diagnostics, reply 0x83. */
+#if APP_IMU8K_ENGINE || APP_IMU8K_CAPTURE_TEST
+      if(len)protocol_reply_ack(source,seq,msg_id,AHRS_ACK_INVALID_PARAM,0U);
+      else {
+        uint32_t d[16];lsm6dsv_8k_dma_snapshot(d);
+        frame_len=protocol_pack_frame(frame,sizeof(frame),0x83U,seq,d,sizeof(d));
+        if(frame_len)(void)protocol_send_frame(source,frame,frame_len);
+      }
+#else
+      protocol_reply_ack(source,seq,msg_id,AHRS_ACK_INVALID_PARAM,0U);
+#endif
+      break;
     case 0x7AU: /* Query-only silicon floating-point control snapshot. */
       if(len)protocol_reply_ack(source,seq,msg_id,AHRS_ACK_INVALID_PARAM,0U);
       else {

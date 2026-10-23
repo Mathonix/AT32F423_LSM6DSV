@@ -3,7 +3,8 @@
 #include <stdint.h>
 enum { PERF_MAIN, PERF_GYRO, PERF_ACCEL, PERF_POSE, PERF_IMU_IRQ,
        PERF_USB_IRQ, PERF_UART_IRQ, PERF_SYSTICK_IRQ, PERF_ACCEL_KF, PERF_IDLE,
-       PERF_PREWORK, PERF_AUXILIARY, PERF_SNAPSHOT, PERF_SERVICE, PERF_EMIT, PERF_BUCKETS };
+       PERF_PREWORK, PERF_AUXILIARY, PERF_SNAPSHOT, PERF_SERVICE, PERF_EMIT,
+       PERF_IMU_DMA, PERF_BUCKETS };
 typedef struct {uint32_t cycle,irq;} perf_mark_t;
 void perf_begin(void);
 perf_mark_t perf_mark(void);
