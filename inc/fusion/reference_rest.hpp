@@ -25,6 +25,12 @@
 #ifndef APP_ESKF_ACC_OBS_DIV
 #define APP_ESKF_ACC_OBS_DIV 4
 #endif
+#ifndef APP_REST_GATE_FLOOR_DPS
+#define APP_REST_GATE_FLOOR_DPS 0.50f
+#endif
+#ifndef APP_REST_BOOT_GATE_DPS
+#define APP_REST_BOOT_GATE_DPS 1.0f
+#endif
 namespace reference_rest {
 constexpr float rad=.017453292519943295f;
 constexpr unsigned window_size=122, rollback_slots=24;
@@ -90,6 +96,25 @@ template<unsigned Depth, bool Fast=false> struct TrackerT {
   if(!rest_tune.custom)return base;
   return base*(rest_tune.floor_dps/.1091f);
  }
+ /* Effective gate. The evidence ramp exists to catch a slow rotation, but it
+  * must not tighten below the residual bias the filter is still carrying: a
+  * 0.2 dps residual then holds `level` above the gate, rest never returns, and
+  * the learner that would remove that residual never runs. That state is
+  * self-locking - measured on this board: 70 s with the unit still, rest 0 %,
+  * bias frozen, yaw drifting 0.21 deg/s after a boot that was moved during
+  * calibration. The floor keeps the gate at or above the largest stationary
+  * offset expected after a disturbed boot. */
+ float gate() const {
+  const float t=threshold();
+  /* Before the first accepted learning window (boot_done), the startup
+   * calibration may have failed and left the whole raw bias - up to about
+   * 0.5 dps on this part - to this learner. A 0.25 dps gate would then refuse
+   * the only state that can remove it, so the boot gate is wider and the fast
+   * tau closes the gap within a few seconds. After boot_done the narrow floor
+   * applies. */
+  const float floor_dps=boot_done?APP_REST_GATE_FLOOR_DPS:APP_REST_BOOT_GATE_DPS;
+  return t>floor_dps?t:floor_dps;
+ }
  void step(const float input_rad[3],float dt,float corrected_rad[3]) {
   // All entry validation precedes changes to this foreground-owned object.
   if(!(dt>0.f&&dt<=.005f)||!std::isfinite(dt))return;
@@ -138,10 +163,13 @@ template<unsigned Depth, bool Fast=false> struct TrackerT {
   if(fill<window_size || (!boot_done&&ac_run==8)) {
    stationary=true;high_run=low_run=0;
   } else if(stationary) {
-   high_run=level>threshold()?high_run+1:0;
+   high_run=level>gate()?high_run+1:0;
    if(high_run>=(rest_tune.custom?rest_tune.leave:8)){stationary=false;high_run=0;}
   } else {
-   low_run=level<threshold()*.6f?low_run+1:0;
+   /* Entry needs a low AC energy as well. A constant residual raises `level`
+    * but leaves the variance at the noise floor, so the variance test is what
+    * separates "stale bias" from "slow rotation" and lets the learner run. */
+   low_run=(level<gate()&&ac_energy<.20f)?low_run+1:0;
    if(low_run>=(rest_tune.custom?rest_tune.back:800)){stationary=true;low_run=0;}
   }
 #if APP_ESKF_REST_ACCEL_GUARD

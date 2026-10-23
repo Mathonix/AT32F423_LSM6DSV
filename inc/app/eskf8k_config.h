@@ -173,6 +173,27 @@
 #ifndef APP_ESKF_REST_BIAS_CLAMP_RAD
 #define APP_ESKF_REST_BIAS_CLAMP_RAD 0.0349f
 #endif
+/* Rest gate floor, in dps.
+ *
+ * The rest threshold tightens as rest evidence accumulates (0.3246 -> 0.1091
+ * dps). It must not tighten below the residual bias the filter still carries:
+ * a 0.2 dps residual then keeps `level` above the gate, rest never returns, and
+ * the learner that would remove that residual never runs. Measured on this
+ * board after a boot that was moved during calibration: 70 s still, rest 0 %,
+ * bias frozen, yaw drifting 0.21 deg/s. Flooring the gate at 0.25 dps lets the
+ * learner recover; a real rotation above that is still rejected, and the
+ * learned bias stays bounded by APP_ESKF_REST_BIAS_CLAMP_RAD. */
+#ifndef APP_REST_GATE_FLOOR_DPS
+#define APP_REST_GATE_FLOOR_DPS 0.50f
+#endif
+/* Wider gate until the first learning window completes. A failed startup
+ * calibration can leave the whole raw bias (measured 0.43 dps on this part)
+ * to the rest learner; with the 0.25 dps floor it can never enter rest, so the
+ * bias stays and yaw drifts at that rate. The boot gate lets the fast tau
+ * absorb it in a few seconds, then the narrow floor resumes. */
+#ifndef APP_REST_BOOT_GATE_DPS
+#define APP_REST_BOOT_GATE_DPS 1.0f
+#endif
 
 /* Defaults for every switch the engine knows about; the values above win. */
 #ifndef APP_EXPERIMENTAL_ESKF8K

@@ -132,7 +132,7 @@ static uint8_t breathing_level(uint16_t phase)
   return level;
 }
 
-void ws2812_normal_task(uint32_t now_ms, ws2812_mode_t mode, uint8_t rest, uint8_t calibration_failed, uint8_t mag_rejected, uint8_t settings_pending_reboot, uint8_t history_error)
+void ws2812_normal_task(uint32_t now_ms, ws2812_mode_t mode, uint8_t rest, uint8_t calibration_failed, uint8_t mag_rejected, uint8_t settings_pending_reboot, uint8_t history_error, uint8_t mag_field_fallback)
 {
   if(!ws_enabled) return;
   uint8_t level;
@@ -168,6 +168,25 @@ void ws2812_normal_task(uint32_t now_ms, ws2812_mode_t mode, uint8_t rest, uint8
       green = level;
       break;
   }
+  /* Nine-axis requested but the field is outside the usable window: the
+   * estimator is really running six-axis, and the plain six-axis green alone
+   * would say "this is a six-axis build". Keep the green (and its breathing)
+   * and blink only the blue channel at 8 Hz, so the lamp alternates green ->
+   * cyan -> green eight times per second. The 5 ms tick gives 25 steps per
+   * 125 ms period. */
+#if defined(WS2812_FIELD_FALLBACK_BLINK) && (WS2812_FIELD_FALLBACK_BLINK == 0)
+  (void)mag_field_fallback;
+#else
+  if(mag_field_fallback != 0U)
+  {
+    const uint8_t blue_on = (uint8_t)(((now_ms % 125U) < 63U) ? 1U : 0U);
+    ws2812_set_rgb(0U, level, blue_on ? level : 0U);
+    if(ws_rest_indicator && !rest) ws_phase = (uint16_t)(ws_phase + 4U);
+    else ws_phase++;
+    if(ws_phase >= WS_PHASE_STEPS) ws_phase = (uint16_t)(ws_phase - WS_PHASE_STEPS);
+    return;
+  }
+#endif
   /* A rejected magnetic update alternates between the normal mode color and
    * green. Keep the normal color visible longer, so the warning is clear
    * without making the unit look permanently like a 6-axis device. */

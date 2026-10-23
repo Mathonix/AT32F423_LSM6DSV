@@ -18,7 +18,10 @@ typedef enum
   WS2812_MODE_9AXIS = 1
 } ws2812_mode_t;
 
-void ws2812_normal_task(uint32_t now_ms, ws2812_mode_t mode, uint8_t rest, uint8_t calibration_failed, uint8_t mag_rejected, uint8_t settings_pending_reboot, uint8_t history_error);
+/* mag_field_fallback: nine-axis was requested but the measured field is outside
+ * the usable window, so the estimator is running six-axis. The normal six-axis
+ * green stays; its blue channel blinks at 8 Hz, which reads as green <-> cyan. */
+void ws2812_normal_task(uint32_t now_ms, ws2812_mode_t mode, uint8_t rest, uint8_t calibration_failed, uint8_t mag_rejected, uint8_t settings_pending_reboot, uint8_t history_error, uint8_t mag_field_fallback);
 /* Breathing-rate rest indicator: 1 = one 3 s breath at rest and 0.75 s while
  * moving; 0 = always 3 s. Colour is unaffected. */
 void ws2812_set_rest_indicator_enabled(uint8_t enabled);

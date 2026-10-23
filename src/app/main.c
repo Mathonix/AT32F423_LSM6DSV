@@ -1888,6 +1888,89 @@ static void protocol_reply_temp_learning(protocol_source_t source,uint8_t seq)
   if(n) (void)protocol_send_stream_frame(source,frame,n);
 }
 
+/* Bias journal upkeep. The startup capture only sees the first few seconds and
+ * a failed capture falls back to an old entry, so the running estimate can end
+ * up describing a bias the journal does not contain (measured: history -0.437
+ * dps against a real -0.87 dps, which left a 0.43 dps residual and a locked-out
+ * rest learner). Once the unit has settled, write the settled value back so the
+ * next boot has something current to fall back to.
+ *
+ * Only from a still unit, only when the estimate has not moved for one check
+ * interval, at most once per gap, and only when the value differs from the last
+ * written entry or the temperature has moved. The Flash write uses the same
+ * pause/rebase path as the other runtime saves. */
+#define APP_BIAS_HISTORY_CHECK_MS    30000U
+#define APP_BIAS_HISTORY_MIN_GAP_MS  600000U
+#define APP_BIAS_HISTORY_STABLE_DPS  0.010f
+#define APP_BIAS_HISTORY_CHANGE_DPS  0.050f
+#define APP_BIAS_HISTORY_TEMP_C      2.0f
+
+static void app_bias_history_service(uint32_t now)
+{
+  static uint32_t check_ms, save_ms;
+  static float prev[3], saved[3], saved_temp_c;
+  static uint8_t primed, saved_valid;
+  float bias[3];
+  float temp_c;
+  float delta, dtemp;
+  unsigned i;
+
+  if(!app_fusion_ready || app_settings_mode || vqf_static_cal_active() ||
+     acc_cal_rt.active || gyro_temp_learning_saving()) return;
+  if((uint32_t)(now - check_ms) < APP_BIAS_HISTORY_CHECK_MS) return;
+  check_ms = now;
+  if(!vqf_get_rest_detected()) return;
+
+  vqf_get_gyr_bias(bias);
+  temp_c = imu_temp_live.temperature_c;
+  if(!primed)
+  {
+    for(i = 0U; i < 3U; ++i) prev[i] = bias[i];
+    primed = 1U;
+    return;
+  }
+  delta = 0.0f;
+  for(i = 0U; i < 3U; ++i)
+  {
+    float d = bias[i] - prev[i];
+    if(d < 0.0f) d = -d;
+    if(d > delta) delta = d;
+    prev[i] = bias[i];
+  }
+  if(delta > APP_BIAS_HISTORY_STABLE_DPS) return;
+
+  if(!saved_valid)
+  {
+    for(i = 0U; i < 3U; ++i) saved[i] = bias[i];
+    saved_temp_c = temp_c;
+    saved_valid = 1U;
+    return;
+  }
+  delta = 0.0f;
+  for(i = 0U; i < 3U; ++i)
+  {
+    float d = (bias[i] - saved[i]) / DEG2RAD;
+    if(d < 0.0f) d = -d;
+    if(d > delta) delta = d;
+  }
+  dtemp = temp_c - saved_temp_c;
+  if(dtemp < 0.0f) dtemp = -dtemp;
+  if((delta < APP_BIAS_HISTORY_CHANGE_DPS) && (dtemp < APP_BIAS_HISTORY_TEMP_C)) return;
+  if((uint32_t)(now - save_ms) < APP_BIAS_HISTORY_MIN_GAP_MS) return;
+
+  {
+    uint32_t start = dwt_cycles();
+    int result = app_save_gyro_bias(bias, temp_c);
+    app_flash_pause_end(start);
+    if(result == 0)
+    {
+      save_ms = now;
+      for(i = 0U; i < 3U; ++i) saved[i] = bias[i];
+      saved_temp_c = temp_c;
+    }
+  }
+}
+
 /* Automatic saves need no host/settings mode, but retain rest and wear gates.
  * Enter SAVING before waiting for TX so normal telemetry stops replenishing
  * the rings. Unread telemetry is preserved and never prevents the write;
@@ -2955,6 +3038,7 @@ service_tasks:
     acc_calibration_service_task(service_now_ms);
 #endif
     app_temp_learning_service(service_now_ms);
+    app_bias_history_service(service_now_ms);
     if(app_sample_rebase != 0U)
     {
       app_sample_rebase = 0U;
@@ -2972,6 +3056,22 @@ service_tasks:
       {
         led_mode = WS2812_MODE_9AXIS;
       }
+      /* Nine-axis is requested and samples are arriving, but the field cannot
+       * support a heading reference (outside the 20..80 uT lock window), so the
+       * estimator is really running six-axis. The LED keeps its six-axis green
+       * and blinks the blue channel at 8 Hz (green <-> cyan) to show the
+       * fallback. A disturbance after the lock is a different condition and
+       * keeps its existing green flash. */
+      {
+        uint8_t mag_field_fallback = 0U;
+        const float field_ut = vqf_get_mag_field_ut();
+        if((app_fusion_mode != FUSION_MODE_6AXIS) && (mag_ok != 0U) &&
+           (vqf_get_mag_ready() == 0) && (field_ut >= 1.0f) &&
+           ((field_ut > (float)APP_ESKF_MAG_LOCK_MAX_UT) ||
+            (field_ut < (float)APP_ESKF_MAG_LOCK_MIN_UT)))
+        {
+          mag_field_fallback = 1U;
+        }
 #if APP_ACC_CAL_ENABLE
       if(acc_cal_rt.active != 0U || acc_cal_status_live.status == ACC_CAL_STATUS_FAILED)
       {
@@ -3001,7 +3101,9 @@ service_tasks:
                            bias_no_history,
                            (uint8_t)vqf_get_mag_dist_detected(),
                            app_settings_dirty,
-                           bias_history_write_error);
+                           bias_history_write_error,
+                           mag_field_fallback);
+      }
       }
     }
 #if APP_CAN_ENABLE
