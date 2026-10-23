@@ -4,6 +4,8 @@ AT32F423KCU7-4 + LSM6DSV + IST8310 姿态固件，当前源码应用版本 `2026
 
 **[中文使用指南（末尾附 WS2812 灯语）](docs/使用指南.md)** · [SPI DMA 实板短测与已知问题](docs/SPI_DMA_BOARD_TEST_20261023.md)
 
+[下载 PDF 使用说明书（20261023E，8页，末页灯语）](output/pdf/AT32_AHRS_使用说明书_20261023E.pdf)。PDF由公开使用指南生成，构建入口为 `tools/build_current_user_manual.py`（Python、reportlab、Windows微软雅黑字体）；旧版本PDF保留为历史资料。
+
 当前 master 已接入 SPI DMA 采集：单套 ESKF 四元数预测 8 kHz，独立姿态生成 1 kHz；`APP_ESKF_COV_DIV=4`，协方差传播为 2 kHz，加速度输入 2 kHz、完整重力观测标称 500 Hz。不要将它称为“双套完整逐帧协方差 8 kHz ESKF”。60 秒实测 CPU 约76.10%，采集计数闭合；另有20秒 USB序号缺失和自启动1次姿态超龄，仍为限定范围 CONDITIONAL PASS。
 
 ## 构建固件
