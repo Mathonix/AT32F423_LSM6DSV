@@ -12,7 +12,7 @@
   const PROFILES = [
     { id: 0, name: '响应优先', magS: 2, restS: 0.15, motionS: 0.04, hint: '响应优先：较少静态平滑。' },
     { id: 1, name: '均衡', magS: 4, restS: 0.5, motionS: 0.1, hint: '均衡：兼顾响应与静态平滑。' },
-    { id: 2, name: '静态稳定', magS: 6, restS: 1.5, motionS: 0.2, hint: '静态稳定：更强平滑，停转后的修正更慢。' },
+    { id: 2, name: '静态稳定', magS: 6, restS: 2.5, motionS: 0.2, hint: '静态稳定：更强平滑，停转后的修正更慢。' },
     // 第 4 档（固件 capabilities=4 才有）：滤波参数与均衡相同；仅六轴在静止时锁定对外航向
     { id: 3, name: '零角速保持', en: 'ZARU / Stationary Heading Hold', magS: 4, restS: 0.5, motionS: 0.1,
       hint: '零角速保持：静止时锁定航向，检测到运动后立即恢复更新。滤波参数与均衡相同；仅六轴锁定航向，九轴不锁磁力计航向。',
@@ -53,7 +53,8 @@
     const vec = (o) => [f32(o), f32(o + 4), f32(o + 8)];
     if (payload[1] > ZARU) return { type: 'unknown', id, length: payload.length }; // 诊断 profile 0..3；其后 rest / mag_flags 范围不变
     return { type: 'filterDiag', version: payload[0], profile: payload[1], rest: !!payload[2], magFlags: payload[3],
-      magReady: !!(payload[3] & 1), magInterference: !!(payload[3] & 2), timestampMs: v.getUint32(4, true),
+      magReady: !!(payload[3] & 1), magInterference: !!(payload[3] & 2), magDegraded: !!(payload[3] & 4),
+      magCalSuspect: !!(payload[3] & 8), timestampMs: v.getUint32(4, true),
       rawGyro: vec(8), bias: vec(20), residual: vec(32), rawEuler: vec(44), biasSigma: f32(56) };
   }
 
@@ -190,7 +191,13 @@
       set($('filterDiscard'), 'disabled', !s.dirty || !!s.pending);
       set($('filterRead'), 'disabled', !on || !!s.pending);
       set($('filterState'), 'textContent', ctl.statusText());
-      set($('filterHint'), 'textContent', `${ctl.hint(s.draft.profile, { en })}${note ? NOTE : ''}`);
+      const eskf = globalThis.GyroFusionAlgorithm?.control?.state?.data?.active === 2;
+      const eskfNote = s.draft.profile === 3
+        ? '六轴 ESKF 锁定发出去的航向。ESKF 判定静止时，单次角速度尖峰不会解除锁定；开始转动后按阈值松开。九轴不锁磁航向。'
+        : 'ESKF 下这一档只平滑发出去的姿态，不锁定航向。立即生效，无需重启。';
+      set($('filterHint'), 'textContent', `${ctl.hint(s.draft.profile, { en })}${eskf ? eskfNote : note ? NOTE : ''}`);
+      const hintBox = $('filterHint')?.parentElement;
+      if (hintBox?.classList?.contains('filter-hint')) hintBox.title = eskf ? eskfNote : NOTE;
       const msg = s.supported === false ? UNSUPPORTED_TEXT : s.message || (s.dirty ? '有未应用的修改' : '');
       set($('filterMsg'), 'textContent', msg);
       const panel = $('filterPanel');

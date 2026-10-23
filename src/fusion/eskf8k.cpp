@@ -1,11 +1,13 @@
 // Standalone 8 kHz, 3-state attitude error-state KF (not a copy of CH32 code).
 // Quaternion nominal state + 3x3 attitude covariance, residual stationary bias.
 #include "eskf8k.hpp"
+#include "eskf_tuning.h"
 #include <cmath>
 #include <cstring>
 #include "static6_diag.h"
 #if APP_ESKF_SINGLE_QR >= 2
 #include "reference_rest.hpp"
+namespace reference_rest { RestTune rest_tune{}; }
 #endif
 #if APP_ESKF_BIAS_OBSERVABLE
 #include "eskf_bias_learning.hpp"
@@ -38,15 +40,21 @@ constexpr float PI=3.14159265358979323846f, RAD=PI/180.f, G=9.80665f;
 #endif
 #define RW_HIST 12U        /* 480 ms rollback, int16 in 1e-6 rad/s */
 #endif
-constexpr float RATE=8000.f, ACC_RATE=2000.f, ACC_OBS_DIV=10.f;
+constexpr float RATE=8000.f, ACC_RATE=2000.f;
+constexpr unsigned ACC_OBS_DIV=APP_ESKF_ACC_OBS_DIV; /* 2 kHz / div = observation rate */
 constexpr float GYRO_NOISE=0.015f*RAD; // rad/sqrt(s), initial tuning value
-constexpr float ACC_SIG=0.035f;        // unit-vector measurement noise
+constexpr float ACC_SIG=APP_ESKF_ACC_SIGMA_RAD; // measured 0.167 deg RMS; see eskf8k_config.h
 constexpr float MAG_SIG=0.06f;         // magnetometer observation noise
 // The triangular factor is authoritative. Repeated float F*P*F' at 8 kHz
 // loses the small observable eigenvalues when yaw variance is much larger.
 // QR propagation computes the same covariance, without subtractive loss of
 // positive definiteness. p is the symmetric diagnostic/gain projection L*L'.
 struct State { float q[4]; float p[3][3]; float l[3][3];
+#if APP_ESKF_COV_DIV > 1
+  /* Pending covariance interval: the quaternion integrates every sample, the
+   * covariance one QR per APP_ESKF_COV_DIV samples. */
+  unsigned cov_n; float cov_dt; float cov_rate[3];
+#endif
 #if APP_ESKF_Q_COMP
   float qlow[4]; /* retained rounding residue, not a new estimator state */
 #endif
@@ -81,7 +89,11 @@ unsigned accel_age_steps=0;
 bool is_rest=false,mag_valid=false,mag_bad=false,rest_bias_on=true,mag_reject_on=true;
 /* Consecutive hard-band rejections; see the validation block in mag(). */
 unsigned mag_reject_n=0;
-bool mag_degraded=false; /* latched after a sustained hard excursion */
+bool mag_degraded=false; /* latched: the hard band has persisted past the limit */
+/* 1 = VQF-style: reject until the field recovers. 0 = legacy: after the limit
+ * accept the field with an inflated sigma so a changed environment is not
+ * locked out for the rest of the session. */
+bool mag_vqf_gate=true;
 float mag_ref_dip=0; /* reference inclination in the world frame */
 #if APP_ESKF_REST_WINDOW
 /* packed into existing bool padding: bit0 rest, bits1-3 off-count; block index from eskf8k_counts[0] */
@@ -89,7 +101,24 @@ uint8_t rw_state;
 #define rw_rest (rw_state&1U)
 #endif
 float max_dt_seen=0;
+/* Six-axis gravity gate support. accel_rate_dps is the low-passed magnitude of
+ * the bias-corrected rate; accel_gap_s is the time since the last accepted
+ * accelerometer update and drives the tilt variance inflation. */
+float accel_rate_dps=0,accel_gap_s=0;
+/* Block sum for the observation mean, and the magnitude-gate escape timer.
+ * ACC_OBS_DIV consecutive inputs are averaged into one gravity observation, so
+ * the samples the loop already collects stop being thrown away; the escape
+ * timer keeps a unit whose accelerometer reads off by more than the tight gate
+ * from losing gravity for good (see accel()). */
+float acc_sum[3];
+float acc_mag_reject_s=0, acc_mag_loose_s=0;
 float mag_err=0;
+/* Calibration-health tracker. mag_field_ut follows the incoming magnitude
+ * regardless of whether the sample is accepted, so a field that has moved
+ * outside the accept band is still visible here. */
+float mag_field_ut=0,mag_expected_ut=0;
+bool mag_cal_suspect=false;
+unsigned mag_health_n=0,mag_health_ok_n=0;
 inline float dot(const float a[3], const float b[3]) { return a[0]*b[0]+a[1]*b[1]+a[2]*b[2]; }
 inline float norm(const float a[3]) { return std::sqrt(dot(a,a)); }
 bool unit(const float in[3],float out[3]) {
@@ -102,6 +131,7 @@ void reset(State& s) {
   std::memset(&s,0,sizeof(s));s.q[0]=1;
   for(int i=0;i<3;++i){s.p[i][i]=0.12f*0.12f;s.l[i][i]=.12f;}
 }
+__attribute__((section(".ramfunc.eskf")))
 void factor_rows(State& s,float rows[][3],int count) {
   // QR of [F*L, sqrt(Q)]' or [(I-KH)*L, sqrt(R)*K]'.
   for(int j=0;j<3;++j)for(int i=count-1;i>j;--i){
@@ -129,6 +159,7 @@ void quat_mul(float q[4],const float d[4]) {
   const float n=std::sqrt(q[0]*q[0]+q[1]*q[1]+q[2]*q[2]+q[3]*q[3]);
   if(n>0.5f&&std::isfinite(n))for(int i=0;i<4;++i)q[i]/=n;
 }
+__attribute__((section(".ramfunc.eskf")))
 void quat_mul(State& s,const float d[4]) {
 #if APP_ESKF_Q_COMP
   /* Same right quaternion product and normalization as above. Compute the
@@ -210,6 +241,21 @@ void quat_mul(State& s,const float d[4]) {
   quat_mul(s.q,d);
 #endif
 }
+/* Process variance rate in rad^2/s for one propagate step. The gyro ARW term is
+ * always present. Six-axis adds a tilt inflation once the gravity observation
+ * has been unavailable for longer than the start threshold, for at most the
+ * configured span, sized so SPAN seconds of closure add INFLATE_DEG of tilt
+ * uncertainty. Without it a long manoeuvre leaves P at its resting size and the
+ * gain on the next good sample is too small to pull the tilt back quickly. */
+inline float process_variance_rate() {
+  float rate=GYRO_NOISE*GYRO_NOISE;
+  if(!magnetic_enabled&&accel_gap_s>APP_ESKF_TILT_INFLATE_START_S&&
+     accel_gap_s<APP_ESKF_TILT_INFLATE_START_S+APP_ESKF_TILT_INFLATE_SPAN_S) {
+    const float deg=APP_ESKF_TILT_INFLATE_DEG*RAD;
+    rate+=deg*deg/APP_ESKF_TILT_INFLATE_SPAN_S;
+  }
+  return rate;
+}
 void integrate(State& s,const float rate[3],float dt) {
   // At <= 4000 dps and 125 us: |delta| <= 0.00873rad; first-order
   // quaternion incremental rotation has O(delta^3) local error.
@@ -225,16 +271,33 @@ void integrate(State& s,const float rate[3],float dt) {
   const float d[4]={1,rate[0]*dt*.5f,rate[1]*dt*.5f,rate[2]*dt*.5f};
 #endif
   quat_mul(s,d);
+#if APP_ESKF_COV_DIV > 1
+  /* One QR per interval, driven by the mean rate over that interval so the
+   * error state rotates by the same angle the quaternion did. */
+  for(int i=0;i<3;++i)s.cov_rate[i]+=rate[i]*dt;
+  s.cov_dt+=dt;
+  if(++s.cov_n<APP_ESKF_COV_DIV)return;
+  const float ravg[3]={s.cov_rate[0]/s.cov_dt,s.cov_rate[1]/s.cov_dt,s.cov_rate[2]/s.cov_dt};
+  const float dtc=s.cov_dt;
+  s.cov_dt=0.f;s.cov_n=0;s.cov_rate[0]=s.cov_rate[1]=s.cov_rate[2]=0.f;
+  float f[3][3]={
+    {1,ravg[2]*dtc,-ravg[1]*dtc},
+    {-ravg[2]*dtc,1,ravg[0]*dtc},
+    {ravg[1]*dtc,-ravg[0]*dtc,1}
+  };
+#else
+  const float dtc=dt;
   float f[3][3]={
     {1,rate[2]*dt,-rate[1]*dt},
     {-rate[2]*dt,1,rate[0]*dt},
     {rate[1]*dt,-rate[0]*dt,1}
   };
+#endif
   float rows[6][3]={};
   for(int i=0;i<3;++i)for(int j=0;j<3;++j) {
     for(int k=0;k<3;++k)rows[j][i]+=f[i][k]*s.l[k][j];
   }
-  const float noise=GYRO_NOISE*std::sqrt(dt);
+  const float noise=std::sqrt(process_variance_rate()*dtc);
   for(int i=0;i<3;++i)rows[i+3][i]=noise;
   factor_rows(s,rows,6);
 }
@@ -282,6 +345,18 @@ bool update(State& s,const float reference[3],const float measured[3],float vari
       const float leak=dot(k,pred);
       for(int i=0;i<3;++i)k[i]-=leak*pred[i];
     }
+    const float innovation=measured[row]-pred[row]-dot(h[row],dx);
+    float proposed[3];
+    for(int i=0;i<3;++i)proposed[i]=dx[i]+k[i]*innovation;
+    if(dot(proposed,proposed)>.4f*.4f) {
+      /* Bound the injected error using the SAME effective gain in Joseph's
+       * covariance update. Triangle bound avoids post-update clipping of dx.
+       * The normal small-correction path keeps the original gain. */
+      const float remaining=fmaxf(0.f,.3999f-norm(dx));
+      const float increment=norm(k)*std::fabs(innovation);
+      const float scale=increment>0.f?fminf(1.f,remaining/increment):0.f;
+      for(int i=0;i<3;++i)k[i]*=scale;
+    }
     float a[3][3],rows[4][3]={};
     for(int i=0;i<3;++i)for(int j=0;j<3;++j)a[i][j]=(i==j?1.f:0.f)-k[i]*h[row][j];
     for(int i=0;i<3;++i)for(int j=0;j<3;++j){
@@ -290,16 +365,16 @@ bool update(State& s,const float reference[3],const float measured[3],float vari
     const float sigma=std::sqrt(variance);
     for(int i=0;i<3;++i)rows[3][i]=sigma*k[i];
     factor_rows(candidate,rows,4);
-    const float innovation=measured[row]-pred[row]-dot(h[row],dx);
     for(int i=0;i<3;++i)dx[i]+=k[i]*innovation;
   }
-  const float angle=norm(dx);
-  if(!std::isfinite(angle)||angle>.4f) {
+  float angle=norm(dx);
+  if(!std::isfinite(angle)) {
 #if APP_STATIC6_DIAG
     if(static6_enabled && &s==&six && gravity)static6_work.counts[S6_ANGLE_REJECT6]++;
 #endif
     return false;
   }
+  /* Large corrections were limited per row before updating covariance. */
   const float dq[4]={1,.5f*dx[0],.5f*dx[1],.5f*dx[2]};
   quat_mul(candidate,dq);
   // Exact derivative of the right-error reset in the Gibbs coordinates
@@ -318,6 +393,26 @@ bool update(State& s,const float reference[3],const float measured[3],float vari
   s=candidate;
   return true;
 }
+struct MagTune {
+ int custom;
+ float lock_s, step_rad, drop_rad, soft, hard, soft_dip, hard_dip, tilt;
+ uint16_t reject_limit, accel_age;
+};
+MagTune mag_tune;
+unsigned mag_lock_count() {
+ if(!mag_tune.custom) return 100U;
+ const float n=mag_tune.lock_s*100.f;
+ return n>0.f?(unsigned)(n+.5f):0U;
+}
+float mag_step_rad() { return mag_tune.custom?mag_tune.step_rad:.4f; }
+float mag_drop_rad() { return mag_tune.custom?mag_tune.drop_rad:1.f; }
+float mag_soft_band() { return mag_tune.custom?mag_tune.soft:APP_ESKF_MAG_SOFT_BAND; }
+float mag_hard_band() { return mag_tune.custom?mag_tune.hard:APP_ESKF_MAG_HARD_BAND; }
+float mag_soft_dip() { return mag_tune.custom?mag_tune.soft_dip:APP_ESKF_MAG_SOFT_DIP; }
+float mag_hard_dip() { return mag_tune.custom?mag_tune.hard_dip:APP_ESKF_MAG_HARD_DIP; }
+unsigned mag_reject_limit() { return mag_tune.custom?mag_tune.reject_limit:APP_ESKF_MAG_REJECT_LIMIT; }
+unsigned mag_age_limit() { return mag_tune.custom?mag_tune.accel_age:APP_ESKF_MAG_LAYERED_ACCEL_AGE; }
+float mag_tilt_rad() { return mag_tune.custom?mag_tune.tilt:APP_ESKF_MAG_LAYERED_TILT_RAD; }
 #if APP_ESKF_MAG_LAYERED
 /* Variance of the tilt subspace of the attitude error: the part of P
  * orthogonal to the current body-frame vertical. Heading lives along the
@@ -350,7 +445,7 @@ bool update_heading(State& s,const float reference[3],const float measured[3],fl
    * sample (>57 deg). The applied correction is separately bounded by the
    * |dx| > 0.4 rad gate below, so a large but real error still converges
    * instead of being rejected forever. */
-  if(!std::isfinite(psi)||std::fabs(psi)>1.f)return false;
+  if(!std::isfinite(psi)||std::fabs(psi)>mag_drop_rad())return false;
   State candidate=s;
   const float h[3]={up[0],up[1],up[2]};
   float ph[3]={},hp=variance;
@@ -376,7 +471,7 @@ bool update_heading(State& s,const float reference[3],const float measured[3],fl
   float dx[3];
   for(int i=0;i<3;++i)dx[i]=k[i]*psi;
   const float angle=norm(dx);
-  if(!std::isfinite(angle)||angle>.4f)return false;
+  if(!std::isfinite(angle)||angle>mag_step_rad())return false;
   const float dq[4]={1,.5f*dx[0],.5f*dx[1],.5f*dx[2]};
   quat_mul(candidate,dq);
   const float scale=1.f/(1.f+.25f*dot(dx,dx));
@@ -394,8 +489,8 @@ bool update_heading(State& s,const float reference[3],const float measured[3],fl
   return true;
 }
 bool gravity_trusted(const State& s) {
-  if(accel_age_steps>APP_ESKF_MAG_LAYERED_ACCEL_AGE)return false;
-  const float lim=APP_ESKF_MAG_LAYERED_TILT_RAD;
+  if(accel_age_steps>mag_age_limit())return false;
+  const float lim=mag_tilt_rad();
   return tilt_variance(s)<lim*lim;
 }
 #endif
@@ -419,11 +514,13 @@ void init() {
   std::memset(last_gyro,0,sizeof(last_gyro));
   mag_ref[0]=0;mag_ref[1]=1;mag_ref[2]=0;
   mag_norm=rest_seconds=mag_warmup=max_dt_seen=mag_err=0;
-  acc_decim=mag_count=0;is_rest=mag_valid=mag_bad=false;mag_reject_n=0;mag_degraded=false;
+  mag_field_ut=0;mag_cal_suspect=false;mag_health_n=mag_health_ok_n=0;
+  acc_decim=mag_count=0;accel_rate_dps=accel_gap_s=0;is_rest=mag_valid=mag_bad=false;mag_reject_n=0;mag_degraded=false;
+  std::memset(acc_sum,0,sizeof(acc_sum));acc_mag_reject_s=acc_mag_loose_s=0;
 #if APP_ESKF_MAG_LAYERED
   /* No accelerometer has been accepted yet: gravity is not trusted until one
    * lands, so the first magnetic update cannot take the heading-only path. */
-  accel_age_steps=APP_ESKF_MAG_LAYERED_ACCEL_AGE+1u;
+  accel_age_steps=mag_age_limit()+1u;
 #endif
 }
 void prime(const float acc_ms2[3]) {
@@ -447,6 +544,7 @@ void prime(const float acc_ms2[3]) {
 #endif
 #endif
 }
+__attribute__((section(".ramfunc.eskf")))
 void gyro(const float gyr[3],float dt){
   if(!(dt>=.00005f&&dt<=.005f)||!std::isfinite(dt)){eskf8k_counts[1]++;return;}
   for(int i=0;i<3;++i) if(!std::isfinite(gyr[i])||std::fabs(gyr[i])>100.f){eskf8k_counts[2]++;return;}
@@ -456,6 +554,14 @@ void gyro(const float gyr[3],float dt){
 #endif
   if(dt>max_dt_seen)max_dt_seen=dt;
   float corrected[3];for(int i=0;i<3;++i){last_gyro[i]=gyr[i];corrected[i]=gyr[i]-residual_bias[i];}
+  {
+    /* Gravity gate support: low-passed corrected rate for the rotation gate,
+     * plus the running gap since the last accepted accelerometer update. The
+     * gap saturates so it can never overflow over a long session. */
+    const float cps=norm(corrected)/RAD;
+    accel_rate_dps+=(1.f/(RATE*APP_ESKF_ACC_RATE_LPF_MS*1e-3f))*(cps-accel_rate_dps);
+    if(accel_gap_s<100.f)accel_gap_s+=dt;
+  }
 #if APP_ESKF_SINGLE_QR >= 2
   tracker.step(gyr,dt,corrected);
   std::memcpy(residual_bias,tracker.bias,sizeof(residual_bias));
@@ -500,14 +606,17 @@ void accel(const float acc[3]){
 #if APP_STATIC6_DIAG
   if(static6_enabled)static6_work.counts[S6_ACC_CALL]++;
 #endif
-  float a[3];const float length=norm(acc);
-  if(!unit(acc,a)||!(length>G*.75f&&length<G*1.25f)) {
+  /* Per-sample sanity before anything is averaged: one saturated or corrupt
+   * frame must not leak into an otherwise good observation. */
+  const float length=norm(acc);
+  if(!(length>G*.75f&&length<G*1.25f)) {
 #if APP_STATIC6_DIAG
     if(static6_enabled)static6_work.counts[S6_BROAD_REJECT]++;
 #endif
     return;
   }
 #if APP_ESKF_SINGLE_QR < 2
+  float a[3];if(!unit(acc,a))return;
   is_rest=(std::fabs(length-G)<APP_ESKF_REST_ACC_MS2&&
            norm(last_gyro)<APP_ESKF_REST_GYR_DPS*RAD);
 #if APP_STATIC6_DIAG
@@ -530,7 +639,7 @@ void accel(const float acc[3]){
   if(is_rest&&rest_bias_on){
 #endif
 #ifndef APP_ESKF_REST_TAU_S
-#define APP_ESKF_REST_TAU_S 12.f
+#define APP_ESKF_REST_TAU_S 6.f
 #endif
 #ifndef APP_ESKF_REST_FAST_TAU_S
 #define APP_ESKF_REST_FAST_TAU_S 1.f
@@ -570,28 +679,74 @@ void accel(const float acc[3]){
 #endif
   }
 #endif // Existing M rest gate/learner; Q uses the per-gyro tracker instead.
-  if(++acc_decim<10) {
+  /* Block mean over the samples that fall inside this observation period.
+   * The engine is fed at ACC_RATE; averaging ACC_OBS_DIV of those inputs
+   * lowers the direction noise by sqrt(ACC_OBS_DIV) and the magnitude noise
+   * the same way, at the cost of three adds per input. That lower noise is
+   * what pays for the tighter magnitude gate below. */
+  for(int i=0;i<3;++i)acc_sum[i]+=acc[i];
+  if(++acc_decim<ACC_OBS_DIV) {
 #if APP_STATIC6_DIAG
     if(static6_enabled)static6_work.counts[S6_DECIM_WAIT]++;
 #endif
     return;
   }
   acc_decim=0;
+  float mean[3];
+  for(int i=0;i<3;++i){mean[i]=acc_sum[i]*(1.f/(float)ACC_OBS_DIV);acc_sum[i]=0.f;}
+  float am[3];
+  const float mlen=norm(mean);
+  if(!unit(mean,am))return;
+#if APP_ESKF_SINGLE_QR >= 2 && APP_ESKF_REST_ACCEL_GUARD
+  /* Rest-detection input: the gravity direction, low-passed inside the tracker.
+   * Fed before the gates because a rejected sample (linear acceleration) is
+   * itself evidence that the board is not resting. */
+  tracker.accel_dir(am);
+#endif
+  /* Rotation gate. A manoeuvring hand drags the accelerometer with it, so the
+   * direction it reports is not gravity until the motion stops. The magnitude
+   * gate below handles a steady push; this gate handles the moving case, where
+   * the tangential acceleration can be large and changes sign. Rejecting here
+   * leaves the tilt to the gyro; the variance inflation in
+   * process_variance_rate() makes the catch-up on the next good sample fast
+   * instead of a slow crawl. */
+  if(accel_rate_dps>APP_ESKF_ACC_RATE_GATE_DPS) {
+#if APP_STATIC6_DIAG
+    if(static6_enabled)static6_work.counts[S6_RATE_REJECT]++;
+#endif
+    return;
+  }
 #if APP_STATIC6_DIAG
   if(static6_enabled)static6_work.counts[S6_PLAN]++;
 #endif
-  if(std::fabs(length-G)>.25f) {
+  /* Magnitude gate on the averaged observation. 0.2 g of horizontal
+   * translation moves the measured direction 11.3 deg while ||a|-g| is only
+   * 0.20 m/s^2, so the old 0.25 m/s^2 gate accepted it whole. The tight gate
+   * rejects that push and still leaves more than 10 sigma over the averaged
+   * magnitude noise. A unit whose accelerometer reads 1-2 % off must not lose
+   * gravity forever, so after RELAX_S of continuous rejection the previous
+   * 0.25 gate is used for a while and the tight gate is retried afterwards. */
+  const float obs_dt=1.f/(ACC_RATE/(float)ACC_OBS_DIV);
+  if(acc_mag_loose_s>0.f)acc_mag_loose_s-=obs_dt;
+  const float mag_err=std::fabs(mlen-G);
+  const float gate=acc_mag_loose_s>0.f?APP_ESKF_ACC_MAG_GATE_LOOSE:APP_ESKF_ACC_MAG_GATE;
+  if(mag_err>gate) {
+    acc_mag_reject_s+=obs_dt;
+    if(acc_mag_loose_s<=0.f&&acc_mag_reject_s>=APP_ESKF_ACC_MAG_GATE_RELAX_S)
+      acc_mag_loose_s=APP_ESKF_ACC_MAG_GATE_LOOSE_HOLD_S;
 #if APP_STATIC6_DIAG
     if(static6_enabled)static6_work.counts[S6_NORM_REJECT]++;
 #endif
     return;
   }
-  const float variance=ACC_SIG*ACC_SIG*(1.f+std::fabs(length-G)*10.f);
+  acc_mag_reject_s=0.f;
+  const float variance=ACC_SIG*ACC_SIG*(1.f+mag_err*10.f);
   eskf8k_counts[3]++;
 #if APP_STATIC6_DIAG
   if(static6_enabled)static6_work.counts[S6_ATTEMPT6]++;
 #endif
-  const bool acc_ok=update(six,acc_ref,a,variance,true);
+  const bool acc_ok=update(six,acc_ref,am,variance,true);
+  if(acc_ok)accel_gap_s=0.f;
 #if APP_ESKF_MAG_LAYERED
   if(acc_ok)accel_age_steps=0;
 #endif
@@ -600,7 +755,7 @@ void accel(const float acc[3]){
   else if(static6_enabled)static6_work.counts[S6_OK6]++;
 #endif
 #if !APP_ESKF_SINGLE_QR
-  if(mag_valid&&!update(nine,acc_ref,a,variance,true)) {
+  if(mag_valid&&!update(nine,acc_ref,am,variance,true)) {
     eskf8k_counts[4]++;
 #if APP_STATIC6_DIAG
     if(static6_enabled)static6_work.counts[S6_REJECT9]++;
@@ -614,12 +769,43 @@ void accel(const float acc[3]){
 #endif
 #endif // No duplicate gravity update on the single-state build.
 }
+static void mag_health_step(float n)
+{
+  mag_field_ut=(mag_field_ut>=1.f)?mag_field_ut+.02f*(n-mag_field_ut):n;
+  if(mag_expected_ut<=0.f) {
+    mag_cal_suspect=false;mag_health_n=mag_health_ok_n=0;
+    return;
+  }
+  /* Judge only at rest: a moving board sees the pose-dependent residual of the
+   * fit, and that is not what this is watching. */
+  if(!is_rest) { mag_health_n=mag_health_ok_n=0; return; }
+  const float dev=std::fabs(mag_field_ut-mag_expected_ut)/mag_expected_ut;
+  if(dev>APP_ESKF_MAG_HEALTH_ENTER) {
+    mag_health_ok_n=0;
+    if(mag_health_n<APP_ESKF_MAG_HEALTH_HOLD_N) mag_health_n++;
+    else mag_cal_suspect=true;
+  } else if(dev<APP_ESKF_MAG_HEALTH_EXIT) {
+    mag_health_n=0;
+    if(mag_cal_suspect && ++mag_health_ok_n>=APP_ESKF_MAG_HEALTH_CLEAR_N) mag_cal_suspect=false;
+  } else {
+    mag_health_n=0;
+    mag_health_ok_n=0;
+  }
+}
 int mag(const float mag_ut[3]){
   float measured[3];if(!unit(mag_ut,measured))return -1;
   const float n=norm(mag_ut);
+  mag_health_step(n);
   if(!mag_valid) {
     if(mag_count==0){mag_norm=n;mag_warmup=0;}
-    if(std::fabs(n-mag_norm)>mag_norm*.12f){mag_count=0;mag_norm=n;return 0;}
+    /* A reference captured while the board is being handled keeps a wrong
+     * inclination for the rest of the session, so the lock window needs the
+     * board still as well as the field steady. Any motion restarts it. */
+    if(!is_rest||std::fabs(n-mag_norm)>mag_norm*.12f){mag_count=0;mag_norm=n;return 0;}
+    /* Never lock a reference on a field that cannot be Earth's: doing so
+     * would make a local source the definition of north, and every later
+     * sample would agree with it. Wait here until the field is plausible. */
+    if(n<APP_ESKF_MAG_LOCK_MIN_UT||n>APP_ESKF_MAG_LOCK_MAX_UT){mag_count=0;mag_norm=n;return 0;}
 #if APP_MAG_200HZ
     /* 4 s at the observation rate, and weights that keep the shipped time
      * constants at that rate. Counted in observation slots so the window
@@ -629,7 +815,7 @@ int mag(const float mag_ut[3]){
     if(mag_count<4U*APP_MAG_OBSERVATION_HZ)return 0;
 #else
     mag_norm+=.05f*(n-mag_norm);mag_count++;
-    if(mag_count<40)return 0; // Stable candidate for about 4 s at 10 Hz.
+    if(mag_count<mag_lock_count())return 0; // Default 100 observations, 1 s at 100 Hz.
 #endif
 #if !APP_ESKF_SINGLE_QR
     std::memcpy(nine.q,six.q,sizeof(six.q));
@@ -639,9 +825,36 @@ int mag(const float mag_ut[3]){
     std::memcpy(nine.qlow,six.qlow,sizeof(six.qlow));
 #endif
 #endif
-    world(nine.q,measured,mag_ref);
+    /* First stable field defines magnetic north, not the current yaw.
+     * ENU: world +Y is north. Left-multiplying a pure yaw turns the measured
+     * horizontal onto +Y and leaves tilt alone. update_heading() rejects
+     * errors above 1 rad, so this has to be a snap, not a later correction.
+     * A weak horizontal (below the heading-only floor) keeps the old capture.
+     * Six-axis mode must not yaw the shared state. */
+    float mw[3];
+    world(nine.q,measured,mw);
+    const float rh=std::sqrt(mw[0]*mw[0]+mw[1]*mw[1]);
+#if APP_ESKF_SINGLE_QR
+    const bool align_north=magnetic_enabled && rh>0.2f;
+#else
+    const bool align_north=rh>0.2f;
+#endif
+    if(align_north) {
+      const float delta=std::atan2(mw[0],mw[1]);
+      const float c=std::cos(delta*0.5f),s=std::sin(delta*0.5f);
+      const float w=nine.q[0],x=nine.q[1],y=nine.q[2],z=nine.q[3];
+      nine.q[0]=c*w-s*z; nine.q[1]=c*x-s*y; nine.q[2]=c*y+s*x; nine.q[3]=c*z+s*w;
+      const float nq=std::sqrt(nine.q[0]*nine.q[0]+nine.q[1]*nine.q[1]+nine.q[2]*nine.q[2]+nine.q[3]*nine.q[3]);
+      if(nq>0.5f&&std::isfinite(nq))for(int i=0;i<4;++i)nine.q[i]/=nq;
+#if APP_ESKF_Q_COMP
+      std::memset(nine.qlow,0,sizeof(nine.qlow));
+#endif
+      mag_ref[0]=0.f; mag_ref[1]=rh; mag_ref[2]=mw[2];
+    } else {
+      std::memcpy(mag_ref,mw,sizeof(mag_ref));
+    }
     mag_ref_dip=asinf(fmaxf(-1.f,fminf(1.f,mag_ref[2])));
-    mag_valid=true;mag_bad=false;mag_reject_n=0;
+    mag_valid=true;mag_bad=false;mag_reject_n=0;mag_degraded=false;
     return 0;
   }
   /* Validation fused from the VQF implementation. A soft band lets the
@@ -655,22 +868,33 @@ int mag(const float mag_ut[3]){
   float meas_w[3];world(nine.q,measured,meas_w);
   const float dip_now=asinf(fmaxf(-1.f,fminf(1.f,meas_w[2])));
   const float dip_dev=std::fabs(dip_now-mag_ref_dip);
-  const bool soft=dev>APP_ESKF_MAG_SOFT_BAND||dip_dev>APP_ESKF_MAG_SOFT_DIP;
-  const bool hard=dev>APP_ESKF_MAG_HARD_BAND||dip_dev>APP_ESKF_MAG_HARD_DIP;
+  const bool soft=dev>mag_soft_band()||dip_dev>mag_soft_dip();
+  const bool hard=dev>mag_hard_band()||dip_dev>mag_hard_dip();
 #if APP_ESKF_SINGLE_QR
   if(!magnetic_enabled)return 0;
 #endif
-  /* Once the limit is reached the engine latches into degraded mode and keeps
-   * accepting, otherwise a still-off reference would reject another full window
-   * immediately after every single accepted sample. The latch clears as soon as
-   * the deviation returns inside the bands, which is when the reference has
-   * caught up. */
-  if(hard&&mag_reject_on&&!mag_degraded){
-    if(mag_reject_n<APP_ESKF_MAG_REJECT_LIMIT){
+  /* Rejection follows the VQF disturbance gate: while the field is outside
+   * the hard band nothing is observed at all and the magnitude tracker is
+   * frozen, so a persistent local field can never walk into the reference and
+   * become the new north. Fusion resumes by itself the moment the field comes
+   * back inside the band. mag_degraded only reports how long the field has
+   * been unusable; it no longer changes how the sample is weighted. */
+  if(hard&&mag_reject_on) {
+    if(mag_vqf_gate) {
+      /* VQF-style: nothing is observed and the tracker stays frozen until the
+       * field comes back. mag_degraded only reports how long it has been off. */
+      if(mag_reject_n<mag_reject_limit()) mag_reject_n++;
+      else mag_degraded=true;
+      mag_bad=true;eskf8k_counts[6]++;
+      return 0;
+    }
+    /* Legacy: reject up to the limit, then accept with an inflated sigma so a
+     * genuinely changed environment is not locked out for the whole session. */
+    if(mag_reject_n<mag_reject_limit()) {
       mag_reject_n++;mag_bad=true;eskf8k_counts[6]++;return 0;
     }
     mag_degraded=true;mag_reject_n=0;
-  } else if(!hard){
+  } else {
     mag_reject_n=0;mag_degraded=false;
   }
   mag_bad=false;
@@ -684,17 +908,25 @@ int mag(const float mag_ut[3]){
   const float err=std::sqrt(fmaxf(0.f,2.f-2.f*dot(predicted,measured)));
   mag_err=err/RAD;
   eskf8k_counts[5]++;
+  /* Only reachable in the legacy strategy: the VQF-style gate returns above. */
+  const float degraded_sigma=mag_degraded?APP_ESKF_MAG_DEGRADED_SIGMA:1.f;
 #if APP_ESKF_MAG_LAYERED
   if(gravity_trusted(nine)) {
     /* Heading-only: the angular noise of a unit-vector field measurement is
      * its noise divided by the horizontal fraction, because only that
      * fraction carries heading. */
     const float rh=std::sqrt(mag_ref[0]*mag_ref[0]+mag_ref[1]*mag_ref[1]);
-    const float sigma=MAG_SIG/std::fmax(rh,.2f);
+    const float sigma=MAG_SIG*degraded_sigma/std::fmax(rh,.2f);
     if(!update_heading(nine,mag_ref,measured,sigma*sigma))eskf8k_counts[7]++;
-  } else if(!update(nine,mag_ref,measured,MAG_SIG*MAG_SIG,false))eskf8k_counts[7]++;
+  } else {
+    const float sigma=MAG_SIG*degraded_sigma;
+    if(!update(nine,mag_ref,measured,sigma*sigma,false))eskf8k_counts[7]++;
+  }
 #else
-  if(!update(nine,mag_ref,measured,MAG_SIG*MAG_SIG,false))eskf8k_counts[7]++;
+  {
+    const float sigma=MAG_SIG*degraded_sigma;
+    if(!update(nine,mag_ref,measured,sigma*sigma,false))eskf8k_counts[7]++;
+  }
 #endif
   return 0;
 }
@@ -714,9 +946,30 @@ void rest_thresholds(float out[2]) {
 #endif
 float rest_time(){return rest()?(APP_ESKF_SINGLE_QR>=2?rest_seconds:rest_seconds-1.f):0.f;}
 int mag_ready(){return mag_valid;}
-int mag_disturbed(){return mag_bad;}
+/* The published disturbance flag has to cover the latched state as well:
+ * once the hard band has persisted past the limit the engine keeps accepting
+ * the field, so mag_bad alone would report "clean" while the field is still
+ * outside the reference. Callers use this for the status LED and the
+ * diagnostic bit, never for the accept decision. */
+int mag_disturbed(){return (mag_bad||mag_degraded)?1:0;}
+/* True when the corrected field has sat far from the magnitude the loaded
+ * calibration was fitted to. Diagnostic only: it never changes the fusion. */
+int mag_calibration_suspect(){return mag_cal_suspect?1:0;}
+float mag_field_ut_current(){return mag_field_ut;}
+float mag_expected_ut_value(){return mag_expected_ut;}
+void set_mag_expected_ut(float ut){
+  const bool plausible=(ut>=20.f&&ut<=80.f);
+  const float next=plausible?ut:0.f;
+  if(next!=mag_expected_ut) {
+    mag_expected_ut=next;
+    mag_cal_suspect=false;mag_health_n=mag_health_ok_n=0;
+  }
+}
+int mag_degraded_active(){return mag_degraded?1:0;}
 float mag_delta_deg(){return mag_valid?wrap(yaw(nine.q)-yaw(six.q))/RAD:0;}
-void reset_mag_reference(){mag_valid=false;mag_count=0;mag_bad=false;mag_reject_n=0;}
+/* A new reference invalidates the latch too: without this a recalibration in
+ * a still-distorted field would resume accepting on the first sample. */
+void reset_mag_reference(){mag_valid=false;mag_count=0;mag_bad=false;mag_reject_n=0;mag_degraded=false;}
 void set_rest_bias_enabled(bool enabled){rest_bias_on=enabled;
 #if APP_ESKF_SINGLE_QR >= 2
   tracker.enabled=enabled;
@@ -741,6 +994,8 @@ unsigned rest_bias_gate_flags(){
 }
 #endif
 void set_mag_rejection(bool enabled){mag_reject_on=enabled;}
+void set_mag_vqf_gate(bool enabled){mag_vqf_gate=enabled;}
+bool mag_vqf_gate_enabled(){return mag_vqf_gate;}
 void diagnostic(float out[8]){
   out[0]=yaw(six.q)/RAD;out[1]=mag_norm;out[2]=0;out[3]=mag_warmup;
 #if APP_MAG_200HZ
@@ -771,5 +1026,61 @@ unsigned health(unsigned index){
 void state_snapshot(float out[26]){
   std::memcpy(out,six.q,sizeof(six.q));std::memcpy(out+4,six.p,sizeof(six.p));
   std::memcpy(out+13,nine.q,sizeof(nine.q));std::memcpy(out+17,nine.p,sizeof(nine.p));
+}
+void install_tuning(const eskf_tuning_t *tuning, int custom) {
+  const int use=custom && tuning && eskf_tuning_valid(tuning) && !eskf_tuning_is_default(tuning);
+  if(!use) mag_tune.custom=0;
+  else {
+    mag_tune.custom=1;
+    mag_tune.lock_s=tuning->mag_lock_s; mag_tune.step_rad=tuning->mag_step_rad;
+    mag_tune.drop_rad=tuning->mag_drop_rad; mag_tune.soft=tuning->mag_soft;
+    mag_tune.hard=tuning->mag_hard; mag_tune.soft_dip=tuning->mag_soft_dip_rad;
+    mag_tune.hard_dip=tuning->mag_hard_dip_rad; mag_tune.tilt=tuning->tilt_rad;
+    mag_tune.reject_limit=tuning->mag_reject_limit; mag_tune.accel_age=tuning->accel_age;
+  }
+#if APP_ESKF_SINGLE_QR >= 2
+  if(!use) reference_rest::rest_tune.custom=0;
+  else {
+    reference_rest::rest_tune.custom=1;
+    reference_rest::rest_tune.tau_s=tuning->rest_tau_s;
+    reference_rest::rest_tune.fast_tau_s=tuning->rest_fast_tau_s;
+    reference_rest::rest_tune.boot_s=tuning->rest_boot_s;
+    reference_rest::rest_tune.floor_dps=tuning->rest_floor_dps;
+    reference_rest::rest_tune.leave=tuning->rest_leave;
+    reference_rest::rest_tune.back=tuning->rest_return;
+  }
+#endif
+#if APP_ESKF_MAG_LAYERED
+  const unsigned age=mag_age_limit();
+  if(accel_age_steps>age) accel_age_steps=age+1u;
+#endif
+}
+extern "C" void eskf_apply_tuning(const eskf_tuning_t *tuning, int custom) {
+  install_tuning(tuning, custom);
+}
+extern "C" void eskf_read_tuning(eskf_tuning_t *tuning, int *custom) {
+  const int on=mag_tune.custom;
+  if(custom) *custom=on;
+  if(!tuning) return;
+  eskf_tuning_defaults(tuning);
+  if(!on) return;
+  tuning->mag_lock_s=mag_tune.lock_s;
+  tuning->mag_step_rad=mag_tune.step_rad;
+  tuning->mag_drop_rad=mag_tune.drop_rad;
+  tuning->mag_soft=mag_tune.soft;
+  tuning->mag_hard=mag_tune.hard;
+  tuning->mag_soft_dip_rad=mag_tune.soft_dip;
+  tuning->mag_hard_dip_rad=mag_tune.hard_dip;
+  tuning->tilt_rad=mag_tune.tilt;
+  tuning->mag_reject_limit=mag_tune.reject_limit;
+  tuning->accel_age=mag_tune.accel_age;
+#if APP_ESKF_SINGLE_QR >= 2
+  tuning->rest_tau_s=reference_rest::rest_tune.tau_s;
+  tuning->rest_fast_tau_s=reference_rest::rest_tune.fast_tau_s;
+  tuning->rest_boot_s=reference_rest::rest_tune.boot_s;
+  tuning->rest_floor_dps=reference_rest::rest_tune.floor_dps;
+  tuning->rest_leave=reference_rest::rest_tune.leave;
+  tuning->rest_return=reference_rest::rest_tune.back;
+#endif
 }
 }

@@ -36,6 +36,10 @@ const MSG = {
   INERTIAL: 0x41,
   MAGNETOMETER: 0x43,
   WS2812: 0x46,
+  REST_INDICATOR: 0x6d,
+  MAG_GATE: 0x70,
+  MAG_HEALTH: 0x73,
+  ESKF_RUNTIME: 0x75,
   ACK: 0x90,        // cmd_id, status, detail
 };
 // #pragma pack(1) 结构体 sizeof：payload 长度必须严格相等，否则丢弃
@@ -60,11 +64,15 @@ const CMD = {
   QUERY_MAG_REJECTION: 0x4d, SET_MAG_REJECTION: 0x4e,
   QUERY_ALGORITHM:0x50, SET_ALGORITHM:0x51,
   QUERY_REST_BIAS:0x55, SET_REST_BIAS:0x56,
+  QUERY_GYRO_PREFILTER:0x64, SET_GYRO_PREFILTER:0x65,
   QUERY_WS2812: 0x44,
   SET_WS2812: 0x45,
+  QUERY_REST_INDICATOR: 0x6b, SET_REST_INDICATOR: 0x6c,
+  QUERY_MAG_GATE: 0x6e, SET_MAG_GATE: 0x6f,
+  QUERY_MAG_HEALTH: 0x71, SET_MAG_HEALTH: 0x72,
+  QUERY_ESKF_RUNTIME: 0x74,
   PING: 0x10,
   ZERO: 0x11,
-  CAL: 0x12,
   STREAM: 0x13,
   QUERY: 0x14,
   RESET: 0x15,
@@ -72,7 +80,6 @@ const CMD = {
   EXIT: 0x18,
   MODE: 0x19,
   CAN_ID: 0x1a,
-  GYRO_60: 0x1b,
   ACC_6FACE: 0x1c,
   OUTPUT_HZ: 0x1d,
   STARTUP: 0x1e,
@@ -205,9 +212,15 @@ function decodePayload(id, payload) {
   if([0x61,0x63].includes(id) && globalThis.GyroCapture) return GyroCapture.decode(id,payload);
   if(id===0x5f && globalThis.GyroScale) return globalThis.GyroScale.decode(payload);
   if(id===0x5b && globalThis.GyroVqfTuning) return globalThis.GyroVqfTuning.decode(payload);
+  if(id===0x6a && globalThis.GyroEskfTuning) return globalThis.GyroEskfTuning.decode(payload);
   if(id===0x52 && globalThis.GyroFusionAlgorithm) return globalThis.GyroFusionAlgorithm.decode(payload);
   if(id===0x57 && globalThis.GyroRestBias) return globalThis.GyroRestBias.decode(payload);
+  if(id===0x66 && globalThis.GyroPrefilter) return globalThis.GyroPrefilter.decode(payload);
   if(id===MSG.WS2812 && globalThis.GyroWs2812) return globalThis.GyroWs2812.decode(payload);
+  if(id===MSG.REST_INDICATOR && globalThis.GyroRestIndicator) return globalThis.GyroRestIndicator.decode(payload);
+  if(id===MSG.MAG_GATE && globalThis.GyroMagGate) return globalThis.GyroMagGate.decode(payload);
+  if(id===MSG.MAG_HEALTH && globalThis.GyroMagRejection) return globalThis.GyroMagRejection.decodeHealth(payload);
+  if(id===MSG.ESKF_RUNTIME && globalThis.GyroEskfRuntime) return globalThis.GyroEskfRuntime.decode(payload);
   if (id === MSG.MAGNETOMETER && globalThis.GyroMag) return globalThis.GyroMag.decode(payload);
   if (id === MSG.INERTIAL && globalThis.GyroInertial) return globalThis.GyroInertial.decode(id, payload);
   if ((id === MSG.FILTER_CONFIG || id === MSG.FILTER_DIAG) && globalThis.GyroFilter) return globalThis.GyroFilter.decode(id, payload);
@@ -865,13 +878,33 @@ const ws2812Control=globalThis.GyroWs2812?.createController({
   send:(cmd,payload)=>sendQuiet(cmd,payload),changed:()=>{ws2812View?.render();updateSettingUI();},
 });
 if(ws2812Control)GyroWs2812.control=ws2812Control;
+let restIndicatorView=null;
+const restIndicatorContext=()=>({connected:running,busy:ws2812Context().busy ||
+  !!ws2812Control?.state.pending || !!magRejectionControl?.state.pending ||
+  !!globalThis.GyroMagCal?.control?.busy()});
+const restIndicatorControl=globalThis.GyroRestIndicator?.createController({
+  connected:()=>running,busy:()=>restIndicatorContext().busy,nextSeq:()=>seq&255,
+  send:(cmd,payload)=>sendQuiet(cmd,payload),changed:()=>{restIndicatorView?.render();updateSettingUI();},
+});
+if(restIndicatorControl)GyroRestIndicator.control=restIndicatorControl;
 let magRejectionView=null;
-const magRejectionContext=()=>({connected:running,busy:ws2812Context().busy || !!ws2812Control?.state.pending || !!globalThis.GyroMagCal?.control?.busy()});
+const magRejectionContext=()=>({connected:running,nineAxis:deviceConfig?.activeMode!==0,busy:ws2812Context().busy || !!ws2812Control?.state.pending || !!globalThis.GyroMagCal?.control?.busy()});
 const magRejectionControl=globalThis.GyroMagRejection?.createController({
   connected:()=>running,busy:()=>magRejectionContext().busy,nextSeq:()=>seq&255,
   send:(cmd,payload)=>sendQuiet(cmd,payload),changed:()=>{magRejectionView?.render();updateSettingUI();},
+  diagnostic:()=>sendQuiet(CMD.QUERY_FILTER_DIAG),
+  health:()=>sendQuiet(CMD.QUERY_MAG_HEALTH),
 });
 if(magRejectionControl)GyroMagRejection.control=magRejectionControl;
+let magGateView=null;
+const magGateContext=()=>({connected:running,busy:ws2812Context().busy ||
+  !!ws2812Control?.state.pending || !!magRejectionControl?.state.pending || !!restIndicatorControl?.state.pending ||
+  !!globalThis.GyroMagCal?.control?.busy()});
+const magGateControl=globalThis.GyroMagGate?.createController({
+  connected:()=>running,busy:()=>magGateContext().busy,nextSeq:()=>seq&255,
+  send:(cmd,payload)=>sendQuiet(cmd,payload),changed:()=>{magGateView?.render();updateSettingUI();},
+});
+if(magGateControl)GyroMagGate.control=magGateControl;
 let fusionAlgorithmView=null;
 const fusionAlgorithmContext=()=>({connected:running,
   dirty:startupFormDirty||canFormDirty||rateFormDirty||!!filterProfile?.state.dirty||!!zaruLimits?.state.dirty,
@@ -885,7 +918,7 @@ if(fusionAlgorithmControl)GyroFusionAlgorithm.control=fusionAlgorithmControl;
 let vqfTuningView=null;
 const vqfTuningContext=()=>({connected:running,
   busy: !deviceRestartAllowed() || startupFormDirty || canFormDirty || rateFormDirty ||
-    !!filterProfile?.state.dirty || !!zaruLimits?.state.dirty ||
+    !!filterProfile?.state.dirty || !!zaruLimits?.state.dirty || !!eskfTuningControl?.state.dirty ||
     !!globalThis.GyroInertial?.session?.state?.().active});
 const vqfTuningControl=globalThis.GyroVqfTuning?.createController({
   connected:()=>running,busy:()=>vqfTuningContext().busy,nextSeq:()=>seq&255,
@@ -893,6 +926,22 @@ const vqfTuningControl=globalThis.GyroVqfTuning?.createController({
   restart:async()=>{if(!deviceRestartAllowed())return false;await restartDevice();return !!reconnectPlan;},
 });
 if(vqfTuningControl)GyroVqfTuning.control=vqfTuningControl;
+let eskfTuningView=null;
+const eskfTuningContext=()=>({connected:running,
+  busy: !deviceRestartAllowed() || startupFormDirty || canFormDirty || rateFormDirty ||
+    !!filterProfile?.state.dirty || !!zaruLimits?.state.dirty || !!vqfTuningControl?.state.dirty ||
+    !!globalThis.GyroInertial?.session?.state?.().active});
+const eskfTuningControl=globalThis.GyroEskfTuning?.createController({
+  connected:()=>running,busy:()=>eskfTuningContext().busy,nextSeq:()=>seq&255,
+  send:sendQuiet,changed:()=>{eskfTuningView?.render();updateSettingUI();},
+});
+if(eskfTuningControl)GyroEskfTuning.control=eskfTuningControl;
+let eskfRuntimeView=null;
+const eskfRuntimeControl=globalThis.GyroEskfRuntime?.createController({
+  connected:()=>running,busy:()=>eskfTuningContext().busy,nextSeq:()=>seq&255,
+  send:sendQuiet,changed:()=>eskfRuntimeView?.render(),
+});
+if(eskfRuntimeControl)GyroEskfRuntime.control=eskfRuntimeControl;
 const gyroScaleControl=globalThis.GyroScale?.createController({
   connected:()=>running,busy:()=>gyroScaleContext().busy||!!globalThis.GyroScale?.busy?.(),nextSeq:()=>seq&255,
   send:sendQuiet,changed:()=>updateSettingUI(),restart:async()=>{if(!deviceRestartAllowed())return false;await restartDevice();return !!reconnectPlan;},
@@ -910,15 +959,22 @@ const restBiasControl=globalThis.GyroRestBias?.createController({
   send:sendQuiet,changed:()=>updateSettingUI(),
 });
 if(restBiasControl)GyroRestBias.control=restBiasControl;
+let gyroPrefilterView=null;
+const gyroPrefilterContext=()=>({connected:running,busy:restBiasContext().busy});
+const gyroPrefilterControl=globalThis.GyroPrefilter?.createController({
+  connected:()=>running,busy:()=>gyroPrefilterContext().busy,nextSeq:()=>seq&255,
+  send:sendQuiet,changed:()=>updateSettingUI(),
+});
+if(gyroPrefilterControl)GyroPrefilter.control=gyroPrefilterControl;
 const magCalContext=()=>({connected:running,mode:deviceConfig?.activeMode,hidden:document.hidden,
   busy:!!globalThis.GyroCapture?.busy?.() || !!globalThis.GyroScale?.busy?.() || connecting || setting || firmwareBusy || firmwareRestoring || !!reconnectPlan || !!pendingDeviceReset ||
     !!pendingStartup || !!pendingOutput || !!pendingCan || !!pendingRate || !!accStartPending || accCalibration?.status===1 ||
     !!filterProfile?.state.pending || !!zaruLimits?.state.pending || !!vqfInit?.state.pending || !!vqfInit?.busy?.() ||
-    (!!(globalThis.GyroRestBias?.control?.state.pending || globalThis.GyroWs2812?.control?.state.pending || (globalThis.GyroMagRejection?.control?.state.pending || (globalThis.GyroVqfTuning?.control?.state.pending || globalThis.GyroFusionAlgorithm?.control?.state.pending))) || !!(globalThis.GyroMagRejection?.control?.state.pending || (globalThis.GyroVqfTuning?.control?.state.pending || globalThis.GyroFusionAlgorithm?.control?.state.pending))) || !!globalThis.GyroUI?.gate?.busy ||
+    (!!(globalThis.GyroRestBias?.control?.state.pending || globalThis.GyroWs2812?.control?.state.pending || (globalThis.GyroMagRejection?.control?.state.pending || (globalThis.GyroVqfTuning?.control?.state.pending || globalThis.GyroEskfTuning?.control?.state.pending || globalThis.GyroFusionAlgorithm?.control?.state.pending))) || !!(globalThis.GyroMagRejection?.control?.state.pending || (globalThis.GyroVqfTuning?.control?.state.pending || globalThis.GyroEskfTuning?.control?.state.pending || globalThis.GyroFusionAlgorithm?.control?.state.pending))) || !!globalThis.GyroUI?.gate?.busy ||
     !!globalThis.GyroDrift?.session?.active || !!globalThis.GyroInertial?.session?.state?.().active});
 const magCalControl=globalThis.GyroMagCal?.createController({context:magCalContext,nextSeq:()=>seq&255,send:sendQuiet,changed:()=>{globalThis.GyroMagCal?.render?.();updateSettingUI();}});
 if(magCalControl)GyroMagCal.control=magCalControl;
-function settingEditable() { return !globalThis.GyroCapture?.busy?.() && !globalThis.GyroScale?.busy?.() && !globalThis.GyroMagCal?.control?.busy() && !(globalThis.GyroRestBias?.control?.state.pending || globalThis.GyroWs2812?.control?.state.pending || (globalThis.GyroMagRejection?.control?.state.pending || (globalThis.GyroVqfTuning?.control?.state.pending || globalThis.GyroFusionAlgorithm?.control?.state.pending))) && (setting || (autoSettingsMode && running && !firmwareBusy)); }
+function settingEditable() { return !globalThis.GyroCapture?.busy?.() && !globalThis.GyroScale?.busy?.() && !globalThis.GyroMagCal?.control?.busy() && !(globalThis.GyroRestBias?.control?.state.pending || globalThis.GyroWs2812?.control?.state.pending || (globalThis.GyroMagRejection?.control?.state.pending || (globalThis.GyroVqfTuning?.control?.state.pending || globalThis.GyroEskfTuning?.control?.state.pending || globalThis.GyroFusionAlgorithm?.control?.state.pending))) && (setting || (autoSettingsMode && running && !firmwareBusy)); }
 
 // temp1：温度轮询专用静默发送（不写日志、失败不提示）；固件升级期间一律不发
 async function sendQuiet(cmd, payload = []) {
@@ -930,7 +986,7 @@ async function sendQuiet(cmd, payload = []) {
 function tempPollAllowed() {
   return !globalThis.GyroScale?.busy?.() && !globalThis.GyroMagCal?.control?.busy() && running && !!writer && !connecting && !firmwareBusy && !firmwareRestoring && !firmwareChoosingPort && !reconnectPlan &&
     !pendingStartup && !pendingOutput && !pendingCan && !pendingRate && !pendingImmediateReset && !accStartPending &&
-    !filterProfile?.state.pending && !zaruLimits?.state.pending && !vqfInit?.state.pending && !(globalThis.GyroRestBias?.control?.state.pending || globalThis.GyroWs2812?.control?.state.pending || (globalThis.GyroMagRejection?.control?.state.pending || (globalThis.GyroVqfTuning?.control?.state.pending || globalThis.GyroFusionAlgorithm?.control?.state.pending))) && !biasHist?.state.reading && !globalThis.GyroUI?.gate?.busy && document.visibilityState === 'visible';
+    !filterProfile?.state.pending && !zaruLimits?.state.pending && !vqfInit?.state.pending && !(globalThis.GyroRestBias?.control?.state.pending || globalThis.GyroWs2812?.control?.state.pending || (globalThis.GyroMagRejection?.control?.state.pending || (globalThis.GyroVqfTuning?.control?.state.pending || globalThis.GyroEskfTuning?.control?.state.pending || globalThis.GyroFusionAlgorithm?.control?.state.pending))) && !biasHist?.state.reading && !globalThis.GyroUI?.gate?.busy && document.visibilityState === 'visible';
 }
 const tempPoller = createTempPoller({
   now: () => performance.now(), canPoll: tempPollAllowed, nextSeq: () => seq & 0xff, send: () => sendQuiet(CMD.QUERY),
@@ -944,13 +1000,24 @@ function renderTemp() {
 setInterval(() => { tempPoller.tick(); renderTemp(); }, TEMP_POLL.TICK_MS);
 setInterval(() => { motionBias?.tick(); }, 100); // bias1：仅 #biasPanel 展开时生效
 setInterval(() => { if (running && !firmwareBusy) vqfInit?.tick(); }, 250); // vqfinit1：采集中 1 s 无推送 → 静默补查 0x29
+/* 拒磁指示：只在调参页可见时按 0.8 s 静默查询 0x28，避免常驻占用上行带宽。
+ * 旧固件会在 ACK 里回 0x01，控制器随即停止轮询并显示“固件不支持”。 */
+setInterval(() => {
+  if (!running || !magRejectionControl) return;
+  if (!location.hash.startsWith('#/tuning')) return;
+  if (deviceConfig?.activeMode === 0) return; // 六轴不读磁力计
+  if (!tempPollAllowed()) return;
+  magRejectionControl.pollDiagnostic?.();
+  magRejectionControl.pollHealth?.();
+}, 800);
 
 function setConnected(connected) {
   if ($('startupBiasRead')) $('startupBiasRead').disabled = !connected || firmwareBusy;
-  if (!connected) { clearTimeout(accAckTimer); accStartPending = false; }
+  if (!connected) { clearTimeout(accAckTimer); accStartPending = false; biasHistView?.render(); }
   if ($('connKind')) $('connKind').disabled = connected || connecting || firmwareBusy || firmwareChoosingPort || !!reconnectPlan;
   $('connectBtn').disabled = firmwareBusy || connected || connecting || !!reconnectPlan;
   $('disconnectBtn').disabled = firmwareBusy || (!connected && !reconnectPlan);
+  globalThis.GyroConnection?.syncLock?.();
   $('linkState').textContent = connected ? '串口已连接' : reconnectPlan ? '等待原串口重连' : '未连接';
   $('linkState').className = `badge ${connected ? 'on' : reconnectPlan ? '' : 'off'}`;
   updateOutputControls();
@@ -1184,8 +1251,18 @@ function updateStartupDraftUI() {
   $('startupDraftHint').textContent = startupFormDirty ? '有未保存的启动修改。保存后在设备重启时生效。' : '';
   $('gyroInitHint').textContent = deviceConfig && (deviceConfig.version < 2 || !(deviceConfig.capabilities & 16))
     ? '当前固件不支持初始化零偏时长，请升级配套固件。'
-    : combined ? '0～60 秒，默认 2 秒；升级等待和零偏采集同时进行。到期不合格使用历史零偏，0 秒直接使用历史启动。'
-      : '重启后保持设备静止，完成此时长的零偏采样后开始输出姿态。';
+    : combined ? '0～60 秒，默认 2 秒；升级等待和零偏采集同时进行。窗口只采集陀螺零偏，不初始化磁力计。到期不合格使用历史零偏，0 秒直接使用历史启动。'
+      : '重启后保持设备静止，完成此时长的零偏采样后开始输出姿态。窗口只采集陀螺零偏，不初始化磁力计。';
+  const fusionNote = $('fusionModeNote');
+  if (fusionNote) {
+    const algo = globalThis.GyroFusionAlgorithm?.control?.state?.data?.active;
+    const mode = Number(document.querySelector('input[name="fusion"]:checked')?.value);
+    fusionNote.textContent = algo === 2 && mode === 2
+      ? '当前是 ESKF。九轴相对角仍会减去开机第一帧航向，但磁北对准那一次转动不会被减掉。'
+      : algo === 2
+        ? '启动窗口只采集陀螺零偏。九轴磁北在窗口结束、融合开始后才锁定。'
+        : '';
+  }
   $('startupDiscard').disabled = !startupFormDirty || !deviceConfig || !!pendingStartup;
   $('accRangeHint').textContent = deviceConfig?.version >= 5
     ? `加速度计：当前 ±${deviceConfig.activeAccRangeG} g · 已保存 ±${deviceConfig.savedAccRangeG} g；重启后生效。`
@@ -1511,6 +1588,8 @@ function handleAck({ cmd: command, status, detail, seq: ackSeq }) {
 }
 
 function handleMessage(message) {
+  if(message.type==='eskfRuntime'){eskfRuntimeControl?.onState(message,message.seq);return;}
+  if(message.type==='ack'&&message.cmd===CMD.QUERY_ESKF_RUNTIME){eskfRuntimeControl?.onAck(message.cmd,message.status,message.seq);return;}
   if(message.type==='ack' && [0x60,0x62].includes(message.cmd)){captureControl?.onAck(message.cmd,message.status,message.seq);return;}
   if(message.type==='captureConfig'){captureControl?.onConfig(message,message.seq);return;}
   if(message.type==='captureData'){globalThis.GyroCapture?.onData?.(message);return;}
@@ -1519,20 +1598,35 @@ function handleMessage(message) {
   if(message.type==='gyroScale'){gyroScaleControl?.onState(message,message.seq);return;}
   if(message.type==='ack' && [0x58,0x59,0x5a].includes(message.cmd)){vqfTuningControl?.onAck(message.cmd,message.status,message.seq);return;}
   if(message.type==='vqfTuning'){vqfTuningControl?.onState(message,message.seq);return;}
+  if(message.type==='ack' && [0x67,0x68,0x69].includes(message.cmd)){eskfTuningControl?.onAck(message.cmd,message.status,message.seq);return;}
+  if(message.type==='eskfTuning'){eskfTuningControl?.onState(message,message.seq);return;}
   if(message.type==='ack' && [CMD.QUERY_REST_BIAS,CMD.SET_REST_BIAS].includes(message.cmd)) {restBiasControl?.onAck(message.cmd,message.status,message.seq);return;}
+  if(message.type==='ack' && [CMD.QUERY_GYRO_PREFILTER,CMD.SET_GYRO_PREFILTER].includes(message.cmd)) {gyroPrefilterControl?.onAck(message.cmd,message.status,message.seq);return;}
   if(message.type==='ack' && [0x47,0x49,0x4b,0x4c].includes(message.cmd)){magCalControl?.onAck(message.cmd,message.status,message.seq);return;}
   if(message.type==='magCalRaw'){magCalControl?.onRaw(message,message.seq);return;}
   if(message.type==='magCalState'){magCalControl?.onState(message,message.seq);return;}
   if(message.type==='ack' && [CMD.QUERY_MAG_REJECTION,CMD.SET_MAG_REJECTION].includes(message.cmd)) {magRejectionControl?.onAck(message.cmd,message.status,message.seq);return;}
   if(message.type==='ack' && [CMD.QUERY_ALGORITHM,CMD.SET_ALGORITHM].includes(message.cmd)) {fusionAlgorithmControl?.onAck(message.cmd,message.status,message.seq);return;}
   if(message.type==='ack' && [CMD.QUERY_WS2812,CMD.SET_WS2812].includes(message.cmd)) {ws2812Control?.onAck(message.cmd,message.status,message.seq);return;}
+  if(message.type==='ack' && [CMD.QUERY_REST_INDICATOR,CMD.SET_REST_INDICATOR].includes(message.cmd)) {restIndicatorControl?.onAck(message.cmd,message.status,message.seq);return;}
+  if(message.type==='ack' && [CMD.QUERY_MAG_GATE,CMD.SET_MAG_GATE].includes(message.cmd)) {magGateControl?.onAck(message.cmd,message.status,message.seq);return;}
+  if(message.type==='ack' && [CMD.QUERY_MAG_HEALTH,CMD.SET_MAG_HEALTH].includes(message.cmd)) {
+    if(message.status===1 && message.cmd===CMD.QUERY_MAG_HEALTH) magRejectionControl?.onHealthUnsupported?.();
+    else magRejectionControl?.onAck(message.cmd,message.status,message.seq);
+    return;}
   if (message.type === 'ack' && message.cmd === CMD.QUERY_MAGNETOMETER) { globalThis.GyroMag?.onAck?.(message.status, message.seq); return; }
   if (message.type === 'filterDiag') {
     driftDiag = message; driftDiagAt = performance.now();
     globalThis.GyroDrift?.session?.diagnostic(message);
+    magRejectionControl?.onDiag?.(message);
   }
-  if (message.type === 'ack' && message.cmd === CMD.QUERY_FILTER_DIAG && message.status === 1) globalThis.GyroDrift?.unsupportedDiag?.();
+  if (message.type === 'ack' && message.cmd === CMD.QUERY_FILTER_DIAG) {
+    if (message.status === 1) { globalThis.GyroDrift?.unsupportedDiag?.(); magRejectionControl?.onDiagUnsupported?.(); }
+  }
   switch (message.type) {
+    case 'gyroPrefilter':
+      gyroPrefilterControl?.onState(message,message.seq);
+      break;
     case 'restBias':
       restBiasControl?.onState(message,message.seq);
       if(!restBiasControl?.state.pending)void motionBias?.query({quiet:true});
@@ -1543,6 +1637,15 @@ function handleMessage(message) {
       fusionAlgorithmControl?.onState(message,message.seq); break;
     case 'ws2812':
       ws2812Control?.onState(message,message.seq);
+      break;
+    case 'restIndicator':
+      restIndicatorControl?.onState(message,message.seq);
+      break;
+    case 'magGate':
+      magGateControl?.onState(message,message.seq);
+      break;
+    case 'magHealth':
+      magRejectionControl?.onHealth(message,message.seq);
       break;
     case 'magnetometer':
       globalThis.GyroMag?.onFrame?.(message, message.seq);
@@ -1782,7 +1885,7 @@ function deviceRestartAllowed(ignoreGyroScale=false,ignoreCapture=false) {
     !firmwareBusy && !firmwareRestoring && !firmwareChoosingPort && !pendingStartup && !pendingImmediateReset &&
     !pendingOutput && !pendingRate && !pendingCan && !accStartPending && accCalibration?.status !== 1 &&
     !vqfInit?.busy() && !vqfInit?.state.pending && !filterProfile?.state.pending && !zaruLimits?.state.pending &&
-    !(globalThis.GyroRestBias?.control?.state.pending || globalThis.GyroWs2812?.control?.state.pending || (globalThis.GyroMagRejection?.control?.state.pending || (globalThis.GyroVqfTuning?.control?.state.pending || globalThis.GyroFusionAlgorithm?.control?.state.pending))) &&
+    !(globalThis.GyroRestBias?.control?.state.pending || globalThis.GyroWs2812?.control?.state.pending || (globalThis.GyroMagRejection?.control?.state.pending || (globalThis.GyroVqfTuning?.control?.state.pending || globalThis.GyroEskfTuning?.control?.state.pending || globalThis.GyroFusionAlgorithm?.control?.state.pending))) &&
     !globalThis.GyroUI?.gate?.busy && !globalThis.GyroDrift?.session?.active;
 }
 async function restartDevice() {
@@ -1872,7 +1975,7 @@ async function retryRestartConnection(plan) {
 function refreshRestartMetadata() {
   if (!deviceConfig) void send(CMD.QUERY_CONFIG);
   for (const control of [globalThis.GyroWs2812?.control, globalThis.GyroMagRejection?.control,
-    globalThis.GyroFusionAlgorithm?.control, globalThis.GyroVqfTuning?.control,
+    globalThis.GyroFusionAlgorithm?.control, globalThis.GyroVqfTuning?.control, globalThis.GyroEskfTuning?.control,
     globalThis.GyroRestBias?.control, globalThis.GyroScale?.control, globalThis.GyroCapture?.control]) {
     if (!control || (control.state.pending && control.state.pending.kind !== 'query')) continue;
     if (control.state.pending) control.reset();
@@ -1948,12 +2051,17 @@ async function connect(autoConnection = null) {
     vqfInit?.reset();
     biasHist?.reset();
     ws2812Control?.reset();
+    restIndicatorControl?.reset();
+    magGateControl?.reset();
     magRejectionControl?.reset();
     fusionAlgorithmControl?.reset();
     vqfTuningControl?.reset();
+    eskfTuningControl?.reset();
+    eskfRuntimeControl?.reset();
     gyroScaleControl?.reset();
     captureControl?.reset();
     restBiasControl?.reset();
+    gyroPrefilterControl?.reset();
     magCalControl?.reset();
     clearTimeout(fwVersionTimer); fwVersionTimer = null; fwVersion = { text: null, supported: null }; renderFwVersion();
     deviceModel = { text: null, supported: null }; renderDeviceModel();
@@ -1966,12 +2074,16 @@ async function connect(autoConnection = null) {
     readLoopDone = readLoop(picked);
     await send(CMD.QUERY_CONFIG);
     ws2812Control?.query();
+    restIndicatorControl?.query();
+    magGateControl?.query();
     magRejectionControl?.query();
     fusionAlgorithmControl?.query();
     vqfTuningControl?.query();
+    eskfTuningControl?.query();
     gyroScaleControl?.query();
     captureControl?.query();
     restBiasControl?.query();
+    gyroPrefilterControl?.query();
     magCalControl?.read();
     await send(CMD.QUERY);
     await send(CMD.QUERY_ACC_CAL);
@@ -2023,6 +2135,7 @@ function updateFirmwareLink() {
 function updateFirmwareUI() {
   updateFirmwareLink();
   if ($("connKind")) $("connKind").disabled = !!port || connecting || firmwareBusy || firmwareChoosingPort || !!reconnectPlan;
+  globalThis.GyroConnection?.syncLock?.();
   $('firmwareFile').disabled = firmwareBusy || firmwareChoosingPort;
   $('firmwareRecovery').disabled = firmwareBusy || firmwareChoosingPort;
   $('firmwarePortBtn').hidden = !$('firmwareRecovery').checked;
@@ -2178,7 +2291,7 @@ async function startFirmwareUpgrade() {
   if(globalThis.GyroScale?.busy?.() || firmwareBusy || firmwareChoosingPort || !firmwareImage || connecting || reconnectPlan) return;
   if(accStartPending || accCalibration?.status===1) {firmwareStatus('请先取消正在进行的六面校准。');return;}
   if(globalThis.GyroCapture?.busy?.() || pendingStartup || pendingOutput || pendingCan || pendingRate) {firmwareStatus('请等待当前设备操作完成。');return;}
-  if(globalThis.GyroScale?.control?.state.dirty || globalThis.GyroVqfTuning?.control?.state.dirty || startupFormDirty || canFormDirty || rateFormDirty) {firmwareStatus('请先保存或撤销尚未应用的配置修改。');return;}
+  if(globalThis.GyroScale?.control?.state.dirty || globalThis.GyroVqfTuning?.control?.state.dirty || globalThis.GyroEskfTuning?.control?.state.dirty || startupFormDirty || canFormDirty || rateFormDirty) {firmwareStatus('请先保存或撤销尚未应用的配置修改。');return;}
   const recovery=$('firmwareRecovery').checked, image=firmwareImage;
   let selected=port || (recovery ? firmwareRecoveryPort : null), client=null, eraseSent=false, entered=false;
   if(!selected && !recovery) {firmwareStatus('请先连接设备。');return;}
@@ -2675,7 +2788,7 @@ for (const api of [navigator.serial, webusbAPI].filter(Boolean)) api.addEventLis
 // Read-only test-page bridge. Metadata excludes adaptive bias values: their normal updates must not invalidate a test.
 globalThis.GyroDriftIO = {
   context: () => ({ connected: running, ready: running && lastPoseAt > 0 && performance.now() - lastPoseAt < 500 && !!deviceConfig,
-    busy: !!globalThis.GyroCapture?.busy?.() || !!globalThis.GyroScale?.busy?.() || !!globalThis.GyroMagCal?.control?.busy() || setting || connecting || firmwareBusy || firmwareRestoring || !!reconnectPlan || !!pendingDeviceReset || !!pendingStartup || !!pendingOutput || !!pendingRate || (!!(globalThis.GyroRestBias?.control?.state.pending || globalThis.GyroWs2812?.control?.state.pending || (globalThis.GyroMagRejection?.control?.state.pending || (globalThis.GyroVqfTuning?.control?.state.pending || globalThis.GyroFusionAlgorithm?.control?.state.pending))) || !!(globalThis.GyroMagRejection?.control?.state.pending || (globalThis.GyroVqfTuning?.control?.state.pending || globalThis.GyroFusionAlgorithm?.control?.state.pending))) ||
+    busy: !!globalThis.GyroCapture?.busy?.() || !!globalThis.GyroScale?.busy?.() || !!globalThis.GyroMagCal?.control?.busy() || setting || connecting || firmwareBusy || firmwareRestoring || !!reconnectPlan || !!pendingDeviceReset || !!pendingStartup || !!pendingOutput || !!pendingRate || (!!(globalThis.GyroRestBias?.control?.state.pending || globalThis.GyroWs2812?.control?.state.pending || (globalThis.GyroMagRejection?.control?.state.pending || (globalThis.GyroVqfTuning?.control?.state.pending || globalThis.GyroEskfTuning?.control?.state.pending || globalThis.GyroFusionAlgorithm?.control?.state.pending))) || !!(globalThis.GyroMagRejection?.control?.state.pending || (globalThis.GyroVqfTuning?.control?.state.pending || globalThis.GyroEskfTuning?.control?.state.pending || globalThis.GyroFusionAlgorithm?.control?.state.pending))) ||
       !!pendingCan || !!accStartPending || accCalibration?.status === 1 || !!vqfInit?.busy() || !!filterProfile?.state.pending,
     metadata: { firmware: fwVersion.text || null, model: deviceModel.text || null, mode: deviceConfig?.activeMode ?? null,
       algorithm: fusionAlgorithmControl?.state.data?.active ?? null,
@@ -2690,7 +2803,7 @@ globalThis.GyroDriftIO = {
 const gyroScaleContext=()=>{
   const ctx=GyroDriftIO.context();
   return {...ctx,busy:!deviceRestartAllowed(true)||startupFormDirty||canFormDirty||rateFormDirty||
-    !!filterProfile?.state.dirty||!!zaruLimits?.state.dirty||!!vqfTuningControl?.state.dirty||
+    !!filterProfile?.state.dirty||!!zaruLimits?.state.dirty||!!vqfTuningControl?.state.dirty||!!eskfTuningControl?.state.dirty||
     !!globalThis.GyroInertial?.session?.state?.().active};
 };
 globalThis.GyroCaptureIO={

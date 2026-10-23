@@ -348,7 +348,9 @@
       set($('zaruSummary'), 'textContent', ctl.statusText());
       set($('zaruSaved'), 'textContent', ctl.savedText()); set($('zaruSaved'), 'title', s.saved ? `已保存：${summary(s.saved)}` : '');
       set($('zaruSummary'), 'title', s.runtime ? `当前：${summary(s.runtime)}` : '');
-      set($('zaruNote'), 'textContent', ctl.noteText());
+      const zaruGear = globalThis.__gyro?.filter?.state?.config?.active === 3;
+      const eskfSixZaru = zaruGear && globalThis.GyroFusionAlgorithm?.control?.state?.data?.active === 2 && (s.fusionMode === null || s.fusionMode === 0);
+      set($('zaruNote'), 'textContent', ctl.noteText() + (eskfSixZaru ? ' 当前档位锁定发出去的航向。静止由 ESKF 判断，单次角速度尖峰不会解除锁定。' : ''));
       const msg = s.supported === false ? (s.unsupportedBy === 'ack' ? UNSUPPORTED_TEXT : DISABLED_TEXT)
         : s.message || (s.dirty ? (on && !editable() ? '有未保存的修改（进入设置模式后可保存）' : '有未保存的修改') : '');
       set($('zaruMsg'), 'textContent', msg);

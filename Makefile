@@ -52,7 +52,9 @@ SRCS := \
   $(SRC_DIR)/calibration/fusion_settings.c \
   $(SRC_DIR)/calibration/vqf_static_cal.c \
   $(SRC_DIR)/fusion/attitude_output.c \
+  $(SRC_DIR)/fusion/gyro_prefilter.c \
   $(SRC_DIR)/bsp/static6_diag.c \
+  $(SRC_DIR)/bsp/perf_meter.c \
   $(SRC_DIR)/fusion/zaru_heading_hold.c \
   $(SRC_DIR)/bsp/ws2812.c \
   $(SRC_DIR)/drivers/can_test.c \
@@ -163,6 +165,11 @@ $(BUILD):
 
 $(BUILD)/%.o: %.c | $(BUILD)
 	$(CC) $(CFLAGS) $(DEPFLAGS) -c $< -o $@
+
+# Keep the sample-driven APP orchestration optimized; no fast-math or ESKF
+# arithmetic/observation change. Retain stack evidence for the larger TU.
+$(BUILD)/main.o: CFLAGS += -O3 -fstack-usage
+$(BUILD)/perf_meter.o $(BUILD)/bsp.o $(BUILD)/protocol.o $(BUILD)/lsm6dsv.o: CFLAGS += -O3 -fstack-usage
 
 $(BUILD)/%.o: %.cpp | $(BUILD)
 	$(CXX) $(CXXFLAGS) $(DEPFLAGS) -c $< -o $@

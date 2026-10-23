@@ -1,4 +1,5 @@
 #include "fusion_settings.h"
+#include "gyro_prefilter.h"
 #include "app_config.h"
 #include "gyro_range.h"
 #include "acc_range.h"
@@ -101,7 +102,30 @@ _Static_assert(196U+sizeof(tuning_settings_t)==268U,"gyro scale extension offset
 #define ACC_RANGE_MAGIC 0x41435231U
 typedef struct { uint32_t magic, sequence, range_g, crc; } acc_range_settings_t;
 _Static_assert(268U+sizeof(scale_settings_t)==292U,"acc range extension offset");
-_Static_assert(292U+sizeof(acc_range_settings_t)<=SETTINGS_SECTOR_SIZE,"settings extensions fit journal");
+_Static_assert(292U+sizeof(acc_range_settings_t)==308U,"gyro prefilter extension offset");
+#define GYRO_PREFILTER_MAGIC 0x47504631U
+typedef struct { uint32_t magic, sequence, enabled; float cutoff_hz, q; uint32_t crc; } gyro_prefilter_settings_t;
+_Static_assert(sizeof(gyro_prefilter_settings_t)==24U,"gyro prefilter extension");
+_Static_assert(308U+sizeof(gyro_prefilter_settings_t)==332U,"ESKF tuning extension offset");
+#define ESKF_TUNE_MAGIC 0x45534B31U
+typedef struct { uint32_t magic, sequence, custom; eskf_tuning_t parameters; uint32_t crc; } eskf_tune_settings_t;
+_Static_assert(sizeof(eskf_tune_settings_t)==72U,"ESKF tuning extension");
+_Static_assert(332U+sizeof(eskf_tune_settings_t)<=SETTINGS_SECTOR_SIZE,"settings extensions fit journal");
+#define REST_INDICATOR_MAGIC 0x52494E31U
+typedef struct { uint32_t magic, sequence, enabled, crc; } rest_indicator_settings_t;
+_Static_assert(332U+sizeof(eskf_tune_settings_t)==404U,"rest indicator extension offset");
+_Static_assert(404U+sizeof(rest_indicator_settings_t)<=SETTINGS_SECTOR_SIZE,"rest indicator fits journal");
+#define MAG_VQF_GATE_MAGIC 0x4D564731U
+typedef struct { uint32_t magic, sequence, enabled, crc; } mag_vqf_gate_settings_t;
+_Static_assert(404U+sizeof(rest_indicator_settings_t)==420U,"magnetometer gate extension offset");
+_Static_assert(420U+sizeof(mag_vqf_gate_settings_t)==436U,"magnetometer health extension offset");
+/* Magnitude the loaded calibration was fitted to. Stored next to the
+ * coefficients so a unit whose hard-iron offset moved can be told apart from
+ * one that is merely looking at a different part of the sky. Zero = unknown. */
+#define MAG_HEALTH_MAGIC 0x4D484C31U
+typedef struct { uint32_t magic, sequence; float expected_ut; uint32_t crc; } mag_health_settings_t;
+_Static_assert(sizeof(mag_health_settings_t)==16U,"magnetometer health extension");
+_Static_assert(436U+sizeof(mag_health_settings_t)<=SETTINGS_SECTOR_SIZE,"magnetometer health fits journal");
 static void load_scale(const settings_record_t *r, device_settings_t *s);
 static void load_tuning(const settings_record_t *r, device_settings_t *s);
 static uint8_t load_ws_enabled(const settings_record_t *r);
@@ -126,6 +150,27 @@ static uint8_t load_ws_enabled(const settings_record_t *r)
   if(w->magic!=WS_SETTINGS_MAGIC || w->sequence!=r->sequence || w->enabled>1U ||
      w->crc!=crc32(w,sizeof(*w)-4U)) return 1U;
   return (uint8_t)w->enabled;
+}
+static float load_mag_health(const settings_record_t *r)
+{
+  const mag_health_settings_t *x=(const mag_health_settings_t *)((const uint8_t *)r+436U);
+  if(x->magic!=MAG_HEALTH_MAGIC || x->sequence!=r->sequence ||
+     !(x->expected_ut>=20.f && x->expected_ut<=80.f) || x->crc!=crc32(x,sizeof(*x)-4U)) return 0.f;
+  return x->expected_ut;
+}
+static uint8_t load_mag_vqf_gate(const settings_record_t *r)
+{
+  const mag_vqf_gate_settings_t *x=(const mag_vqf_gate_settings_t *)((const uint8_t *)r+420U);
+  if(x->magic!=MAG_VQF_GATE_MAGIC || x->sequence!=r->sequence || x->enabled>1U ||
+     x->crc!=crc32(x,sizeof(*x)-4U)) return 1U;
+  return (uint8_t)x->enabled;
+}
+static uint8_t load_rest_indicator(const settings_record_t *r)
+{
+  const rest_indicator_settings_t *x=(const rest_indicator_settings_t *)((const uint8_t *)r+404U);
+  if(x->magic!=REST_INDICATOR_MAGIC || x->sequence!=r->sequence || x->enabled>1U ||
+     x->crc!=crc32(x,sizeof(*x)-4U)) return 1U;
+  return (uint8_t)x->enabled;
 }
 static void load_mag(const settings_record_t *r, mag_cal_parameters_t *p)
 {
@@ -170,6 +215,27 @@ static void load_scale(const settings_record_t *r, device_settings_t *s)
   gyro_scale_defaults(&s->gyro_scale);
   if(t->magic==GYRO_SCALE_MAGIC && t->sequence==r->sequence &&
      t->crc==crc32(t,sizeof(*t)-4U) && gyro_scale_valid(&t->parameters)) s->gyro_scale=t->parameters;
+}
+static void load_prefilter(const settings_record_t *r, device_settings_t *s)
+{
+  const gyro_prefilter_settings_t *p=(const gyro_prefilter_settings_t *)((const uint8_t *)r+308U);
+  if(p->magic!=GYRO_PREFILTER_MAGIC || p->sequence!=r->sequence || p->enabled>1U ||
+     !gyro_prefilter_params_ok(1, p->cutoff_hz, p->q) || p->crc!=crc32(p,sizeof(*p)-4U)) return;
+  s->gyro_prefilter_enabled=(uint8_t)p->enabled;
+  s->gyro_prefilter_hz=p->cutoff_hz;
+  s->gyro_prefilter_q=p->q;
+}
+static void load_eskf_tuning(const settings_record_t *r, device_settings_t *s)
+{
+  const eskf_tune_settings_t *t=(const eskf_tune_settings_t *)((const uint8_t *)r+332U);
+  if(t->magic!=ESKF_TUNE_MAGIC || t->sequence!=r->sequence || t->custom>1U ||
+     !eskf_tuning_valid(&t->parameters) || t->crc!=crc32(t,sizeof(*t)-4U)) return;
+  s->eskf_tuning_custom=(uint8_t)t->custom;
+  s->eskf_tuning=t->parameters;
+  if(!s->eskf_tuning_custom || eskf_tuning_is_default(&s->eskf_tuning)) {
+    eskf_tuning_defaults(&s->eskf_tuning);
+    s->eskf_tuning_custom=0U;
+  }
 }
 static uint8_t load_acc_range(const settings_record_t *r)
 {
@@ -245,6 +311,14 @@ void device_settings_defaults(device_settings_t *s)
   s->gyro_init_ms = APP_GYR_INIT_DEFAULT_MS;
   s->gyro_range_dps = GYRO_RANGE_DEFAULT_DPS;
   s->acc_range_g = ACC_RANGE_DEFAULT_G;
+  s->gyro_prefilter_enabled = 0U;
+  s->gyro_prefilter_hz = GYRO_PREFILTER_DEFAULT_HZ;
+  s->gyro_prefilter_q = GYRO_PREFILTER_DEFAULT_Q;
+  s->eskf_tuning_custom = 0U;
+  eskf_tuning_defaults(&s->eskf_tuning);
+  s->rest_indicator_enabled = 1U;
+  s->mag_vqf_gate_enabled = 1U;
+  s->mag_expected_ut = 0.f;
   s->output_hz = APP_VOFA_OUTPUT_HZ;
   s->filter_profile = FUSION_PROFILE_DEFAULT;
   zaru_limits_default(&s->zaru);
@@ -261,7 +335,7 @@ static void decode_record(const settings_record_t *r, device_settings_t *s)
   s->mode = (fusion_mode_t)r->mode;
   s->can_node_id = r->can_node_id;
   s->can.node_id = r->can_node_id;
-  if(r->version==SETTINGS_VERSION) { s->ws2812_enabled=load_ws_enabled(r); s->mag_rejection_enabled=load_mag_rejection(r); s->fusion_algorithm=load_algorithm(r); s->rest_bias_enabled=load_rest_bias(r); load_mag(r,&s->mag_cal); load_tuning(r,s); load_scale(r,s); s->acc_range_g=load_acc_range(r); }
+  if(r->version==SETTINGS_VERSION) { s->ws2812_enabled=load_ws_enabled(r); s->mag_rejection_enabled=load_mag_rejection(r); s->fusion_algorithm=load_algorithm(r); s->rest_bias_enabled=load_rest_bias(r); load_mag(r,&s->mag_cal); load_tuning(r,s); load_scale(r,s); s->acc_range_g=load_acc_range(r); load_prefilter(r,s); load_eskf_tuning(r,s); s->rest_indicator_enabled=load_rest_indicator(r); s->mag_vqf_gate_enabled=load_mag_vqf_gate(r); s->mag_expected_ut=load_mag_health(r); }
   if(r->version >= 3U) {
     s->fast_start = r->fast_start;
     memcpy(s->outputs, r->outputs, sizeof(s->outputs));
@@ -298,11 +372,18 @@ int device_settings_save(const device_settings_t *s)
   tuning_settings_t tuning;
   scale_settings_t scale;
   acc_range_settings_t acc_range;
+  gyro_prefilter_settings_t prefilter;
+  eskf_tune_settings_t eskf;
+  rest_indicator_settings_t rest_ind;
+  mag_vqf_gate_settings_t mag_gate;
+  mag_health_settings_t mag_health;
   device_settings_t previous;
   const settings_record_t *old;
   flash_status_type st;
   uint32_t old_addr = SETTINGS_SLOT1, new_addr, i, word;
-  if(!s || !gyro_scale_valid(&s->gyro_scale) || s->vqf_tuning_enabled>1U || !vqf_tuning_valid(&s->vqf_tuning) || s->rest_bias_enabled>1U || s->fusion_algorithm>=FUSION_ALGORITHM_COUNT || !mag_cal_valid(&s->mag_cal) || s->mag_rejection_enabled > 1U || s->ws2812_enabled > 1U || s->filter_profile >= FUSION_PROFILE_COUNT || (unsigned)s->mode > FUSION_MODE_9AXIS_RELATIVE || s->can_node_id > 0x7FFU || s->fast_start > 1U ||
+  if(!s || !gyro_scale_valid(&s->gyro_scale) || !gyro_prefilter_params_ok(s->gyro_prefilter_enabled, s->gyro_prefilter_hz, s->gyro_prefilter_q) || s->eskf_tuning_custom>1U || !eskf_tuning_valid(&s->eskf_tuning) || s->vqf_tuning_enabled>1U || !vqf_tuning_valid(&s->vqf_tuning) || s->rest_bias_enabled>1U || s->fusion_algorithm>=FUSION_ALGORITHM_COUNT || !mag_cal_valid(&s->mag_cal) || s->mag_rejection_enabled > 1U || s->ws2812_enabled > 1U || s->rest_indicator_enabled > 1U || s->mag_vqf_gate_enabled > 1U ||
+     !(s->mag_expected_ut == 0.f || (s->mag_expected_ut >= 20.f && s->mag_expected_ut <= 80.f)) ||
+     s->filter_profile >= FUSION_PROFILE_COUNT || (unsigned)s->mode > FUSION_MODE_9AXIS_RELATIVE || s->can_node_id > 0x7FFU || s->fast_start > 1U ||
      s->gyro_init_ms > APP_GYR_INIT_MAX_MS ||
      !gyro_range_valid(s->gyro_range_dps) || !acc_range_valid(s->acc_range_g) || !s->output_hz || s->output_hz > APP_FUSION_HZ || APP_FUSION_HZ % s->output_hz != 0U ||
      !protocol_output_config_valid(&s->outputs[0]) || !protocol_output_config_valid(&s->outputs[1]) ||
@@ -316,10 +397,18 @@ int device_settings_save(const device_settings_t *s)
        previous.acc_range_g == s->acc_range_g &&
        previous.filter_profile == s->filter_profile &&
        previous.ws2812_enabled == s->ws2812_enabled &&
+       previous.rest_indicator_enabled == s->rest_indicator_enabled &&
+       previous.mag_vqf_gate_enabled == s->mag_vqf_gate_enabled &&
+       previous.mag_expected_ut == s->mag_expected_ut &&
        previous.mag_rejection_enabled == s->mag_rejection_enabled &&
        previous.fusion_algorithm == s->fusion_algorithm &&
        previous.rest_bias_enabled == s->rest_bias_enabled &&
        memcmp(&previous.gyro_scale,&s->gyro_scale,sizeof(s->gyro_scale))==0 &&
+       previous.gyro_prefilter_enabled == s->gyro_prefilter_enabled &&
+       previous.gyro_prefilter_hz == s->gyro_prefilter_hz &&
+       previous.gyro_prefilter_q == s->gyro_prefilter_q &&
+       previous.eskf_tuning_custom == s->eskf_tuning_custom &&
+       memcmp(&previous.eskf_tuning,&s->eskf_tuning,sizeof(s->eskf_tuning))==0 &&
        previous.vqf_tuning_enabled == s->vqf_tuning_enabled &&
        memcmp(&previous.vqf_tuning,&s->vqf_tuning,sizeof(s->vqf_tuning))==0 &&
        memcmp(&previous.mag_cal,&s->mag_cal,sizeof(s->mag_cal))==0 &&
@@ -366,6 +455,17 @@ int device_settings_save(const device_settings_t *s)
   scale.crc=crc32(&scale,sizeof(scale)-4U);
   acc_range.magic=ACC_RANGE_MAGIC;acc_range.sequence=r.sequence;acc_range.range_g=s->acc_range_g;
   acc_range.crc=crc32(&acc_range,sizeof(acc_range)-4U);
+  prefilter.magic=GYRO_PREFILTER_MAGIC;prefilter.sequence=r.sequence;prefilter.enabled=s->gyro_prefilter_enabled;
+  prefilter.cutoff_hz=s->gyro_prefilter_hz;prefilter.q=s->gyro_prefilter_q;
+  prefilter.crc=crc32(&prefilter,sizeof(prefilter)-4U);
+  eskf.magic=ESKF_TUNE_MAGIC;eskf.sequence=r.sequence;eskf.custom=s->eskf_tuning_custom;
+  eskf.parameters=s->eskf_tuning;eskf.crc=crc32(&eskf,sizeof(eskf)-4U);
+  rest_ind.magic=REST_INDICATOR_MAGIC;rest_ind.sequence=r.sequence;rest_ind.enabled=s->rest_indicator_enabled;
+  rest_ind.crc=crc32(&rest_ind,sizeof(rest_ind)-4U);
+  mag_gate.magic=MAG_VQF_GATE_MAGIC;mag_gate.sequence=r.sequence;mag_gate.enabled=s->mag_vqf_gate_enabled;
+  mag_gate.crc=crc32(&mag_gate,sizeof(mag_gate)-4U);
+  mag_health.magic=MAG_HEALTH_MAGIC;mag_health.sequence=r.sequence;mag_health.expected_ut=s->mag_expected_ut;
+  mag_health.crc=crc32(&mag_health,sizeof(mag_health)-4U);
   flash_unlock();
   st = flash_sector_erase(new_addr);
   if(st == FLASH_OPERATE_DONE) {
@@ -414,6 +514,31 @@ int device_settings_save(const device_settings_t *s)
       st=flash_word_program(new_addr+292U+4U*i,word);
       if(st!=FLASH_OPERATE_DONE)break;
     }
+    if(st == FLASH_OPERATE_DONE) for(i=0;i<sizeof(prefilter)/4U;++i) {
+      memcpy(&word,(const uint8_t *)&prefilter+4U*i,4U);
+      st=flash_word_program(new_addr+308U+4U*i,word);
+      if(st!=FLASH_OPERATE_DONE)break;
+    }
+    if(st == FLASH_OPERATE_DONE) for(i=0;i<sizeof(eskf)/4U;++i) {
+      memcpy(&word,(const uint8_t *)&eskf+4U*i,4U);
+      st=flash_word_program(new_addr+332U+4U*i,word);
+      if(st!=FLASH_OPERATE_DONE)break;
+    }
+    if(st == FLASH_OPERATE_DONE) for(i=0;i<sizeof(rest_ind)/4U;++i) {
+      memcpy(&word,(const uint8_t *)&rest_ind+4U*i,4U);
+      st=flash_word_program(new_addr+404U+4U*i,word);
+      if(st!=FLASH_OPERATE_DONE)break;
+    }
+    if(st == FLASH_OPERATE_DONE) for(i=0;i<sizeof(mag_gate)/4U;++i) {
+      memcpy(&word,(const uint8_t *)&mag_gate+4U*i,4U);
+      st=flash_word_program(new_addr+420U+4U*i,word);
+      if(st!=FLASH_OPERATE_DONE)break;
+    }
+    if(st == FLASH_OPERATE_DONE) for(i=0;i<sizeof(mag_health)/4U;++i) {
+      memcpy(&word,(const uint8_t *)&mag_health+4U*i,4U);
+      st=flash_word_program(new_addr+436U+4U*i,word);
+      if(st!=FLASH_OPERATE_DONE)break;
+    }
     if(st == FLASH_OPERATE_DONE) st=flash_word_program(new_addr+sizeof(r)-4U,r.crc);
   }
   flash_lock();
@@ -421,8 +546,15 @@ int device_settings_save(const device_settings_t *s)
   load_mag((const settings_record_t *)(uintptr_t)new_addr,&previous.mag_cal);
   load_tuning((const settings_record_t *)(uintptr_t)new_addr,&previous);
   load_scale((const settings_record_t *)(uintptr_t)new_addr,&previous);
+  load_prefilter((const settings_record_t *)(uintptr_t)new_addr,&previous);
+  load_eskf_tuning((const settings_record_t *)(uintptr_t)new_addr,&previous);
   return load_acc_range((const settings_record_t *)(uintptr_t)new_addr)==s->acc_range_g &&
+      previous.eskf_tuning_custom==s->eskf_tuning_custom &&
+      memcmp(&previous.eskf_tuning,&s->eskf_tuning,sizeof(s->eskf_tuning))==0 &&
       memcmp(&previous.gyro_scale,&s->gyro_scale,sizeof(s->gyro_scale))==0 &&
+      previous.gyro_prefilter_enabled==s->gyro_prefilter_enabled &&
+      previous.gyro_prefilter_hz==s->gyro_prefilter_hz &&
+      previous.gyro_prefilter_q==s->gyro_prefilter_q &&
       previous.vqf_tuning_enabled==s->vqf_tuning_enabled &&
       memcmp(&previous.vqf_tuning,&s->vqf_tuning,sizeof(s->vqf_tuning))==0 &&
       memcmp(&previous.mag_cal,&s->mag_cal,sizeof(s->mag_cal))==0 &&
@@ -430,6 +562,9 @@ int device_settings_save(const device_settings_t *s)
       load_ws_enabled((const settings_record_t *)(uintptr_t)new_addr)==s->ws2812_enabled &&
       load_algorithm((const settings_record_t *)(uintptr_t)new_addr)==s->fusion_algorithm &&
       load_rest_bias((const settings_record_t *)(uintptr_t)new_addr)==s->rest_bias_enabled &&
+      load_rest_indicator((const settings_record_t *)(uintptr_t)new_addr)==s->rest_indicator_enabled &&
+      load_mag_vqf_gate((const settings_record_t *)(uintptr_t)new_addr)==s->mag_vqf_gate_enabled &&
+      load_mag_health((const settings_record_t *)(uintptr_t)new_addr)==s->mag_expected_ut &&
       load_mag_rejection((const settings_record_t *)(uintptr_t)new_addr)==s->mag_rejection_enabled ? 0 : -3;
 }
 int fusion_settings_load_ex(fusion_mode_t *mode, uint16_t *can_node_id)

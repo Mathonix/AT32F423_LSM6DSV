@@ -294,7 +294,9 @@ progress::-webkit-progress-value{background:linear-gradient(90deg,color-mix(in s
   .tb-right{gap:4px}
   .tb-right>a.icon-btn{display:none}
   .conn{height:28px;padding:0 10px 0 9px;font-size:12px}
-  #connectBtn,#disconnectBtn{height:38px;padding:0 12px}
+  #connectBtn,#disconnectBtn,#connectMenuBtn{height:38px}
+  #connectBtn,#disconnectBtn{padding:0 12px}
+  .connect-caret{width:32px;padding:0}
   .icon-btn{width:40px;height:40px}
   .view{padding:14px calc(12px + env(safe-area-inset-right)) calc(20px + env(safe-area-inset-bottom)) calc(12px + env(safe-area-inset-left))}
   .page-h h1{font-size:20px}
@@ -352,3 +354,95 @@ progress::-webkit-progress-value{background:linear-gradient(90deg,color-mix(in s
 /* 20261009theme3: no text selection on the toggle or anywhere while the reveal runs */
 .theme-toggle{-webkit-user-select:none;user-select:none}
 html.theme-switching,html.theme-switching *{-webkit-user-select:none!important;user-select:none!important}
+
+/* =====================================================================================================
+   20261023ui1 — refinement pass. Pure presentation: every id / class the scripts use is unchanged.
+   Theme: quieter, slightly deeper cards; one measure (max-width) on every page; tighter page-header
+   hierarchy; consistent hover/focus feedback on all controls; deeper 3D stage; unified icon chips.
+   ===================================================================================================== */
+:root,:root[data-theme=dark]{--card-amb:0 14px 34px -24px rgba(0,0,0,.7)}
+:root[data-theme=light]{--card-amb:0 10px 28px -20px rgba(16,24,40,.14)}
+.card,.quick,.file-pick{box-shadow:var(--shadow),var(--card-amb)}
+
+/* page header: title and state chips on one rhythm */
+.page-h{display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+.page-h h1{font-weight:750;letter-spacing:-.015em}
+
+/* nav: active item reads as a soft wash, not a solid block */
+.nav-item.active{background:linear-gradient(90deg,color-mix(in srgb,var(--primary) 17%,transparent),color-mix(in srgb,var(--primary) 6%,transparent))}
+.nav-item.active::before{top:10px;bottom:10px}
+
+/* every input answers the pointer, not just the keyboard */
+select:hover:not(:disabled),input:not([type=checkbox]):not([type=radio]):not([type=file]):hover:not(:disabled){border-color:var(--input-hover)}
+input.switch:checked{background:linear-gradient(180deg,color-mix(in srgb,var(--primary) 86%,#fff 14%),var(--primary));box-shadow:0 0 0 3px color-mix(in srgb,var(--primary) 12%,transparent)}
+input.switch:checked::after{box-shadow:0 1px 2px rgba(0,0,0,.35)}
+
+/* 3D stage: a deeper backdrop so the board sits in light, not on flat paint */
+.stage{background:radial-gradient(130% 100% at 50% 12%,#152230 0%,#0E1622 52%,#0A111C 100%)}
+
+/* quick tiles: same icon-chip treatment as the device rows above them */
+.quick .ic{width:32px;height:32px;padding:6px;border-radius:9px;background:var(--primary-soft)}
+
+/* tuning page: same content measure as output / settings / upgrade */
+.view-tuning>.card,.view-tuning>.tuning-note{max-width:1240px;width:100%}
+
+/* scrollbars: rounded, inset thumb in WebKit (Firefox keeps scrollbar-width:thin) */
+::-webkit-scrollbar{width:11px;height:11px}
+::-webkit-scrollbar-track{background:transparent}
+::-webkit-scrollbar-thumb{background:var(--border-strong);border-radius:8px;border:3px solid transparent;background-clip:content-box}
+::-webkit-scrollbar-thumb:hover{background:var(--input-hover);border:3px solid transparent;background-clip:content-box}
+::-webkit-scrollbar-corner{background:transparent}
+
+/* =====================================================================================================
+   20261023motion1 — motion + interaction layer.
+   One motion language for the whole app: spring-tactile controls, staggered view entrance, a scanning
+   light in the 3D stage, a breathing brand mark, sheen on the primary action, slower toast/ popover
+   easing. Every rule honours the existing prefers-reduced-motion block above (screen-reader safe, no
+   layout shift, nothing that hides content).
+   ===================================================================================================== */
+:root{--dur-1:.12s;--dur-2:.2s;--dur-3:.42s;
+  --spring:cubic-bezier(.34,1.46,.64,1);--out:cubic-bezier(.22,1,.36,1)}
+
+/* ---- view entrance: the page fades, its blocks rise, staggered ---- */
+@keyframes rise-in{from{transform:translateY(10px)}to{transform:none}}
+.view-enter>*{animation:rise-in var(--dur-3) var(--out) both}
+.view-enter>*:nth-child(2){animation-delay:.05s}
+.view-enter>*:nth-child(3){animation-delay:.1s}
+.view-enter>*:nth-child(n+4){animation-delay:.15s}
+
+/* ---- controls: tactile press, springy switch, sheen on the primary action ---- */
+button:active:not(:disabled),.btn-like:active:not(:disabled){transform:translateY(1px) scale(.985);transition-duration:var(--dur-1)}
+input.switch{transition:background .22s var(--ease),box-shadow .22s var(--ease)}
+input.switch::after{transition:transform .26s var(--spring)}
+input.switch:hover:not(:disabled){box-shadow:0 0 0 3px color-mix(in srgb,var(--primary) 8%,transparent)}
+button.primary,.btn-like.primary{position:relative;overflow:hidden}
+button.primary::after{content:"";position:absolute;inset:0;border-radius:inherit;pointer-events:none;
+  background:linear-gradient(100deg,transparent 20%,rgba(255,255,255,.22) 50%,transparent 80%);
+  transform:translateX(-120%);transition:transform .55s var(--out)}
+button.primary:hover:not(:disabled)::after{transform:translateX(120%)}
+button.primary:active:not(:disabled)::after{transform:translateX(120%);transition-duration:.2s}
+.theme-toggle{transition:background var(--dur-2),color var(--dur-2),border-color var(--dur-2)}
+.theme-toggle .ic{transition:transform .45s var(--spring)}
+.theme-toggle:hover .ic{transform:rotate(-25deg) scale(1.06)}
+
+/* ---- pointer states that answer immediately ---- */
+.quick,.file-pick{transition:transform var(--dur-2) var(--out),border-color var(--dur-2),background var(--dur-2),box-shadow var(--dur-2)}
+.quick:hover{box-shadow:var(--shadow),var(--card-amb),0 0 0 1px color-mix(in srgb,var(--primary) 34%,transparent)}
+.quick:active{transform:translateY(0)}
+.row-clickable,.checks label,.checkbox-row{transition:transform var(--dur-1),border-color var(--dur-2),background var(--dur-2)}
+.nav-item{transition:background var(--dur-2) var(--ease),color var(--dur-2) var(--ease)}
+.nav-item:active{transform:translateY(1px)}
+
+/* ---- brand mark: a slow quiet breath so the app never feels frozen ---- */
+@keyframes mark-breathe{0%,100%{transform:scale(1);opacity:.95}50%{transform:scale(1.07);opacity:1}}
+.nav-mark::before{animation:mark-breathe 5s ease-in-out infinite}
+
+/* ---- 3D stage: slow scanning light, like a live instrument ---- */
+@keyframes stage-scan{0%{transform:translateY(-60%)}100%{transform:translateY(160%)}}
+.stage::before{content:"";position:absolute;inset:0;overflow:hidden;border-radius:inherit;pointer-events:none;z-index:1;opacity:.5;
+  background:linear-gradient(180deg,transparent,color-mix(in srgb,var(--c-z) 7%,transparent) 46%,transparent);
+  animation:stage-scan 7.5s linear infinite}
+
+/* ---- toasts: slide in on the spring, not just fade ---- */
+@keyframes toast-in-2{from{opacity:0;transform:translateY(-8px) scale(.96)}to{opacity:1;transform:none}}
+.toast{animation:toast-in-2 .34s var(--spring) both}

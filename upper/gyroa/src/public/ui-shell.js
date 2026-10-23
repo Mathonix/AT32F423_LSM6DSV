@@ -209,6 +209,7 @@
     const showDisconnect = connected || reconnecting || (firmwareBusy && !!port);
     $('connectBtn').hidden = showDisconnect;
     $('disconnectBtn').hidden = !showDisconnect;
+    globalThis.GyroConnection?.syncLock?.();
     label($('connectBtn'), connecting ? '连接中…' : null);
     document.body.classList.toggle('is-connected', connected);
     busyButton('applyBtn', '保存中…', !!pendingStartup || gate.busy === 'startup');

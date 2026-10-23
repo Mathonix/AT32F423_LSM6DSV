@@ -1,7 +1,7 @@
 ﻿/**
  * LSM6DSV 4-wire SPI1.
  * Mode 0, 16-bit frames, software CS on PA4, PA6 pull-up.
- * APB2=75 MHz, DIV_16 => SCK ≈ 4.6875 MHz.
+ * APB2=75 MHz, DIV_8 => SCK ≈ 9.375 MHz (<=10MHz device limit).
  *
  * PA5 = SPI1_SCK AF5, PA6 = SPI1_MISO AF5, PA7 = SPI1_MOSI AF5.
  */
@@ -72,8 +72,10 @@
 #if LSM6DSV_USE_HW_SPI
 
 #ifndef LSM6DSV_SPI_DIV
-/* APB2 = 75 MHz, DIV_16 => SCK ≈ 4.6875 MHz. */
-#define LSM6DSV_SPI_DIV SPI_MCLK_DIV_16
+/* APB2 = 75 MHz, DIV_8 => SCK ≈ 9.375 MHz. */
+/* APB2=75MHz /8=9.375MHz; LSM6DSV DS13476 table6 allows <=10MHz.
+ * This does not authorize /4 (18.75MHz). Board signal timing is tested apart. */
+#define LSM6DSV_SPI_DIV SPI_MCLK_DIV_8
 #endif
 
 #define SPI_TIMEOUT 1000000U

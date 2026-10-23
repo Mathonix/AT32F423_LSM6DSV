@@ -15,8 +15,20 @@
     magCalFrame(seq) {return frame(0x4a,seq,le(52,v=>{v.setUint8(0,1);v.setUint8(1,this.magCal.valid?1:0);[...this.magCal.offset,...this.magCal.matrix.flat()].forEach((x,i)=>v.setFloat32(4+i*4,x,true));}));},
     magRejectionEnabled:true,magRejectionSaved:true,
     restBiasEnabled:true,restBiasSaved:true,
+    prefilterEnabled:false,prefilterSaved:false,prefilterHz:2,prefilterQ:Math.fround(Math.SQRT1_2),prefilterUnsupported:false,
+    prefilterFrame(seq){return frame(0x66,seq,le(28,v=>{v.setUint8(0,1);v.setUint8(1,this.prefilterEnabled?1:0);v.setUint8(2,this.prefilterSaved?1:0);v.setFloat32(4,this.prefilterHz,true);v.setFloat32(8,this.prefilterQ,true);v.setFloat32(12,this.prefilterHz,true);v.setFloat32(16,this.prefilterQ,true);}));},
     scaleSaved:[1,1,1],scaleActive:[1,1,1],scaleUnsupported:false,scaleSkips:0,scaleClipped:0,
     scaleFrame(seq){return frame(0x5f,seq,le(36,v=>{v.setUint8(0,1);v.setUint8(1,Number(this.scaleActive.some((x,i)=>x!==this.scaleSaved[i])));[...this.scaleActive,...this.scaleSaved].forEach((x,i)=>v.setFloat32(4+4*i,x,true));v.setUint32(28,this.scaleSkips,true);v.setUint32(32,this.scaleClipped,true);}));},
+    eskfSaved:null,eskfCustom:false,eskfUnsupported:false,
+    eskfDefaults(){return (globalThis.GyroEskfTuning?.DEFAULTS||[12,1,3,Math.fround(.1091),.4,.4,1,.1,.2,.087,.175,.05,8,800,500,240]).slice();},
+    eskfFrames(seq) {
+      const defaults=this.eskfDefaults(),saved=this.eskfCustom&&this.eskfSaved?this.eskfSaved:defaults,active=saved;
+      const flags=this.eskfCustom?1:0;
+      const body=(values,v)=>{values.forEach((x,i)=>i<12?v.setFloat32(4+i*4,x,true):v.setUint16(52+(i-12)*2,x,true));};
+      return Uint8Array.from([saved,defaults,active].flatMap((values,page)=>[...frame(0x6a,seq,le(60,v=>{
+        [1,page,flags,0].forEach((x,i)=>v.setUint8(i,x));body(values,v);
+      }))]));
+    },
     tuningDefaults:[2.5,4,.5,.035,.1,2,100,.5,1,.6,.15,.05,.1,10].map(Math.fround),
     tuningSaved:null,tuningActive:null,tuningCustom:false,tuningActiveCustom:false,tuningUnsupported:false,
     tuningFrames(seq) {
@@ -29,7 +41,11 @@
     algorithm:0,savedAlgorithm:0,algorithmUnsupported:false,
     algorithmFrame(seq){return frame(0x52,seq,Uint8Array.of(1,this.algorithm,this.savedAlgorithm,Number(this.algorithm!==this.savedAlgorithm)));},
     wsEnabled: true, wsSaved: true,
+    restIndicatorEnabled: true, restIndicatorSaved: true,
+    magGateEnabled: true, magGateSaved: true,magGateUnsupported: false,
     wsFrame(seq) {return frame(0x46,seq,Uint8Array.of(1,this.wsEnabled?1:0,this.wsSaved?1:0,0));},
+    restIndicatorFrame(seq) {return frame(0x6d,seq,Uint8Array.of(1,this.restIndicatorEnabled?1:0,this.restIndicatorSaved?1:0,0));},
+    magGateFrame(seq) {return frame(0x70,seq,Uint8Array.of(1,this.magGateEnabled?1:0,this.magGateSaved?1:0,0));},
     extended: false, source: 1, capabilities: 7, activeMode: 1, savedMode: 1, activeFast: 0, savedFast: 0, failSave: false,
     configVersion: 1, activeInitMs: 2000, savedInitMs: 2000,
     activeRangeDps:1000, savedRangeDps:1000, savedOutputHz:1000, activeAccRangeG:4, savedAccRangeG:4,
@@ -53,7 +69,7 @@
       if (this.configVersion >= 3) { v.setUint16(22,this.activeRangeDps,true); v.setUint16(24,this.savedRangeDps,true); v.setUint16(26,this.savedOutputHz,true); }
       if (this.configVersion >= 5) { v.setUint8(28,this.activeAccRangeG); v.setUint8(29,this.savedAccRangeG); }
     })); },
-    reboot() { if(this.configVersion>=5)this.activeAccRangeG=this.savedAccRangeG; this.scaleActive=this.scaleSaved.slice(); if(this.tuningSaved)this.tuningActive=this.tuningSaved.slice(); this.tuningActiveCustom=this.tuningCustom; this.restBiasEnabled=this.restBiasSaved; this.algorithm=this.savedAlgorithm; this.magRejectionEnabled=this.magRejectionSaved; this.wsEnabled=this.wsSaved; this.activeMode = this.savedMode; this.activeFast = this.savedFast; this.activeInitMs = this.savedInitMs; if(this.configVersion>=3) {this.activeRangeDps=this.savedRangeDps;this.outHz=this.savedOutputHz;} this.outputs = this.savedOutputs.map((o) => ({ ...o })); this.can = { ...this.savedCan }; this.dirty = 0; this.settings = 0; },
+    reboot() { if(this.configVersion>=5)this.activeAccRangeG=this.savedAccRangeG; this.scaleActive=this.scaleSaved.slice(); if(this.tuningSaved)this.tuningActive=this.tuningSaved.slice(); this.tuningActiveCustom=this.tuningCustom; this.restBiasEnabled=this.restBiasSaved; this.algorithm=this.savedAlgorithm; this.magRejectionEnabled=this.magRejectionSaved; this.wsEnabled=this.wsSaved; this.restIndicatorEnabled=this.restIndicatorSaved; this.magGateEnabled=this.magGateSaved; this.activeMode = this.savedMode; this.activeFast = this.savedFast; this.activeInitMs = this.savedInitMs; if(this.configVersion>=3) {this.activeRangeDps=this.savedRangeDps;this.outHz=this.savedOutputHz;} this.outputs = this.savedOutputs.map((o) => ({ ...o })); this.can = { ...this.savedCan }; this.dirty = 0; this.settings = 0; },
     ack(cmd, status, detail) { return frame(0x90, this.seq++, le(4, (v) => { v.setUint8(0, cmd); v.setUint8(1, status); v.setUint16(2, detail, true); })); },
     telemetry() {
       const p = this.pose;
@@ -125,6 +141,13 @@
     sysinfoFrame(seq) { return frame(0x05, seq, le(16, (v) => { v.setUint32(0, this.fusionHz, true); v.setUint32(4, this.outHz, true); v.setUint16(8, this.fusionHz / this.outHz, true); v.setUint16(10, i16(this.pose.temp * 100), true); v.setUint8(12, this.extended && this.outputs[this.source].format !== 2 ? 255 : this.streamMode); v.setUint8(13, 1); })); },
     seqAck(cmd, seq, status, detail) { return frame(0x90, seq, le(4, (v) => { v.setUint8(0, cmd); v.setUint8(1, status); v.setUint16(2, detail, true); })); },
     handle(id, seq, pl) {
+      if(id===0x74){
+        this.commands.push({id,payload:Array.from(pl)});
+        if(this.runtimeUnsupported)return this.seqAck(id,seq,1,0);
+        if(pl.length)return this.seqAck(id,seq,2,0);
+        const ms=Math.floor(performance.now()),n=Math.floor(ms*8);
+        return frame(0x75,seq,le(60,v=>[1,150000000,ms,n,0,0,n,n,Math.floor(n/4),Math.floor(n/16),Math.floor(n/8),Math.floor(n/8),this.runtimeMaxAgeCycles??499686,8,0].forEach((x,i)=>v.setUint32(i*4,x,true))));
+      }
       this.commands.push({ id, payload: Array.from(pl) });
       const S = 0, BAD = 2, FAIL = 3;
       switch (id) {
@@ -175,6 +198,28 @@
           else this.wsSaved=this.wsEnabled=!!pl[0];
           return Uint8Array.from([...this.seqAck(id,seq,status,this.wsEnabled?1:0),...this.wsFrame(seq)]);
         }
+        case 0x6e:
+          return this.magGateUnsupported ? this.seqAck(id,seq,1,0)
+            : pl.length ? this.seqAck(id,seq,BAD,0) : this.magGateFrame(seq);
+        case 0x6f: {
+          if(this.magGateUnsupported)return this.seqAck(id,seq,1,0);
+          let status=S;
+          if(pl.length!==1 || pl[0]>1)status=BAD;
+          else if(this.failSave || this.acc.status===1)status=FAIL;
+          else this.magGateSaved=this.magGateEnabled=!!pl[0];
+          return Uint8Array.from([...this.seqAck(id,seq,status,this.magGateEnabled?1:0),...this.magGateFrame(seq)]);
+        }
+        case 0x6b:
+          return this.restIndicatorUnsupported ? this.seqAck(id,seq,1,0)
+            : pl.length ? this.seqAck(id,seq,BAD,0) : this.restIndicatorFrame(seq);
+        case 0x6c: {
+          if(this.restIndicatorUnsupported)return this.seqAck(id,seq,1,0);
+          let status=S;
+          if(pl.length!==1 || pl[0]>1)status=BAD;
+          else if(this.failSave || this.acc.status===1)status=FAIL;
+          else this.restIndicatorSaved=this.restIndicatorEnabled=!!pl[0];
+          return Uint8Array.from([...this.seqAck(id,seq,status,this.restIndicatorEnabled?1:0),...this.restIndicatorFrame(seq)]);
+        }
         case 0x42: {
           if (pl.length) return this.seqAck(id, seq, BAD, 0);
           if (this.magUnsupported) return this.seqAck(id, seq, 1, 0);
@@ -193,7 +238,6 @@
           if (cfg.transport === 'usb') reenumerate(cfg.usbBoot, false);
           return this.dropResetAck ? null : this.seqAck(id, seq, S, 0);
         }
-        case 0x12: return this.ack(id, FAIL, 1);
         case 0x13: if (pl.length !== 1 || pl[0] > 4) return this.ack(id, BAD, this.streamMode); this.streamMode = pl[0]; if (this.extended) this.outputs.forEach((o) => { o.format = 2; o.legacyMode = pl[0]; }); return this.ack(id, S, this.streamMode);
         case 0x1d: { const hz = pl[0] | (pl[1] << 8); if (pl.length !== 2 || !hz || hz > this.fusionHz || this.fusionHz % hz) return this.ack(id, BAD, this.outHz); if(this.configVersion>=3 && this.failSave) return this.ack(id,FAIL,this.outHz); this.outHz = hz; if(this.configVersion>=3) {this.savedOutputHz=hz;return Uint8Array.from([...this.ack(id,S,hz),...this.config()]);} return this.ack(id, S, hz); }
         case 0x14: {
@@ -207,6 +251,16 @@
           const r = this.sysinfoFrame(seq);
           if (this.sysinfoDelayMs) r.delayMs = this.sysinfoDelayMs;
           return r;
+        }
+        case 0x64: return this.prefilterUnsupported?this.seqAck(id,seq,1,0):pl.length?this.seqAck(id,seq,BAD,0):this.prefilterFrame(seq);
+        case 0x65: {
+          if(this.prefilterUnsupported)return this.seqAck(id,seq,1,0);
+          if(pl.length!==12||pl[0]!==1||pl[1]>1||pl[2]||pl[3])return this.seqAck(id,seq,BAD,0);
+          const view=new DataView(pl.buffer,pl.byteOffset,pl.byteLength),hz=view.getFloat32(4,true),q=view.getFloat32(8,true);
+          if(!(hz>=.2&&hz<=200&&q>=.2&&q<=5))return this.seqAck(id,seq,BAD,0);
+          if(this.failSave||this.acc.status===1||this.insActive)return this.seqAck(id,seq,FAIL,0);
+          this.prefilterEnabled=this.prefilterSaved=!!pl[1];this.prefilterHz=hz;this.prefilterQ=q;
+          return Uint8Array.from([...this.seqAck(id,seq,S,0),...this.prefilterFrame(seq)]);
         }
         case 0x55: return this.restBiasUnsupported?this.seqAck(id,seq,1,0):pl.length?this.seqAck(id,seq,BAD,0):frame(0x57,seq,Uint8Array.of(1,+this.restBiasEnabled,+this.restBiasSaved,0));
         case 0x56: {
@@ -225,6 +279,24 @@
           if(id===0x5d){if(pl.length!==16||pl[0]!==1||pl[1]||pl[2]||pl[3])return this.seqAck(id,seq,BAD,0);const v=new DataView(pl.buffer,pl.byteOffset,pl.byteLength);values=[4,8,12].map(o=>v.getFloat32(o,true));if(values.some(x=>!Number.isFinite(x)||x<Math.fround(.95)||x>Math.fround(1.05)))return this.seqAck(id,seq,BAD,0);}else if(pl.length)return this.seqAck(id,seq,BAD,0);
           if(this.failSave||this.acc.status===1||this.insActive)return this.seqAck(id,seq,FAIL,0);
           this.scaleSaved=values;return Uint8Array.from([...this.seqAck(id,seq,S,0),...this.scaleFrame(seq)]);
+        }
+        case 0x67:
+          return this.eskfUnsupported?this.seqAck(id,seq,1,0):pl.length?this.seqAck(id,seq,BAD,0):this.eskfFrames(seq);
+        case 0x68:
+        case 0x69: {
+          if(this.eskfUnsupported)return this.seqAck(id,seq,1,0);
+          const api=globalThis.GyroEskfTuning;
+          let values=this.eskfDefaults();
+          if(id===0x68) {
+            if(pl.length!==60||pl[0]!==1||pl[1]||pl[2]||pl[3]||!api)return this.seqAck(id,seq,BAD,0);
+            const decoded=api.decode(pl);
+            if(decoded.type!=='eskfTuning')return this.seqAck(id,seq,BAD,0);
+            values=decoded.values;
+          } else if(pl.length)return this.seqAck(id,seq,BAD,0);
+          if(this.failSave||this.acc.status===1||this.insActive)return this.seqAck(id,seq,FAIL,0);
+          const same=api?api.equal(values,api.DEFAULTS):false;
+          this.eskfCustom=id===0x68&&!same;this.eskfSaved=this.eskfCustom?values.slice():null;
+          return Uint8Array.from([...this.seqAck(id,seq,S,0),...this.eskfFrames(seq)]);
         }
         case 0x58:
           return this.tuningUnsupported?this.seqAck(id,seq,1,0):pl.length?this.seqAck(id,seq,BAD,0):this.tuningFrames(seq);
@@ -254,7 +326,6 @@
         case 0x18: this.settings = 0; return this.ack(id, S, this.dirty);
         case 0x19: if (!this.settings) return this.ack(id, FAIL, pl[0]); this.dirty = 1; this.savedMode = pl[0]; return this.ack(id, S, pl[0]);
         case 0x1a: if (!this.settings) return this.ack(id, FAIL, this.canId); this.canId = pl[0] | (pl[1] << 8); this.dirty = 1; return this.ack(id, S, this.canId);
-        case 0x1b: return this.ack(id, FAIL, 0x0601);
         case 0x1c: {
           if (!this.accEnabled) return this.ack(id, FAIL, 0x0600);
           if (!this.settings) return this.ack(id, FAIL, 0x0602);
@@ -471,10 +542,13 @@
   const m = window.__mock; if (!m || m.filter) return;
   const dev = m.dev, frame = m.frame;
   const le = (n, fn) => { const b = new Uint8Array(n); fn(new DataView(b.buffer)); return b; };
-  const TAU = [[2, 0.15], [4, 0.5], [6, 1.5], [4, 0.5]]; // tau_mag / rest_tau：[2,4,6,4] / [.15,.5,1.5,.5]
+  const TAU = [[2, 0.15], [4, 0.5], [6, 2.5], [4, 0.5]]; // tau_mag / rest_tau：[2,4,6,4] / [.15,.5,2.5,.5]
   const f = {
     supported: true,  // false → 旧固件：0x26/0x27/0x28 回 ACK 0x01
     active: 0, saved: 0, nineAxis: false, magReady: false,
+    magInterference: false, magDegraded: false, magCalSuspect: false,
+    /* 0x71/0x72/0x73：标定基准与当前场强 */
+    magExpected: 41.5, magCurrent: 41.5, magHealthUnsupported: false,
     profileCount: 4,  // 0x0B capabilities：4 新固件（含零角速保持）；3 → 旧固件，0x27 profile=3 回 ACK 0x02
     forceStatus: null, // 测试：强制 0x27 回指定 ACK 状态（仍附 0x0B）
     noApply: false,    // 测试：ACK 成功但设备未真正切换（回读核对应失败）
@@ -487,16 +561,43 @@
     v.setFloat32(8, TAU[f.active][0], true); v.setFloat32(12, TAU[f.active][1], true);
   }));
   const diag = (seq) => frame(0x0c, seq, le(60, (v) => {
-    [1, f.active, 1, f.nineAxis && f.magReady ? 1 : 0].forEach((x, i) => v.setUint8(i, x));
+    const flags = ((f.nineAxis && f.magReady) ? 1 : 0) | (f.magInterference ? 2 : 0) | (f.magDegraded ? 4 : 0) | (f.magCalSuspect ? 8 : 0);
+    [1, f.active, 1, flags].forEach((x, i) => v.setUint8(i, x));
     v.setUint32(4, 123456, true);
     [0.01, -0.02, 0.03, 0.001, -0.002, 0.003, 0.05, 0.04, 0.03, 1.5, -2.5, 30].forEach((x, i) => v.setFloat32(8 + 4 * i, x, true));
     v.setFloat32(56, 0.004, true);
   }));
+  /* 0x71/0x72/0x73：标定基准。和拒磁诊断一起归在 filter 模块，因为它们共享
+   * 同一张卡片、同一份状态。 */
+  const magHealth = (seq) => frame(0x73, seq, le(16, (v) => {
+    v.setUint8(0, 1);
+    v.setUint8(1, (f.magExpected > 0 ? 1 : 0) | (f.magCalSuspect ? 2 : 0) | (f.magCurrent < 20 ? 4 : 0));
+    v.setFloat32(2, f.magExpected, true);
+    v.setFloat32(6, f.magCurrent, true);
+  }));
   const cat = (...parts) => { const out = new Uint8Array(parts.reduce((n, p) => n + p.length, 0)); let o = 0; for (const p of parts) { out.set(p, o); o += p.length; } return out; };
   const orig = dev.handle.bind(dev);
   dev.handle = function (id, seq, pl) {
-    if (id !== 0x26 && id !== 0x27 && id !== 0x28) return orig(id, seq, pl);
+    if (id !== 0x26 && id !== 0x27 && id !== 0x28 && id !== 0x71 && id !== 0x72) return orig(id, seq, pl);
     this.commands.push({ id, payload: Array.from(pl) }); f.log.push({ id, seq, payload: Array.from(pl), settings: this.settings });
+    if (id === 0x71) {
+      if (f.magHealthUnsupported) return ack(id, seq, 1, 0);
+      return pl.length ? ack(id, seq, 2, 0) : magHealth(seq);
+    }
+    if (id === 0x72) {
+      if (f.magHealthUnsupported) return ack(id, seq, 1, 0);
+      let status = 0;
+      if (pl.length !== 5 || pl[0] > 2) status = 2;
+      else if (pl[0] === 2) {
+        if (!(f.magCurrent >= 20 && f.magCurrent <= 80)) status = 2; else f.magExpected = f.magCurrent;
+      } else if (pl[0] === 0) f.magExpected = 0;
+      else {
+        const v = new DataView(pl.buffer, pl.byteOffset, pl.length), ut = v.getFloat32(1, true);
+        if (!(ut >= 20 && ut <= 80)) status = 2; else f.magExpected = ut;
+      }
+      if (status === 0) f.magCalSuspect = false;
+      return cat(ack(id, seq, status, 0), magHealth(seq));
+    }
     if (!f.supported) return ack(id, seq, 1, 0);
     if (id === 0x26) return pl.length ? ack(id, seq, 2, f.active) : config(seq);
     if (id === 0x28) return pl.length ? ack(id, seq, 2, 0) : diag(seq);

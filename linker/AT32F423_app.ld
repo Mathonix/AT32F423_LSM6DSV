@@ -111,6 +111,10 @@ SECTIONS
     _sdata = .;        /* create a global symbol at data start */
     *(.data)           /* .data sections */
     *(.data*)          /* .data* sections */
+    . = ALIGN(4);
+    __eskf_hot_start = .;
+    *(.ramfunc.eskf*)   /* startup's ordinary .data copy relocates hot code */
+    __eskf_hot_end = .;
 
     . = ALIGN(4);
     _edata = .;        /* define a global symbol at data end */

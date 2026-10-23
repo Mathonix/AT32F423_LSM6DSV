@@ -8,6 +8,7 @@
 #include "fusion_algorithm.h"
 #include "ekf.hpp"
 #include "eskf8k.hpp"
+#include "gyro_prefilter.h"
 
 #include <cmath>
 #include <cstring>
@@ -238,18 +239,20 @@ extern "C" void vqf_prime_rest(const float acc_ms2[3], const float gyr_bias[3])
 
 extern "C" void vqf_update_gyr(const float gyr[3])
 {
-    const vqf_real_t v[3] = {gyr[0] - g_calibrated_bias[0],
-                           gyr[1] - g_calibrated_bias[1],
-                           gyr[2] - g_calibrated_bias[2]};
-    if(g_algorithm==FUSION_ALGORITHM_EKF) {
-        const float v[3]={gyr[0]-g_calibrated_bias[0],gyr[1]-g_calibrated_bias[1],gyr[2]-g_calibrated_bias[2]};
-        ahrs_ekf::gyro(v);return;
-    }
-    if(g_algorithm==FUSION_ALGORITHM_ESKF) {
-        const float v[3]={gyr[0]-g_calibrated_bias[0],gyr[1]-g_calibrated_bias[1],gyr[2]-g_calibrated_bias[2]};
-        ahrs_eskf8k::gyro(v,g_gyr_dt);return;
-    }
-    filter().updateGyr(v);
+    float v[3] = {gyr[0] - g_calibrated_bias[0],
+                  gyr[1] - g_calibrated_bias[1],
+                  gyr[2] - g_calibrated_bias[2]};
+    float dt = g_gyr_dt;
+#if APP_IMU8K_ENGINE
+    /* VQF and EKF are fed every fourth capture sample, so their filter
+     * clock is 2 kHz. ESKF steps on every 8 kHz sample. */
+    if(g_algorithm != FUSION_ALGORITHM_ESKF) dt *= 4.0f;
+#endif
+    gyro_prefilter_apply(v, dt);
+    if(g_algorithm==FUSION_ALGORITHM_EKF) {ahrs_ekf::gyro(v);return;}
+    if(g_algorithm==FUSION_ALGORITHM_ESKF) {ahrs_eskf8k::gyro(v,g_gyr_dt);return;}
+    const vqf_real_t sample[3] = {v[0], v[1], v[2]};
+    filter().updateGyr(sample);
 }
 
 extern "C" void vqf_update_acc(const float acc[3])
@@ -289,6 +292,11 @@ extern "C" void vqf_set_mag_rejection_enabled(int enabled)
     if(g_vqf) filter().setMagDistRejectionEnabled(g_mag_rejection_enabled);
 }
 extern "C" int vqf_get_mag_rejection_enabled(void) { return g_mag_rejection_enabled ? 1 : 0; }
+/* Rejection strategy is an ESKF-only choice: VQF and the standalone EKF keep
+ * their own disturbance logic. The flag is still reported back so the host
+ * can show what is stored. */
+extern "C" void vqf_set_mag_vqf_gate(int enabled) { ahrs_eskf8k::set_mag_vqf_gate(enabled != 0); }
+extern "C" int vqf_get_mag_vqf_gate(void) { return ahrs_eskf8k::mag_vqf_gate_enabled() ? 1 : 0; }
 /* Runtime six/nine-axis switch. The magnetometer path is gated here so every
  * engine stops observing the field immediately, without a reboot. */
 extern "C" void vqf_set_magnetic_fusion(int enabled)
@@ -435,6 +443,34 @@ extern "C" int vqf_get_mag_dist_detected(void)
     if(g_algorithm==FUSION_ALGORITHM_EKF) return ahrs_ekf::mag_disturbed()?1:0;
     if(g_algorithm==FUSION_ALGORITHM_ESKF) return ahrs_eskf8k::mag_disturbed()?1:0;
     return g_vqf && filter().getMagDistDetected() ? 1 : 0;
+}
+/* Latch-only flag: the engine is accepting the field anyway after a sustained
+ * hard excursion. Kept separate so the host can tell "rejecting" from
+ * "given up rejecting". */
+extern "C" int vqf_get_mag_degraded(void)
+{
+    if(g_algorithm==FUSION_ALGORITHM_ESKF) return ahrs_eskf8k::mag_degraded_active();
+    return 0;
+}
+/* Calibration health is an ESKF diagnostic: VQF and the standalone EKF carry
+ * their own field bookkeeping and have no stored fiducial to compare against. */
+extern "C" int vqf_get_mag_cal_suspect(void)
+{
+    if(g_algorithm==FUSION_ALGORITHM_ESKF) return ahrs_eskf8k::mag_calibration_suspect();
+    return 0;
+}
+extern "C" float vqf_get_mag_field_ut(void)
+{
+    if(g_algorithm==FUSION_ALGORITHM_ESKF) return ahrs_eskf8k::mag_field_ut_current();
+    return 0.f;
+}
+extern "C" float vqf_get_mag_expected_ut(void)
+{
+    return ahrs_eskf8k::mag_expected_ut_value();
+}
+extern "C" void vqf_set_mag_expected_ut(float ut)
+{
+    ahrs_eskf8k::set_mag_expected_ut(ut);
 }
 
 

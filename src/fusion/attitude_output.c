@@ -1,4 +1,5 @@
 #include "attitude_output.h"
+#include "eskf8k_config.h"
 #include <math.h>
 #include <string.h>
 #define RAD 0.017453292519943295f
@@ -51,6 +52,7 @@ int attitude_output_update(attitude_output_t *s, const float q6[4],
    * residual-rate guard keeps detectable slow movement responsive. */
   fusion_profile_t p=fusion_profile_get(mode);
   uint8_t moving = !rest || rate > .15f;
+#if !APP_OUTPUT_NO_REST_HOLD
   if(moving) s->rest_hold_s = 0;
   else if(s->rest_hold_s < p.hold_s) {
     /* After a stop, keep the last output until this gear's hold elapses.
@@ -59,6 +61,9 @@ int attitude_output_update(attitude_output_t *s, const float q6[4],
     memcpy(s->last_q6, six, sizeof(six));
     return 1;
   }
+#else
+  s->rest_hold_s = 0;
+#endif
   if(moving) {
     float inverse[4]={s->last_q6[0],-s->last_q6[1],-s->last_q6[2],-s->last_q6[3]}, delta[4];
     multiply(inverse,six,delta); multiply(s->q,delta,s->q);
@@ -67,7 +72,8 @@ int attitude_output_update(attitude_output_t *s, const float q6[4],
   float alpha=1-expf(-dt/(moving?p.motion_tau_s:p.rest_tau_s)), dot=0;
   for(unsigned i=0;i<4;i++) dot += s->q[i]*target[i];
   /* Shortest-arc normalized interpolation avoids Euler wrap/singularity
-   * and quaternion-sign discontinuities. Rest blending starts after hold_s. */
+   * and quaternion-sign discontinuities. With APP_OUTPUT_NO_REST_HOLD the
+   * blend starts on the first still sample. */
   for(unsigned i=0;i<4;i++) s->q[i] += alpha*((dot<0?-target[i]:target[i])-s->q[i]);
   normalize(s->q); memcpy(s->last_q6,six,sizeof(six));
   return 1;

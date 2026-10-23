@@ -223,8 +223,24 @@
         const diff = !!cfg && fr(cfg.current[p.key]) !== fr(cfg.defaults[p.key]); if (c && c.dataset.diff !== String(diff)) c.dataset.diff = String(diff);
       }
       set($('vqfBias'), 'textContent', cfg ? `${cfg.bias.map((b) => (b >= 0 ? '+' : '') + b.toFixed(3)).join(' / ')} °/s` : '--');
-      set($('vqfBiasK'), 'textContent', cfg?.source === 1 ? '零偏（静置记录）' : '零偏（VQF 当前）');
-      set($('vqfBiasK'), 'title', cfg?.source === 1 ? 'Flash 里那次静置结果；实时零偏看运动零偏 0x09 / 诊断 0x0C' : '此刻 VQF 正在用的零偏');
+      const algo = globalThis.GyroFusionAlgorithm?.control?.state?.data?.active;
+      const recorded = cfg?.source === 1;
+      if (algo === 2) {
+        set($('vqfTitle'), 'textContent', '静置零偏');
+        set($('vqfLead'), 'textContent', '平放静止：先稳 5 秒，再采集 60 秒。通过后写入的陀螺零偏会从 ESKF 输入里减去。两个不确定度和静止门限只写进 VQF / EKF，不改变 ESKF。');
+        set($('vqfBiasK'), 'textContent', recorded ? '零偏（静置记录）' : '零偏（写入 ESKF 输入）');
+        set($('vqfBiasK'), 'title', '静置写入的陀螺零偏会从 ESKF 输入里减去。实时残差看高级设置里的零偏矢量。');
+      } else if (algo === 1) {
+        set($('vqfTitle'), 'textContent', '静置初始化 EKF');
+        set($('vqfLead'), 'textContent', '平放静止：先稳 5 秒，再采集 60 秒。通过后陀螺零偏、两个不确定度和静止门限都会写进 EKF。');
+        set($('vqfBiasK'), 'textContent', recorded ? '零偏（静置记录）' : '零偏（EKF 当前）');
+        set($('vqfBiasK'), 'title', recorded ? 'Flash 里那次静置结果' : '此刻 EKF 正在用的零偏');
+      } else {
+        set($('vqfTitle'), 'textContent', '静置初始化 VQF');
+        set($('vqfLead'), 'textContent', '平放静止：先稳 5 秒，再采集 60 秒；通过后写 Flash 并立即生效。默认值以设备回读为准。');
+        set($('vqfBiasK'), 'textContent', recorded ? '零偏（静置记录）' : '零偏（VQF 当前）');
+        set($('vqfBiasK'), 'title', recorded ? 'Flash 里那次静置结果；实时零偏看运动零偏 0x09 / 诊断 0x0C' : '此刻 VQF 正在用的零偏');
+      }
       set($('vqfTempRow'), 'hidden', cfg?.source !== 1);
       set($('vqfTemp'), 'textContent', cfg?.source === 1 ? `${n(cfg.calTempC, 1)} °C` : '--');
       // 进度：只用设备回报的 remaining_ms；采集阶段以首帧 remaining 为总长

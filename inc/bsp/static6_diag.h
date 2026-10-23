@@ -8,7 +8,7 @@ extern "C" {
 #endif
 enum { S6_PRED6,S6_PRED9,S6_ACC_CALL,S6_BROAD_REJECT,S6_REST,
        S6_DECIM_WAIT,S6_PLAN,S6_NORM_REJECT,S6_ATTEMPT6,S6_OK6,
-       S6_NUMERIC_REJECT6,S6_ANGLE_REJECT6,S6_OK9,S6_REJECT9,S6_COUNTS };
+       S6_NUMERIC_REJECT6,S6_ANGLE_REJECT6,S6_OK9,S6_REJECT9,S6_RATE_REJECT,S6_COUNTS };
 /* Exact integer RAW moments; float Welford corrected-rate moments.
  * A block is 8000 consumed frames, not an assumed exact wall-clock second.
  * Counts are cumulative u32. Published block is immutable under seq lock. */

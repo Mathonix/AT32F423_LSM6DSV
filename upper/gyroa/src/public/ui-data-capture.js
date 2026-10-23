@@ -24,7 +24,7 @@
     a.href=url;a.download=`imu_${new Date(s.firstWall).toISOString().replace(/[:.]/g,'-')}_${s.hz}Hz.csv`;a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);
   };
   // Keep configuration stable across all views while retaining read-only queries.
-  const mutating='#gyroScalePrepare,#gyroScaleApply,#gyroScaleRestore,#insStart,#driftStart,#vqfTuningApply,#vqfTuningRestore,#magCalStart,#magCalVerify,#magCalSave,#magCalRestore,#ws2812Enable,#magRejectionEnable,#restBiasEnable,#algorithmApply,#statusRestartBtn,#testRestartBtn,#applyBtn,#outputApplyAll,#outputApply0,#outputApply1,#rateApplyBtn,#canApply,#canIdBtn,#filterApply,#zaruSave,#zaruRestore,#vqfStart,#vqfRestore,#acc6Btn,#gyroCalBtn,#zeroBtn,#resetBtn,#streamApplyBtn,#firmwareStartBtn,#qsFusion button,#qsFilter button,#enterBtn,#exitBtn';
+  const mutating='#gyroScalePrepare,#gyroScaleApply,#gyroScaleRestore,#insStart,#driftStart,#vqfTuningApply,#vqfTuningRestore,#magCalStart,#magCalVerify,#magCalSave,#magCalRestore,#ws2812Enable,#magRejectionEnable,#restBiasEnable,#gyroPrefilterEnable,#gyroPrefilterApply,#algorithmApply,#statusRestartBtn,#testRestartBtn,#applyBtn,#outputApplyAll,#outputApply0,#outputApply1,#rateApplyBtn,#canApply,#canIdBtn,#filterApply,#zaruSave,#zaruRestore,#vqfStart,#vqfRestore,#acc6Btn,#streamApplyBtn,#firmwareStartBtn,#qsFusion button,#qsFilter button,#enterBtn,#exitBtn';
   document.addEventListener('click',e=>{if(api.busy()&&e.target.closest?.(mutating)){e.preventDefault();e.stopImmediatePropagation();GyroUI.toast('请先停止数据采集，再修改设备','warn');}},true);
   window.addEventListener('beforeunload',e=>{if(session.state().active){e.preventDefault();e.returnValue='';}});
   document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='visible')void awake();});

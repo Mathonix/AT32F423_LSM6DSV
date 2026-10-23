@@ -12,7 +12,7 @@
   $('magCalRestore').onclick=()=>{if(!armed){armed=true;render();return;}armed=false;control.restore();};
   $('magCalExport').onclick=()=>download('mag-calibration.json',{format:'AT32-mag-cal-v1',note:'原始IST坐标；安装映射沿用固件，不自动校准安装轴',saved:control.state.data,candidate:control.state.candidate,validationQuality:control.state.quality,fitDiagnostics:control.state.fitDiagnostics,samples:control.state.samples,validation:control.state.validation});
   // Keep conflicting device mutations out of an active acquisition/transaction.
-  const MUTATING='#applyBtn,#outputApplyAll,#rateApplyBtn,#canApply,#canIdBtn,#filterApply,#zaruSave,#zaruRestore,#vqfStart,#vqfRestore,#acc6Btn,#gyroCalBtn,#zeroBtn,#resetBtn,#streamApplyBtn,#firmwareStartBtn,#qsFusion button,#qsFilter button,#enterBtn,#exitBtn,#statusRestartBtn,#testRestartBtn,#insStart,#driftStart,#ws2812Enable,#magRejectionEnable';
+  const MUTATING='#applyBtn,#outputApplyAll,#rateApplyBtn,#canApply,#canIdBtn,#filterApply,#zaruSave,#zaruRestore,#vqfStart,#vqfRestore,#acc6Btn,#streamApplyBtn,#firmwareStartBtn,#qsFusion button,#qsFilter button,#enterBtn,#exitBtn,#statusRestartBtn,#testRestartBtn,#insStart,#driftStart,#ws2812Enable,#magRejectionEnable';
   document.addEventListener('click',e=>{if(control.busy() && e.target.closest?.(MUTATING)){e.preventDefault();e.stopImmediatePropagation();GyroUI?.toast('请先结束磁校准操作','warn');}},true);
   window.addEventListener('beforeunload',e=>{if(control.busy()){e.preventDefault();e.returnValue='';}});
   function render() {

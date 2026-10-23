@@ -7,6 +7,7 @@
 #include "fusion_algorithm.h"
 #include "vqf_tuning.h"
 #include "../calibration/gyro_scale.h"
+#include "../fusion/eskf_tuning.h"
 #include "../calibration/mag_calibration.h"
 typedef enum {
   FUSION_MODE_6AXIS = 0,
@@ -34,6 +35,17 @@ typedef struct {
   vqf_tuning_t vqf_tuning;
   gyro_scale_t gyro_scale;
   uint8_t acc_range_g;
+  uint8_t gyro_prefilter_enabled;
+  float gyro_prefilter_hz;
+  float gyro_prefilter_q;
+  uint8_t eskf_tuning_custom;
+  eskf_tuning_t eskf_tuning;
+  uint8_t rest_indicator_enabled;
+  uint8_t mag_vqf_gate_enabled;
+  /* Field magnitude the current calibration was fitted to, uT. Zero means
+   * unknown (older calibration or explicitly cleared): the health check is
+   * then inactive rather than guessing a value. */
+  float mag_expected_ut;
 } device_settings_t;
 void device_settings_defaults(device_settings_t *settings);
 int device_settings_load(device_settings_t *settings);

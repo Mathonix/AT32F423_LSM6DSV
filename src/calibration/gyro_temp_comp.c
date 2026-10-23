@@ -16,7 +16,7 @@ static temp_comp_info_t info;
 static uint32_t last_update_ms, last_write_ms;
 static uint8_t initialized, update_seen, segment_valid;
 static unsigned segment_lo, segment_hi;
-static float boot_temp, boot_bias[3], delta_bias[3];
+static float boot_temp, boot_bias[3], delta_bias[3], boot_selected_c;
 static uint32_t slot_address(unsigned slot)
 { return slot ? APP_GYR_BIAS_FLASH_SLOT1_ADDR : APP_GYR_BIAS_FLASH_SLOT0_ADDR; }
 uint32_t gyro_temp_comp_crc(const void *data, uint32_t size)
@@ -148,19 +148,42 @@ void gyro_temp_comp_update(uint32_t now_ms,float filtered_temp_c)
 float gyro_temp_comp_delta(unsigned axis) { return axis<3U?delta_bias[axis]:0.f; }
 int gyro_temp_comp_active(void) { return segment_valid; }
 float gyro_temp_comp_boot_temperature(void) { return boot_temp; }
+float gyro_temp_comp_boot_selected_c(void) { return boot_selected_c; }
 int gyro_temp_comp_boot_bias(float t,float out[3])
 {
   unsigned lo,hi;
+  boot_selected_c=t;
 #if APP_GYR_TEMP_COMP_ENABLE
   if(find_segment(&active_model,t,&lo,&hi)) { interpolate(&active_model,lo,hi,t,out); return 1; }
   for(unsigned i=0;i<TEMP_BIN_COUNT;++i)
     if(active_model.bins[i].flags==TEMP_BIN_CONFIRMED&&fabsf(t-active_model.bins[i].temperature_c)<=APP_GYR_BIAS_TEMP_WINDOW_C)
       { memcpy(out,active_model.bins[i].bias_dps,12U); return 1; }
+  /* Capture missed the segment and the 1 C window. A confirmed bin still
+   * counts as history. The single raw fallback wins only when it is closer.
+   * A non-finite query must not latch an arbitrary bin. */
+  if(isfinite(t)) {
+    unsigned best=0U;
+    int found=0;
+    float best_d=INFINITY;
+    for(unsigned i=0;i<TEMP_BIN_COUNT;++i) {
+      if(active_model.bins[i].flags!=TEMP_BIN_CONFIRMED) continue;
+      float d=fabsf(t-active_model.bins[i].temperature_c);
+      if(!found||d<=best_d) { found=1; best=i; best_d=d; }
+    }
+    int raw=(working_model.model_flags&TEMP_MODEL_FALLBACK_RAW)&&
+             valid_temperature(working_model.fallback_temp_c);
+    float raw_d=raw?fabsf(t-working_model.fallback_temp_c):INFINITY;
+    if(found&&(!raw||best_d<=raw_d)) {
+      memcpy(out,active_model.bins[best].bias_dps,12U);
+      boot_selected_c=active_model.bins[best].temperature_c;
+      return 3;
+    }
+  }
 #else
   (void)lo; (void)hi;
 #endif
   if(working_model.model_flags&TEMP_MODEL_FALLBACK_RAW)
-    { memcpy(out,working_model.fallback_bias_dps,12U); return 2; }
+    { memcpy(out,working_model.fallback_bias_dps,12U); boot_selected_c=working_model.fallback_temp_c; return 2; }
   return 0;
 }
 const temp_comp_record_v4_t *gyro_temp_comp_working(void) { return &working_model; }

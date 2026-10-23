@@ -5,10 +5,10 @@
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <meta name="color-scheme" content="dark light"><meta name="theme-color" content="#0B1017">
 <title>AT32 AHRS</title><script src="/theme.js?v=20261009theme3"></script>
-<link rel="stylesheet" href="/style.css?v=20261011vqftune1">
+<link rel="stylesheet" href="/style.css?v=20261023runtime1">
 <link rel="stylesheet" href="/layout.css?v=20261007ekf1">
 <link rel="stylesheet" href="/data-capture.css?v=20261014themefix1">
-<link rel="stylesheet" href="/theme.css?v=20261009theme3">
+<link rel="stylesheet" href="/theme.css?v=20261023ui1">
 </head>
 <body>
 <svg class="sprite" aria-hidden="true" xmlns="http://www.w3.org/2000/svg">
@@ -26,6 +26,7 @@
   <symbol id="i-file" viewBox="0 0 24 24"><path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/></symbol>
   <symbol id="i-alert" viewBox="0 0 24 24"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3"/><path d="M12 9v4"/><path d="M12 17h.01"/></symbol>
   <symbol id="i-chevron" viewBox="0 0 24 24"><path d="m9 18 6-6-6-6"/></symbol>
+  <symbol id="i-caret" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"/></symbol>
   <symbol id="i-sun" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 2v2"/><path d="M12 20v2"/><path d="m4.93 4.93 1.41 1.41"/><path d="m17.66 17.66 1.41 1.41"/><path d="M2 12h2"/><path d="M20 12h2"/><path d="m6.34 17.66-1.41 1.41"/><path d="m19.07 4.93-1.41 1.41"/></symbol>
   <symbol id="i-moon" viewBox="0 0 24 24"><path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z"/></symbol>
   <symbol id="i-zoom-in" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/><path d="M11 8v6"/><path d="M8 11h6"/></symbol>
@@ -52,7 +53,14 @@
         <span class="conn" id="connChip" data-state="off"><i class="dot"></i><span id="connStatus">未连接</span></span>
       </div>
       <div class="tb-right">
-        <button id="connectBtn" class="primary"><svg class="ic sm"><use href="#i-plug"/></svg><span class="lbl">连接设备</span></button>
+        <div class="connect-split">
+          <button id="connectBtn" class="primary" title="使用 Web Serial 连接"><svg class="ic sm"><use href="#i-plug"/></svg><span class="lbl">连接设备</span></button>
+          <button id="connectMenuBtn" type="button" class="primary connect-caret" aria-haspopup="menu" aria-expanded="false" aria-controls="connectMenu" title="选择连接方式" aria-label="选择连接方式"><svg class="ic sm" aria-hidden="true"><use href="#i-caret"/></svg></button>
+          <div id="connectMenu" class="connect-menu" role="menu" hidden>
+            <button type="button" role="menuitemradio" data-connect-kind="serial" aria-checked="true"><span>Web Serial</span><small>USB / UART 串口</small></button>
+            <button type="button" role="menuitemradio" data-connect-kind="webusb" aria-checked="false"><span>WebUSB</span><small>板卡 USB 直连</small></button>
+          </div>
+        </div>
         <button id="disconnectBtn" disabled hidden>断开</button>
         <button id="themeToggle" type="button" class="icon-btn theme-toggle" title="切换主题" aria-label="切换主题" aria-pressed="false"><svg class="ic i-sun" aria-hidden="true"><use href="#i-sun"/></svg><svg class="ic i-moon" aria-hidden="true"><use href="#i-moon"/></svg></button>
         <a class="icon-btn" href="#/settings" title="设置" aria-label="设置"><svg class="ic"><use href="#i-settings"/></svg></a>
@@ -277,7 +285,7 @@
           <div class="calib-side">
           <section class="card vqf-card" id="vqfPanel" data-state="idle" aria-labelledby="vqfTitle">
             <div class="card-h"><h2 id="vqfTitle">静置初始化 VQF</h2><span id="vqfSource" class="chip" title="0x0E source">--</span></div>
-            <p class="vqf-lead">平放静止：先稳 5 s，再采集 60 s；通过后写 Flash 并立即生效。默认值以设备回读为准。</p>
+            <p class="vqf-lead" id="vqfLead">平放静止：先稳 5 秒，再采集 60 秒；通过后写 Flash 并立即生效。默认值以设备回读为准。</p>
             <table class="vqf-tbl" aria-label="VQF 静置参数"><thead><tr><th></th><th>当前</th><th>默认</th></tr></thead><tbody id="vqfParams"></tbody></table>
             <div class="vqf-kv"><span id="vqfBiasK" class="k">零偏（VQF 当前）</span><b id="vqfBias" class="num">--</b></div>
             <div class="vqf-kv" id="vqfTempRow" hidden><span class="k">标定温度</span><b id="vqfTemp" class="num">--</b></div>
@@ -374,10 +382,11 @@
         </div>
       </section>
 
-      <!-- ============ 设置 ============ -->
+      <!-- ============ 调参 ============ -->
       <section class="view view-tuning" data-view="tuning" hidden>
         <header class="page-h"><h1>调参</h1><span id="vqfTuningState" class="chip">--</span></header>
-        <div class="card tuning-card">
+        <p id="tuningPending" class="tuning-note">连接设备后，按当前融合算法显示对应参数。</p>
+        <div class="card tuning-card" id="vqfTuningCard" hidden>
           <div class="card-h"><h2>VQF 参数</h2></div>
           <p class="tuning-note">保存后自动重启并重连，参数在重启后生效。自定义参数优先于滤波档位和静置初始化参数。</p>
           <div class="tuning-toolbar">
@@ -390,6 +399,76 @@
           <p id="vqfTuningMessage" class="tuning-message" role="status" aria-live="polite">请先连接设备</p>
           <div id="vqfTuningFields" class="tuning-grid"></div>
         </div>
+        <div class="card tuning-card" id="ekfTuningCard" hidden>
+          <div class="card-h"><h2>EKF 参数</h2></div>
+          <p class="tuning-note">EKF 不使用 VQF 的 14 项自定义参数。下面这些现有控制会写进 EKF。</p>
+          <div class="tune-list">
+            <div class="tune-block"><h3>姿态稳定性</h3><p>档位里的加速度时间、磁航向时间和静止门限会写进 EKF。输出平滑对 EKF 同样生效。</p></div>
+            <div class="tune-block"><h3>静置初始化</h3><p>校准页写入的陀螺零偏、两个不确定度和两个静止门限都会进 EKF。</p></div>
+            <div class="tune-block"><h3>开关</h3><p>本页下方的静置零偏估计、拒磁保护和陀螺前置低通对 EKF 生效。比例因子也在本页，重启后生效。</p></div>
+          </div>
+        </div>
+        <div class="card tuning-card" id="eskfTuningCard" hidden>
+          <div class="card-h"><h2>ESKF 参数</h2></div>
+          <p class="tuning-note">保存后立即生效，并写入板卡。恢复默认写回编译时的数值。静止窗口固定 122 点，回到静止固定为 0.6 倍门限。六轴零角速保持在设置页，锁定的是发出去的航向。当前固件如果没有这条命令，页面会说明需要升级，不会假装已经保存。</p>
+          <div class="tuning-toolbar">
+            <button id="eskfTuningApply" class="primary" disabled>保存并应用</button>
+            <button id="eskfTuningRestore" disabled>恢复默认参数</button>
+            <button id="eskfTuningRead" disabled>读取设备参数</button>
+            <button id="eskfTuningDiscard" disabled>撤销修改</button>
+            <span id="eskfTuningDirty" class="chip warn" hidden>未保存</span>
+          </div>
+          <p id="eskfTuningMessage" class="tuning-message" role="status" aria-live="polite">请先连接设备</p>
+          <div id="eskfTuningFields" class="tuning-grid"></div>
+          <section id="eskfRuntimePanel" class="tune-block" aria-label="ESKF 运行诊断">
+            <h3>采样与姿态运行诊断</h3>
+            <div class="tuning-toolbar"><button id="eskfRuntimeRead" disabled>读取运行状态</button><button id="eskfRuntimeExport" disabled>导出快照</button></div>
+            <p id="eskfRuntimeMessage" role="status" aria-live="polite">请先连接设备</p>
+            <dl class="eskf-runtime-grid">
+              <div><dt>已消费 / 完整预测</dt><dd id="eskfRuntimeCounts">--</dd></div>
+              <div><dt>消费 / 预测速率（估算）</dt><dd id="eskfRuntimeRates">--</dd></div>
+              <div><dt>加速度输入 / KF 尝试（估算）</dt><dd id="eskfRuntimeAccel">--</dd></div>
+              <div><dt>姿态到期 / 已生成</dt><dd id="eskfRuntimePose">--</dd></div>
+              <div><dt>环缓溢出 / SPI 错误（累计）</dt><dd id="eskfRuntimeErrors">--</dd></div>
+              <div><dt>启动以来最大姿态样本年龄</dt><dd id="eskfRuntimeAge">--</dd></div>
+              <div><dt>启动以来最大消费批次</dt><dd id="eskfRuntimeBatch">--</dd></div>
+            </dl>
+            <p id="eskfRuntimeLedger">等待设备快照</p>
+            <p class="tuning-note">只读，每秒刷新。样本年龄从采集中断时间戳计至姿态完成，包含查询负载。计数一致不代表按期完成；CPU、栈余量及每代截止时间尚未提供。导出仅含最近 300 次快照。</p>
+          </section>
+          <div class="tune-list">
+            <div class="tune-block"><h3>九轴磁北</h3><p>启动窗口只采陀螺零偏，不对磁北。融合开始后按上面的锁定时间转到磁北。九轴相对角不会把这次磁北转动从相对航向里减掉。</p></div>
+            <div class="tune-block"><h3>输出平滑</h3><p>姿态稳定性只平滑发出去的姿态。六轴再选零角速保持时，锁定发出去的航向；ESKF 判定静止时，单次角速度尖峰不会解除锁定。九轴不锁磁航向。</p></div>
+          </div>
+        </div>
+        <section class="card tuning-card tuning-shared" id="restBiasPanel" data-fw-inert>
+          <div class="card-h"><h2>静置零偏估计</h2></div>
+          <label class="switch-row"><span>静置零偏估计</span><input type="checkbox" class="switch" id="restBiasEnable" disabled></label>
+          <p>静止时更新陀螺仪零偏。VQF、EKF、ESKF 都用这个开关，立即生效并保存。ESKF 残差时间在本页 ESKF 参数里，默认累计静止满 3 秒前 1 秒，之后 12 秒。关闭后保留已经学到的补偿。</p>
+          <div class="inline-form"><p id="restBiasMessage" role="status" aria-live="polite">请先连接设备</p><span class="fill"></span><button id="restBiasRead" type="button" class="sm" disabled>读取</button></div>
+        </section>
+        <section class="card tuning-card tuning-shared" id="gyroPrefilterPanel" data-fw-inert>
+          <div class="card-h"><h2>陀螺前置低通</h2></div>
+          <label class="switch-row"><span>二阶低通（VQF / EKF / ESKF 共用）</span><input type="checkbox" class="switch" id="gyroPrefilterEnable" disabled></label>
+          <div class="form-2col">
+            <label class="field">截止频率（Hz）<input id="gyroPrefilterHz" type="number" min="0.2" max="200" step="0.1" value="2" disabled></label>
+            <label class="field">Q<input id="gyroPrefilterQ" type="number" min="0.2" max="5" step="0.001" value="0.707" disabled></label>
+          </div>
+          <p>三套算法走同一级滤波。关闭时陀螺原样进入融合。截止频率低能压住振动，快速转动也会变慢。Q 为 0.707 时是巴特沃斯。</p>
+          <div class="inline-form"><p id="gyroPrefilterMessage" role="status" aria-live="polite">请先连接设备</p><span class="fill"></span><button id="gyroPrefilterApply" type="button" class="sm primary" disabled>保存并应用</button><button id="gyroPrefilterRead" type="button" class="sm" disabled>读取</button></div>
+        </section>
+        <section class="card tuning-card tuning-shared" id="magRejectionPanel" data-fw-inert>
+          <div class="card-h"><h2>磁干扰拒绝</h2><span id="magInterferenceChip" class="chip" hidden>—</span></div>
+          <label class="switch-row"><span>拒磁保护</span><input type="checkbox" class="switch" id="magRejectionEnable" disabled></label>
+          <p>VQF、EKF、ESKF 都用这个开关。开启时拒绝异常磁场：拒绝期间完全不用磁力计，航向只靠陀螺，磁场回到正常范围后自动恢复融合。关闭后持续使用磁力计纠正航向，磁干扰可能导致航向偏移。立即生效并保存。六轴模式不使用磁力计。</p>
+          <label class="switch-row"><span>VQF 式拒磁（关闭＝旧版降级接受）</span><input id="magGateEnable" class="switch" type="checkbox" disabled aria-label="VQF 式拒磁"></label>
+          <p class="startup-help">开启：拒绝期间完全不用磁力计，磁场恢复后自动继续。关闭：连续拒绝 5 秒后按 4 倍噪声降级接受，换环境时不用重启。仅对 ESKF 生效，立即生效并保存。</p>
+          <div class="inline-form"><p id="magGateMessage" role="status">请先连接设备</p><span class="fill"></span><button id="magGateRead" type="button" class="sm" disabled>读取</button></div>
+          <p id="magInterferenceState" class="tuning-note" hidden></p>
+          <div class="inline-form"><p id="magHealthMessage" role="status">请先连接设备</p><span class="fill"></span><button id="magHealthCapture" type="button" class="sm" disabled>以当前为基准</button></div>
+          <p class="startup-help">标定健康检查：把校正后的磁场模长与「标定时的场强」对比，静止 8 秒偏差超过 15% 就提示标定可能失效（例如磁铁靠近过板子）。基准随标定一起保存。「以当前为基准」只在确认当前位置磁场正常时使用，它不会修正标定，只更新比较基准。</p>
+          <div class="inline-form"><p id="magRejectionMessage" role="status">请先连接设备</p><span class="fill"></span><button id="magRejectionRead" type="button" class="sm" disabled>读取</button></div>
+        </section>
         <div class="card tuning-card" id="gyroScalePanel" data-fw-inert>
           <div class="card-h"><h2>陀螺仪比例因子校准</h2><span id="gyroScaleStatus" class="chip">—</span></div>
           <p class="tuning-note">先热机并完成静止零偏校准，再使用六轴模式采集。固定所选转轴，标记起始位置，单向转满指定圈数后回到标记；保存后再反向转动复测。平放转航向选 Z 轴。</p>
@@ -407,7 +486,7 @@
           </div>
           <div class="tuning-toolbar"><button id="gyroScaleApply" class="primary" disabled>保存并应用</button><button id="gyroScaleRestore" disabled>恢复系数为 1</button><button id="gyroScaleRead" disabled>读取设备系数</button><button id="gyroScaleDiscard" disabled>撤销修改</button></div>
           <p id="gyroScaleMessage" class="tuning-message" role="status" aria-live="polite">请先连接设备</p>
-          <p class="tuning-note">系数保存到板卡，自动重启后对 VQF／EKF、六轴／九轴生效。</p>
+          <p class="tuning-note">系数保存到板卡，重启后对 VQF、EKF、ESKF 都生效。</p>
         </div>
       </section>
 
@@ -425,16 +504,6 @@
             <p>六轴、九轴及九轴相对角均可使用。保存后自动重启设备，并重新连接原 USB / 串口。</p>
             <div class="filter-actions"><button id="algorithmRead" type="button" disabled>读取</button><button id="algorithmApply" type="button" class="primary" disabled>保存并重启</button></div>
             <p id="algorithmMessage" role="status" aria-live="polite">请先连接设备</p>
-          </section><section class="card" id="restBiasPanel" data-fw-inert>
-            <div class="card-h"><h2>静置零偏估计</h2></div>
-            <label class="switch-row"><span>静置零偏估计（VQF / EKF）</span><input type="checkbox" class="switch" id="restBiasEnable" disabled></label>
-            <p>静止时更新陀螺仪零偏。立即生效并保存；关闭后保留已有补偿和运动零偏估计。</p>
-            <div class="inline-form"><p id="restBiasMessage" role="status" aria-live="polite">请先连接设备</p><span class="fill"></span><button id="restBiasRead" type="button" class="sm" disabled>读取</button></div>
-          </section><section class="card" id="magRejectionPanel" data-fw-inert>
-            <div class="card-h"><h2>磁干扰拒绝</h2></div>
-            <label class="switch-row"><span>拒磁保护（VQF / EKF）</span><input type="checkbox" class="switch" id="magRejectionEnable" disabled></label>
-            <p>开启时拒绝异常磁场；关闭后持续使用磁力计纠正航向，磁干扰可能导致航向偏移。立即生效并保存，六轴模式不使用磁力计。</p>
-            <div class="inline-form"><p id="magRejectionMessage" role="status">请先连接设备</p><span class="fill"></span><button id="magRejectionRead" type="button" class="sm" disabled>读取</button></div>
           </section></div><div class="settings-column"><section class="card" id="startupControls" data-fw-inert>
             <div class="card-h"><h2>设备</h2></div>
             <fieldset id="modeField" class="field seg-field" disabled>
@@ -445,6 +514,7 @@
                 <label><input type="radio" name="fusion" value="2"><span>九轴相对角</span></label>
               </div>
             </fieldset>
+            <p id="fusionModeNote" class="startup-help"></p>
             <label class="switch-row" id="fastStartRow"><span>快速启动</span><input type="checkbox" class="switch" id="fastStart" disabled></label>
             <div class="form-2col">
               <div id="gyroInitRow"><label class="field" for="gyroInitSeconds"><span id="gyroInitLabel">启动窗口</span><span class="suffix"><input id="gyroInitSeconds" type="number" value="2" min="0" max="60" step="0.1" required disabled><i>s</i></span></label></div>
@@ -456,8 +526,11 @@
             <div id="ws2812Panel">
               <label class="switch-row"><span>WS2812 指示灯</span><input id="ws2812Enable" class="switch" type="checkbox" disabled aria-label="WS2812 指示灯"></label>
               <div class="inline-form"><p id="ws2812Message" role="status">请先连接设备</p><span class="fill"></span><button id="ws2812Read" type="button" class="sm" disabled>读取</button></div>
+              <label class="switch-row"><span>静置指示（呼吸快慢）</span><input id="restIndicatorEnable" class="switch" type="checkbox" disabled aria-label="静置指示"></label>
+              <p class="startup-help">开启后：静置时 3 秒一次呼吸，运动时 0.75 秒一次。颜色仍表示六轴/九轴，拒磁绿闪优先。关闭后始终按 3 秒呼吸。</p>
+              <div class="inline-form"><p id="restIndicatorMessage" role="status">请先连接设备</p><span class="fill"></span><button id="restIndicatorRead" type="button" class="sm" disabled>读取</button></div>
             </div>
-            <p id="gyroInitHint" class="startup-help">0～60 秒，默认 2 秒；0 秒使用历史零偏直接启动。</p>
+            <p id="gyroInitHint" class="startup-help">0～60 秒，默认 2 秒；升级等待和零偏采集同时进行。窗口只采集陀螺零偏，不初始化磁力计。到期不合格使用历史零偏，0 秒直接使用历史启动。</p>
             <p id="restartHint" class="warn-line"></p>
           </section><section class="card filter-card" id="filterPanel" data-fw-inert>
             <div class="card-h"><h2>姿态稳定性</h2><span class="filter-state" id="filterState">当前：-- · 已保存：-- · 内部 -- Hz</span></div>
@@ -513,7 +586,7 @@
               </div>
             </div>
             <div class="adv-sec adv-bias" id="biasPanel">
-              <h3>运动零偏（只读）<span id="biasSummary" class="bias-sum">--</span><button id="biasRead" type="button" class="sm" disabled>读取</button></h3>
+              <h3><span id="biasTitle">运动零偏（只读）</span><span id="biasSummary" class="bias-sum">--</span><button id="biasRead" type="button" class="sm" disabled>读取</button></h3>
               <p id="biasFlags" class="bias-flags">--</p>
               <div id="biasParams" class="bias-grid"></div>
               <p id="biasVec" class="bias-vec">零偏 XYZ -- · 残差 --</p>
@@ -564,41 +637,52 @@
 </div>
 <div id="toasts" class="toasts" aria-live="polite"></div>
 
-<script src="/mobile-mock.js?v=20261008rest1"></script>
+<script src="/mobile-mock.js?v=20261022conn1"></script>
 <script src="/firmware-upgrade.js?v=20261001fw1-app4"></script>
-<script src="/filter-profile.js?v=20261002zaru1"></script>
-<script src="/zaru-limits.js?v=20261002restore1"></script>
-<script src="/motion-bias.js?v=20261002bias1"></script>
-<script src="/vqf-init.js?v=20261004drift2"></script>
+<script src="/filter-profile.js?v=20261022maghealth1"></script>
+<script src="/zaru-limits.js?v=20261022eskf1"></script>
+<script src="/motion-bias.js?v=20261022tune1"></script>
+<script src="/vqf-init.js?v=20261022tune1"></script>
 <script src="/bias-history.js?v=20261004drift2"></script>
 <script src="/drift-test.js?v=20261007ekf1"></script>
 <script src="/inertial-test.js?v=20261005ins4"></script>
 <script src="/magnetometer.js?v=20261005mag1"></script>
 <script src="/ws2812.js?v=20261007ekf1"></script>
+<script src="/rest-indicator.js?v=20261022rest1"></script>
 <script src="/mag-calibration.js?v=20261011magfit1"></script>
 <script src="/webusb.js?v=20261007ekf1"></script>
-<script src="/mag-rejection.js?v=20261007ekf1"></script>
-<script src="/fusion-algorithm.js?v=20261007ekf1"></script>
+<script src="/connect-kind.js?v=20261022conn1"></script>
+<script src="/mag-rejection.js?v=20261023maghealth2"></script>
+<script src="/mag-gate.js?v=20261022maggate1"></script>
+<script src="/fusion-algorithm.js?v=20261022tune1"></script>
 <script src="/rest-bias.js?v=20261008rest1"></script>
-<script src="/vqf-tuning.js?v=20261011vqftune1"></script>
+<script src="/gyro-prefilter.js?v=20261022pre1"></script>
+<script src="/vqf-tuning.js?v=20261022eskf1"></script>
+<script src="/eskf-tuning.js?v=20261022eskf1"></script>
 <script src="/gyro-scale.js?v=20261012scale2"></script>
 <script src="/data-capture.js?v=20261012capture1"></script>
-<script src="/app.js?v=20261012capture1"></script>
-<script src="/ui-data-capture.js?v=20261014themefix1"></script>
+<script src="/eskf-runtime.js?v=20261023runtime1"></script>
+<script src="/app.js?v=20261023runtime1"></script>
+<script src="/ui-eskf-runtime.js?v=20261023runtime1"></script>
+<script src="/ui-data-capture.js?v=20261022tune1"></script>
 <script src="/ui-inertial.js?v=20261007ekf1"></script>
-  <script src="/ui-shell.js?v=20261012capture1"></script>
+  <script src="/ui-shell.js?v=20261022conn1"></script>
 <script src="/ui-pages.js?v=20261001fw1-app4"></script>
 <script src="/ui-mag.js?v=20261005mag1"></script>
 <script src="/ui-chart.js?v=20261009theme2"></script>
 <script src="/ui-adv.js?v=20261012acc1"></script>
 <script src="/quick-settings.js?v=20261002quick2"></script>
-<script src="/ui-test.js?v=20261014themefix1"></script>
+<script src="/ui-test.js?v=20261022tune1"></script>
 <script src="/ui-ws2812.js?v=20261007ekf1"></script>
-<script src="/ui-mag-calibration.js?v=20261011magfit1"></script>
-<script src="/ui-mag-rejection.js?v=20261007ekf1"></script>
+<script src="/ui-rest-indicator.js?v=20261022rest1"></script>
+<script src="/ui-mag-calibration.js?v=20261022tune1"></script>
+<script src="/ui-mag-rejection.js?v=20261022magind1"></script>
+<script src="/ui-mag-gate.js?v=20261022maggate1"></script>
 <script src="/ui-fusion-algorithm.js?v=20261007ekf1"></script>
 <script src="/ui-rest-bias.js?v=20261008rest1"></script>
+<script src="/ui-gyro-prefilter.js?v=20261022pre1"></script>
 <script src="/ui-vqf-tuning.js?v=20261011vqftune1"></script>
+<script src="/ui-eskf-tuning.js?v=20261022eskf1"></script>
 <script src="/ui-gyro-scale.js?v=20261012scale2"></script>
 </body>
 </html>

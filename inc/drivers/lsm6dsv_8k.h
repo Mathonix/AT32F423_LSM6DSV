@@ -16,6 +16,7 @@ int lsm6dsv_8k_pop(lsm6dsv_raw_t *raw,uint32_t *drdy_cycles);
 uint32_t lsm6dsv_8k_overruns(void);
 uint32_t lsm6dsv_8k_irq_count(void);
 uint32_t lsm6dsv_8k_spi_errors(void);
+uint32_t lsm6dsv_8k_available(void);
 #ifdef __cplusplus
 }
 #endif

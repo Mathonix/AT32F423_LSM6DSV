@@ -34,6 +34,14 @@ void vqf_set_mag_rejection_enabled(int enabled);
 void vqf_set_magnetic_fusion(int enabled);
 int vqf_get_magnetic_fusion(void);
 int vqf_get_mag_rejection_enabled(void);
+void vqf_set_mag_vqf_gate(int enabled);
+int vqf_get_mag_vqf_gate(void);
+/* Magnitude the loaded calibration was fitted to, uT (0 = unknown).
+ * vqf_get_mag_field_ut reports the current corrected field at rest. */
+void vqf_set_mag_expected_ut(float ut);
+float vqf_get_mag_expected_ut(void);
+float vqf_get_mag_field_ut(void);
+int vqf_get_mag_cal_suspect(void);
 void vqf_get_quat6d(float q[4]);
 void vqf_get_quat9d(float q[4]);
 void vqf_get_euler_deg(float *roll_deg, float *pitch_deg, float *yaw_deg);
@@ -73,6 +81,7 @@ float vqf_get_tau_mag(void);
 int vqf_get_mag_ready(void);
 float vqf_get_mag_delta_deg(void);
 int vqf_get_mag_dist_detected(void);
+int vqf_get_mag_degraded(void);
 #ifdef __cplusplus
 }
 #endif

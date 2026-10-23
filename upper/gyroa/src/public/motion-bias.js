@@ -85,17 +85,24 @@
     function render() {
       const s = ctl.state, d = s.data, on = connected();
       set(panel, 'hidden', s.supported === false);
+      const eskf = globalThis.GyroFusionAlgorithm?.control?.state?.data?.active === 2;
       set($('biasRead'), 'disabled', !on || !!s.inFlight);
-      set($('biasSummary'), 'textContent', ctl.headline());
+      set($('biasTitle'), 'textContent', eskf ? 'ESKF 零偏（只读）' : '运动零偏（只读）');
+      set($('biasSummary'), 'textContent', eskf ? (d ? `零偏 ${d.bias.map((v) => v.toFixed(3)).join('/')} °/s` : '--') : ctl.headline());
+      set(box, 'hidden', eskf);
       for (const p of PARAMS) set($(`bias_${p.key}`), 'textContent', d ? p.fmt(d[p.key]) : '--');
       set($('biasVec'), 'textContent', d ? `零偏 XYZ ${d.bias.map(f4).join(' / ')} °/s · 残差 ${d.residualNorm.toFixed(4)} °/s` : '零偏 XYZ -- · 残差 --');
-      const flags = d ? [
+      const flags = !d ? '--' : eskf ? [
+        d.restDetected ? '静止：是' : '静止：否',
+        'σ、遗忘时间和 tauAcc 来自闲置的 VQF，不参与 ESKF',
+      ].join(' · ') : [
         d.motionBiasEnabled === 1 ? '运动零偏已开' : '运动零偏未开', d.restBiasEnabled === 1 ? '静止零偏已开' : '静止零偏未开',
         d.restDetected ? '静止：是' : '静止：否',
         d.zaruEnabled ? (d.zaruHold ? '零角速保持：锁定中' : '零角速保持：未锁定') : '零角速保持：本档 / 九轴未启用',
-      ].join(' · ') : '--';
+      ].join(' · ');
       set($('biasFlags'), 'textContent', flags);
-      set($('biasMsg'), 'textContent', s.message);
+      set($('biasNote'), 'textContent', eskf ? 'ESKF 没有运动零偏估计器。零偏矢量和静止标志是当前 ESKF 的。' : NOTE);
+      set($('biasMsg'), 'textContent', eskf ? '' : s.message);
       if (panel) { const st = s.supported === false ? 'unsupported' : !d ? 'empty' : s.ok ? 'ok' : 'off'; if (panel.dataset.state !== st) panel.dataset.state = st; }
     }
     return { render };

@@ -131,10 +131,23 @@
       $('vqfTuningState').textContent=s.data?(s.data.algorithm!==0?'当前 '+(globalThis.GyroFusionAlgorithm?.NAMES?.[s.data.algorithm]||'非 VQF')+' · 切换 VQF 后可调参':s.data.restartRequired?'已保存 · 等待重启生效':s.data.custom?'自定义参数':'档位 / 静置初始化参数'):'--';
       $('vqfTuningMessage').textContent=!c.connected?'请先连接设备':s.pending?s.message:c.busy?'请先结束其他操作或保存、撤销其他配置修改':validate(s.draft)&&s.dirty?validate(s.draft):s.message;
       $('vqfTuningDirty').hidden=!s.dirty;
+      syncCards(doc);
     }
     $('vqfTuningRead').onclick=()=>controller.query();$('vqfTuningApply').onclick=()=>controller.apply();
     $('vqfTuningRestore').onclick=()=>controller.restore();$('vqfTuningDiscard').onclick=()=>controller.discard();
     return {render};
   }
-  globalThis.GyroVqfTuning={QUERY,SET,RESTORE,MSG,PARAMS,validate,encode,decode,equal,createController,createView};
+  function syncCards(doc=document) {
+    const $=id=>doc.getElementById(id);
+    const active=globalThis.GyroFusionAlgorithm?.control?.state?.data?.active;
+    const known=active===0||active===1||active===2;
+    const pending=$('tuningPending'),vqf=$('vqfTuningCard'),ekf=$('ekfTuningCard'),eskf=$('eskfTuningCard'),chip=$('vqfTuningState');
+    if(pending)pending.hidden=known;
+    if(vqf)vqf.hidden=active!==0;
+    if(ekf)ekf.hidden=active!==1;
+    if(eskf)eskf.hidden=active!==2;
+    if(!chip||active===0)return;
+    chip.textContent=active===1?'EKF · 不使用 VQF 的 14 项自定义参数':active===2?(globalThis.GyroEskfTuning?.chipText?.()||'ESKF'):'--';
+  }
+  globalThis.GyroVqfTuning={QUERY,SET,RESTORE,MSG,PARAMS,validate,encode,decode,equal,createController,createView,syncCards};
 })();

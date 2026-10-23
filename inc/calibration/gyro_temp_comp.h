@@ -36,7 +36,14 @@ void gyro_temp_comp_update(uint32_t now_ms, float filtered_temp_c);
 float gyro_temp_comp_delta(unsigned axis);
 int gyro_temp_comp_active(void);
 float gyro_temp_comp_boot_temperature(void);
+/* Startup seed after a capture that is not fresh. 1 = segment, or a confirmed
+ * bin inside APP_GYR_BIAS_TEMP_WINDOW_C. 3 = nearest confirmed bin outside
+ * that window when no raw fallback is strictly closer. 2 = raw fallback.
+ * 0 = no historical point. Does not write flash.
+ * gyro_temp_comp_boot_selected_c() is the temperature of the last choice
+ * (the query temperature for code 1). */
 int gyro_temp_comp_boot_bias(float temp_c, float raw_bias_dps[3]);
+float gyro_temp_comp_boot_selected_c(void);
 const temp_comp_record_v4_t *gyro_temp_comp_working(void);
 void gyro_temp_comp_info(temp_comp_info_t *info);
 void gyro_temp_comp_set_bin(unsigned index, const temp_bin_t *bin);

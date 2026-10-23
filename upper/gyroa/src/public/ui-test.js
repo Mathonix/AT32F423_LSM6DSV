@@ -11,7 +11,8 @@
   function metadataText(m) {
     const modes = ['六轴', '九轴', '九轴相对角'], profiles = ['响应优先', '均衡', '静态稳定', '零角速保持'];
     const flag = v => v == null ? '未知' : v ? '开' : '关';
-    return `${m.mock ? '模拟设备 · ' : ''}${m.firmware || '版本未知'} · ${['VQF','EKF'][m.algorithm] || '算法未知'} · ${modes[m.mode] || '融合模式未知'} · ±${m.rangeDps ?? '?'} dps · ${m.outputHz ?? '?'} Hz · ${profiles[m.profile] || '滤波档位未知'} · 静置零偏 ${flag(m.restBiasEnabled)} · 运动零偏 ${flag(m.motionBiasEnabled)}`;
+    const algorithms = globalThis.GyroFusionAlgorithm?.NAMES || ['VQF', 'EKF', 'ESKF'];
+    return `${m.mock ? '模拟设备 · ' : ''}${m.firmware || '版本未知'} · ${algorithms[m.algorithm] || '算法未知'} · ${modes[m.mode] || '融合模式未知'} · ±${m.rangeDps ?? '?'} dps · ${m.outputHz ?? '?'} Hz · ${profiles[m.profile] || '滤波档位未知'} · 静置零偏 ${flag(m.restBiasEnabled)} · 运动零偏 ${flag(m.motionBiasEnabled)}`;
   }
   async function keepAwake() {
     try { if (session.active && document.visibilityState === 'visible' && !wakeLock) wakeLock = await navigator.wakeLock?.request('screen'); }
@@ -36,7 +37,7 @@
   $('driftCsv').onclick = () => download(session.csv(), 'text/csv;charset=utf-8', 'csv');
   $('driftJson').onclick = () => download(JSON.stringify({ ...session.summary(), seconds: session.rows() }, null, 2), 'application/json', 'json');
   // Read-only queries are allowed. Mutating controls are blocked while measuring, including navigation to other pages.
-  const MUTATING = '#vqfTuningApply,#vqfTuningRestore,#vqfTuningFields input,#magCalStart,#magCalVerify,#magCalSave,#magCalRestore,#ws2812Enable,#magRejectionEnable,#algorithmSelect,#algorithmApply,#statusRestartBtn,#testRestartBtn,#applyBtn,#outputApplyAll,#outputApply0,#outputApply1,#rateApplyBtn,#canApply,#canIdBtn,#filterApply,#zaruSave,#zaruRestore,#vqfStart,#vqfRestore,#acc6Btn,#gyroCalBtn,#zeroBtn,#resetBtn,#streamApplyBtn,#firmwareStartBtn,#qsFusion button,#qsFilter button,#enterBtn,#exitBtn';
+  const MUTATING = '#vqfTuningApply,#vqfTuningRestore,#vqfTuningFields input,#magCalStart,#magCalVerify,#magCalSave,#magCalRestore,#ws2812Enable,#magRejectionEnable,#algorithmSelect,#algorithmApply,#statusRestartBtn,#testRestartBtn,#applyBtn,#outputApplyAll,#outputApply0,#outputApply1,#rateApplyBtn,#canApply,#canIdBtn,#filterApply,#zaruSave,#zaruRestore,#vqfStart,#vqfRestore,#acc6Btn,#streamApplyBtn,#firmwareStartBtn,#qsFusion button,#qsFilter button,#enterBtn,#exitBtn';
   document.addEventListener('click', e => {
     if (!session.active || !e.target.closest?.(MUTATING)) return;
     e.preventDefault(); e.stopImmediatePropagation(); GyroUI.toast('请先停止零漂测试，再修改设备', 'warn');

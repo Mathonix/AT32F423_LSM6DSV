@@ -29,7 +29,7 @@ extern "C" {
 #define AHRS_MSG_CAN_CONFIG        0x08U /* version/ready, active+saved config, bus_off/reserved */
 #define AHRS_MSG_ACC_CAL_STATUS    0x0AU /* versioned six-face progress and persisted parameters */
 #define AHRS_MSG_FILTER_CONFIG     0x0BU /* active/saved profile and effective filter constants */
-#define AHRS_MSG_FUSION_DIAGNOSTIC 0x0CU /* timestamp, raw gyro, bias, residual, raw pose, sigma */
+#define AHRS_MSG_FUSION_DIAGNOSTIC 0x0CU /* v1,profile,rest,mag_flags(bit0 ready/bit1 disturbed/bit2 fusion paused/bit3 calibration suspect); timestamp, raw gyro, bias, residual, raw pose, sigma */
 #define AHRS_MSG_VQF_CAL_STATUS    0x0DU /* static VQF initialization progress */
 #define AHRS_MSG_VQF_SETTINGS      0x0EU /* applied VQF static parameters and compiled defaults */
 #define AHRS_MSG_MOTION_BIAS       0x09U /* live motion-bias enable and estimator numbers */
@@ -52,6 +52,8 @@ extern "C" {
 #define AHRS_MSG_EKF_UPDATES          0x54U /* v1, algorithm, filter, flags, time; attribution (60B) */
 #define AHRS_CMD_QUERY_REST_BIAS      0x55U /* empty */
 #define AHRS_CMD_SET_REST_BIAS        0x56U /* enabled:u8; save then apply without reset */
+#define AHRS_CMD_QUERY_GYRO_PREFILTER 0x64U /* empty */
+#define AHRS_CMD_SET_GYRO_PREFILTER   0x65U /* v1,enabled,reserved u16, cutoff Hz, Q; save and apply */
 #define AHRS_CMD_QUERY_VQF_TUNING     0x58U /* empty; replies saved/default/live pages */
 #define AHRS_CMD_SET_VQF_TUNING       0x59U /* v1,reserved[3],14 floats (60B); persist, reboot applies */
 #define AHRS_CMD_RESTORE_VQF_TUNING   0x5AU /* empty; persist compiled defaults, reboot applies */
@@ -61,6 +63,20 @@ extern "C" {
 #define AHRS_MSG_GYRO_SCALE           0x5FU /* v1,flags(bit0 restart),reserved[2],active XYZ,saved XYZ,skip/clip counters (36B) */
 #define AHRS_MSG_VQF_TUNING           0x5BU /* v1,page(0 saved/1 defaults/2 live),flags,algorithm,14 floats */
 #define AHRS_MSG_REST_BIAS            0x57U /* version, active, saved, reserved (4B) */
+#define AHRS_MSG_GYRO_PREFILTER       0x66U /* v1, active, saved, reserved, active Hz/Q, saved Hz/Q (28B) */
+#define AHRS_CMD_QUERY_ESKF_TUNING    0x67U /* empty; replies saved/default/active pages */
+#define AHRS_CMD_SET_ESKF_TUNING      0x68U /* v1,reserved[3],56B body; save and apply now */
+#define AHRS_CMD_RESTORE_ESKF_TUNING  0x69U /* empty; persist compiled defaults and apply now */
+#define AHRS_MSG_ESKF_TUNING          0x6AU /* v1,page,flags,reserved,56B body (60B) */
+#define AHRS_CMD_QUERY_REST_INDICATOR 0x6BU /* empty; breathing-rate rest indicator */
+#define AHRS_CMD_SET_REST_INDICATOR   0x6CU /* enabled:u8; save then apply */
+#define AHRS_MSG_REST_INDICATOR       0x6DU /* version, active, saved, reserved (4B) */
+#define AHRS_CMD_QUERY_MAG_GATE       0x6EU /* empty; magnetic rejection strategy */
+#define AHRS_CMD_SET_MAG_GATE         0x6FU /* enabled:u8; 1=VQF-style wait for recovery, 0=degrade after the limit */
+#define AHRS_MSG_MAG_GATE             0x70U /* version, active, saved, reserved (4B) */
+#define AHRS_CMD_QUERY_MAG_HEALTH     0x71U /* empty; calibration-fiducial check (ESKF) */
+#define AHRS_CMD_SET_MAG_HEALTH       0x72U /* mode:u8, value:f32; 0=clear, 1=value uT, 2=capture current */
+#define AHRS_MSG_MAG_HEALTH           0x73U /* version, flags, expected:f32, current:f32, reserved[6] (16B) */
 #define AHRS_MSG_WS2812            0x46U /* version, active enabled, saved enabled, reserved (4B) */
 #define AHRS_MSG_ACK               0x90U /* Command Acknowledge */
 
@@ -68,7 +84,9 @@ extern "C" {
 #define AHRS_MSG_MAG_CAL 0x4AU /* v1 valid reserved[2], offset[3], symmetric matrix[9] (52B) */
 #define AHRS_CMD_QUERY_MAG_RAW_CAL 0x47U
 #define AHRS_CMD_QUERY_MAG_CAL 0x49U
-#define AHRS_CMD_SET_MAG_CAL 0x4BU /* 52B: version=1,valid=1,reserved=0,offset/matrix floats */
+#define AHRS_CMD_SET_MAG_CAL 0x4BU /* 52B v1: version,valid,reserved[2],offset/matrix floats.
+                                   * 56B v2 appends the fitted field magnitude (f32) used as
+                                   * the calibration-health fiducial; v1 clears that fiducial. */
 #define AHRS_CMD_RESTORE_MAG_CAL 0x4CU /* empty: compiled trial coefficients, persist */
 
 /* Uplink Command IDs (Host -> MCU) */
@@ -122,6 +140,25 @@ extern "C" {
 #define AHRS_CMD_SET_WS2812         0x45U /* enabled:u8 (0/1); save then apply, ACK + 0x46 */
 
 #define AHRS_CONFIG_VERSION        5U /* v4 + active/saved accelerometer full scale, g */
+/* Scheduling diagnostic ABI1: empty query; 60-byte LE u32 reply.
+ * Main-loop snapshot plus live IRQ counters; not a strict simultaneous cut.
+ * max age is since boot, measured from ISR-entry source timestamp. */
+#define AHRS_CMD_QUERY_ESKF_RUNTIME 0x74U
+#define AHRS_MSG_ESKF_RUNTIME       0x75U
+#define AHRS_ESKF_RUNTIME_ABI       1U
+/* Separate optional timing diagnostic; empty query and 15 LE u32 words. */
+#define AHRS_CMD_QUERY_ESKF_TIMING  0x76U
+#define AHRS_MSG_ESKF_TIMING        0x77U
+typedef struct {
+  uint32_t abi, core_hz, uptime_ms, irq, overruns, spi_errors;
+  uint32_t consumed, predictions, accel_calls, accel_attempts;
+  uint32_t pose_due, pose_generated, max_pose_age_cycles, max_batch, source_cycles;
+} ahrs_payload_eskf_runtime_t;
+#if defined(__cplusplus)
+static_assert(sizeof(ahrs_payload_eskf_runtime_t)==60U,"ESKF runtime ABI1");
+#else
+_Static_assert(sizeof(ahrs_payload_eskf_runtime_t)==60U,"ESKF runtime ABI1");
+#endif
 #define AHRS_FIELD_COUNT           9U
 #define AHRS_FIELDS_ALL            0x01FFU
 #define AHRS_FIELDS_ATTITUDE       0x0007U

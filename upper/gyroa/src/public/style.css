@@ -155,7 +155,7 @@ fieldset:disabled .checks label{cursor:not-allowed;color:var(--tx3);background:v
 .nav-item:hover{background:var(--weak-bg);color:var(--tx)}
 .nav-item.active{background:var(--primary-soft);color:var(--primary)}
 .main{display:flex;flex-direction:column;min-width:0;min-height:0}
-.topbar{flex:none;height:var(--top);display:flex;align-items:center;justify-content:space-between;gap:16px;padding:0 var(--pad);
+.topbar{position:relative;z-index:20;flex:none;height:var(--top);display:flex;align-items:center;justify-content:space-between;gap:16px;padding:0 var(--pad);
   background:var(--surface);border-bottom:1px solid var(--border)}
 .tb-left{display:flex;align-items:center;gap:16px;min-width:0}
 .tb-title{font-size:16px;font-weight:600;white-space:nowrap}
@@ -167,6 +167,15 @@ fieldset:disabled .checks label{cursor:not-allowed;color:var(--tx3);background:v
 .conn[data-state=fail] .dot{background:var(--danger)}
 .conn[data-state=fail]{color:var(--danger)}
 .tb-right{display:flex;align-items:center;gap:12px}
+.connect-split{position:relative;display:inline-flex;align-items:stretch}
+.connect-split>#connectBtn{border-top-right-radius:0;border-bottom-right-radius:0}
+.connect-caret{width:30px;padding:0;border-top-left-radius:0;border-bottom-left-radius:0;margin-left:-1px}
+.connect-menu{position:absolute;top:calc(100% + 6px);right:0;z-index:2;display:flex;flex-direction:column;gap:2px;min-width:220px;padding:6px;border:1px solid var(--border);border-radius:12px;background:var(--surface);box-shadow:0 8px 24px rgba(16,24,40,.16)}
+.connect-menu[hidden]{display:none}
+.connect-menu button{position:relative;height:auto;min-height:44px;width:100%;padding:7px 12px 7px 32px;justify-content:center;align-items:flex-start;flex-direction:column;gap:0;border:0;background:transparent;box-shadow:none;text-align:left;font-weight:600}
+.connect-menu button small{color:var(--tx3);font-size:12px;font-weight:500}
+.connect-menu button.on{background:var(--primary-soft);color:var(--primary)}
+.connect-menu button.on::before{content:"";position:absolute;left:14px;width:6px;height:10px;border:solid var(--primary);border-width:0 2px 2px 0;transform:translateY(-1px) rotate(45deg)}
 .icon-btn{display:inline-flex;align-items:center;justify-content:center;width:38px;height:38px;border-radius:var(--r-ctl);color:var(--tx2)}
 .icon-btn:hover{background:var(--weak-bg);color:var(--tx)}
 .views{flex:1;min-height:0;position:relative}
@@ -681,6 +690,12 @@ body.vqf-busy [data-vqf-lock]{opacity:.5;cursor:not-allowed}
 /* VQF tuning page */
 .view-tuning .page-h{display:flex;align-items:center;gap:16px;flex-wrap:wrap}
 .tuning-card{padding:24px}
+.view-tuning>.tuning-shared{display:flex;flex-direction:column;gap:14px}
+.view-tuning>.tuning-shared>p{font-size:13px;color:var(--tx2);line-height:1.7}
+.view-tuning>.tuning-shared .switch-row>span{min-width:0;line-height:1.45}
+.view-tuning>.tuning-shared .inline-form{align-items:center}
+.view-tuning>.tuning-shared .inline-form>p{flex:1 1 180px;min-width:0}
+.view-tuning>.tuning-shared .form-2col{grid-template-columns:repeat(2,minmax(0,1fr))}
 .tuning-note,.tuning-message{color:var(--muted);font-size:13px;line-height:1.7}
 .tuning-toolbar{display:flex;gap:10px;flex-wrap:wrap;margin:18px 0 8px}
 .tuning-message{min-height:24px;margin-bottom:20px}
@@ -697,5 +712,13 @@ body.vqf-busy [data-vqf-lock]{opacity:.5;cursor:not-allowed}
 .tuning-values{grid-column:1/-1;display:flex;gap:20px;font-size:12px;color:var(--muted);font-variant-numeric:tabular-nums}
 .tuning-values b{font-weight:500}
 .tuning-row p{grid-column:1/-1;margin:2px 0 0;font-size:12px;line-height:1.6;color:var(--muted)}
+.tune-list{display:flex;flex-direction:column;gap:14px;margin-top:8px}
+.tune-block h3{margin:0 0 4px;font-size:14px}
+.tune-block p{margin:0;color:var(--tx2);font-size:13px;line-height:1.65}
 @media(max-width:900px){.tuning-grid{grid-template-columns:1fr}}
 @media(max-width:680px){.tuning-card{padding:16px}.tuning-group{padding:4px 12px 8px}.tuning-row{grid-template-columns:minmax(0,1fr) 135px;gap:6px 8px}.tuning-toolbar{gap:8px}.tuning-toolbar button{flex:1 1 40%;font-size:12px}.view-tuning .page-h .chip{font-size:11px}.nav-item{font-size:10px}}
+/* Read-only ESKF runtime diagnostics. */
+.eskf-runtime-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px;margin:16px 0}
+.eskf-runtime-grid dt{font-size:.85em;opacity:.75}
+.eskf-runtime-grid dd{margin:4px 0;font-variant-numeric:tabular-nums;overflow-wrap:anywhere}
+.eskf-runtime-grid dd.warn{color:var(--warn,#b45309);font-weight:600}

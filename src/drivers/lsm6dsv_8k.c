@@ -6,6 +6,7 @@
 #include "bsp.h"
 #include "at32f423_scfg.h"
 #include <string.h>
+#include "perf_meter.h"
 
 /* EXINT0_IRQHandler below is referenced by the vector table, so an unguarded
  * definition would pull this module -- and its ring -- into every image even
@@ -60,7 +61,7 @@ void lsm6dsv_8k_capture_start(void) {
   nvic_irq_enable(EXINT0_IRQn,0,0);
   EXINT_INTEN |= LINE0;
 }
-void EXINT0_IRQHandler(void) {
+static void capture_irq_body(void) {
   if((EXINT_PENDING&LINE0)==0U)return;
   EXINT_PENDING=LINE0;
   if(!active)return;
@@ -75,6 +76,11 @@ void EXINT0_IRQHandler(void) {
   slot->cycles=timestamp;
   __DMB();
   write_n=head+1U;
+}
+void EXINT0_IRQHandler(void) {
+  uint32_t mark=perf_irq_enter();
+  capture_irq_body();
+  perf_irq_exit(PERF_IMU_IRQ,mark);
 }
 int lsm6dsv_8k_pop(lsm6dsv_raw_t *raw,uint32_t *cycles) {
   const uint32_t tail=read_n;
@@ -91,4 +97,5 @@ int lsm6dsv_8k_pop(lsm6dsv_raw_t *raw,uint32_t *cycles) {
 uint32_t lsm6dsv_8k_overruns(void){return overrun_n;}
 uint32_t lsm6dsv_8k_irq_count(void){return irq_n;}
 uint32_t lsm6dsv_8k_spi_errors(void){return spi_error_n;}
+uint32_t lsm6dsv_8k_available(void){return write_n-read_n;}
 #endif /* APP_IMU8K_CAPTURE_TEST */

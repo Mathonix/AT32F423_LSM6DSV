@@ -15,8 +15,11 @@ static uint16_t ws_phase;
 static uint16_t ws_dither;
 static uint8_t ws_rgb_valid, ws_red, ws_green, ws_blue;
 static uint8_t ws_enabled=1U, ws_initialized;
+static uint8_t ws_rest_indicator=1U;
 
 uint8_t ws2812_get_enabled(void) { return ws_enabled; }
+void ws2812_set_rest_indicator_enabled(uint8_t enabled) { ws_rest_indicator=enabled ? 1U : 0U; }
+uint8_t ws2812_get_rest_indicator_enabled(void) { return ws_rest_indicator; }
 void ws2812_set_enabled(uint8_t enabled)
 {
   ws_enabled=enabled ? 1U : 0U;
@@ -129,7 +132,7 @@ static uint8_t breathing_level(uint16_t phase)
   return level;
 }
 
-void ws2812_normal_task(uint32_t now_ms, ws2812_mode_t mode, uint8_t calibration_failed, uint8_t mag_rejected, uint8_t settings_pending_reboot, uint8_t history_error)
+void ws2812_normal_task(uint32_t now_ms, ws2812_mode_t mode, uint8_t rest, uint8_t calibration_failed, uint8_t mag_rejected, uint8_t settings_pending_reboot, uint8_t history_error)
 {
   if(!ws_enabled) return;
   uint8_t level;
@@ -201,10 +204,22 @@ void ws2812_normal_task(uint32_t now_ms, ws2812_mode_t mode, uint8_t calibration
   {
     ws2812_set_rgb(red, green, blue);
   }
-  ws_phase++;
+  /* Rest indicator: the breath itself carries the motion state. One 3 s
+   * breath while stationary, four times faster (0.75 s) while moving. The
+   * phase step is integral: 600 steps / 4 = 150, so the cycle stays periodic.
+   * Colour still says six or nine axis, and a magnetic warning still wins. */
+  if(ws_rest_indicator && !rest)
+  {
+    ws_phase = (uint16_t)(ws_phase + 4U);
+  }
+  else
+  {
+    ws_phase++;
+  }
   if(ws_phase >= WS_PHASE_STEPS)
   {
-    ws_phase = 0U;
+    ws_phase = (uint16_t)(ws_phase - WS_PHASE_STEPS);
+    if(ws_phase >= WS_PHASE_STEPS) ws_phase = 0U;
   }
 }
 void ws2812_show_error(uint8_t code)

@@ -47,6 +47,7 @@
       apply.disabled=select.disabled;read.disabled=!c.connected||c.busy||!!s.pending;
       current.textContent=s.data?`当前 ${NAMES[s.data.active]} · 已保存 ${NAMES[s.data.saved]}`:'当前 -- · 已保存 --';
       status.textContent=!c.connected?'请先连接设备':c.dirty?'请先保存或撤销其他配置修改':s.message;
+      globalThis.GyroVqfTuning?.syncCards?.(doc);
     }
     select.onchange=()=>controller.choose(Number(select.value));apply.onclick=()=>controller.apply();read.onclick=()=>controller.query();
     return {render};

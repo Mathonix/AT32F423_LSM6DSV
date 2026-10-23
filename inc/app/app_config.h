@@ -33,7 +33,7 @@
 #ifdef APP_USER_BL_UPDATE
 #define APP_FIRMWARE_VERSION "20261005j"
 #else
-#define APP_FIRMWARE_VERSION "20261022a"
+#define APP_FIRMWARE_VERSION "20261023s"
 #endif
 
 #define APP_FUSION_HZ             2000U
@@ -245,6 +245,12 @@
  * Enter confirm 20 ms eager, 50 ms default, 100 ms slow.
  * Exit confirm 1 ms sharp, 3 ms default, 10 ms still acceptable. */
 #define APP_ZARU_ENABLE               1U
+/* 0: lock published six-axis yaw only in FUSION_PROFILE_ZARU, matching the
+ * host gear. 1: lock it in every six-axis gear. The other gears only smooth
+ * the published attitude. */
+#ifndef APP_ZARU_ALL_PROFILES
+#define APP_ZARU_ALL_PROFILES         0
+#endif
 #define APP_ZARU_ENTER_DPS            0.30f
 #define APP_ZARU_EXIT_DPS             0.70f
 #define APP_ZARU_ENTER_FILTER_MS      10U
