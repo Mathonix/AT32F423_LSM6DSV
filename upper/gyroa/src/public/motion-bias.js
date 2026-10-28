@@ -1,5 +1,5 @@
 // AT32 AHRS · VQF 运动零偏状态（只读）：0x30 查询 → 0x09（48 B，由 app.js GYRO-CORE decodePayload 严格按长度解码为 type 'motionBias'）。
-// 规格：/workspace/zaru/host-agent-motion-bias.md（固件尚未烧录；只按规格实现，未经硬件验证）。gyro1 / gyro3 共用。
+// 规格：内部文档 host-agent-motion-bias.md（不随仓库发布；固件尚未烧录，只按规格实现，未经硬件验证）。gyro1 / gyro3 共用。
 // 成功 = 收到 0x09 且 version===1 && motion_bias_enabled===1 && rest_bias_enabled===1；单独的 ACK 永远不算成功。
 // 0x30 回 ACK 0x01（旧固件）→ 静默隐藏本项（不报通信故障）；ACK 0x02 → 查询参数无效。没有任何写入命令。
 // tauAcc 随当前滤波档变化，只显示设备回报的当前值，不写成常数。

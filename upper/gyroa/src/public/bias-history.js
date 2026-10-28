@@ -1,4 +1,4 @@
-// AT32 AHRS · 启动零偏历史（只读，biashist1）：0x33 [offset u16 LE] → 0x34（60 B）。规格 /workspace/zaru/host-agent-bias-history-list.md。
+// AT32 AHRS · 启动零偏历史（只读，biashist1）：0x33 [offset u16 LE] → 0x34（60 B）。规格见内部文档 host-agent-bias-history-list.md（不随仓库发布）。
 // 这是开机采集写进 Flash（0x0803E800 / 0x0803F800）的历史：不是 0x09 运动零偏，也不是 0x0E 里的当前零偏；静置初始化结果不进此表。
 // 翻页：从 offset 0 开始，下一次 offset + entry_count；entry_count = 0 或 offset + entry_count >= count 时结束；
 // 两次回复 sequence 不同 → 中间又保存过，整表重读（最多 3 次）。成功不回 ACK；旧固件 ACK 0x01 → 隐藏；ACK 0x02 = offset / 长度无效。

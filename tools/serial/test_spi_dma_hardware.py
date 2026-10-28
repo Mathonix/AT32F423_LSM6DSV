@@ -8,7 +8,8 @@ from winusb_link import AppLink,WinUSB
 def main():
  p=argparse.ArgumentParser(description=__doc__);p.add_argument('--seconds',type=float,default=5);p.add_argument('--out',type=Path,required=True);p.add_argument('--transport',choices=['cdc','winusb'],default='winusb');a=p.parse_args()
  assert 1<=a.seconds<=240;a.out.mkdir(parents=True,exist_ok=False)
- devices=[p for p in list_ports.comports() if p.device=='COM29' and p.vid==0x2e3c and p.pid==0xf401 and p.serial_number=='22EC987C8068']
+ board_serial=os.environ.get('GYROA_BOARD_SERIAL','').strip()
+ devices=[p for p in list_ports.comports() if p.device=='COM29' and p.vid==0x2e3c and p.pid==0xf401 and (not board_serial or p.serial_number==board_serial)]
  assert len(devices)==1,'wrong board identity'
  class IO:
   def __init__(self):self.s=serial.Serial('COM29',2000000,timeout=.002,write_timeout=1);self.tx=bytearray()

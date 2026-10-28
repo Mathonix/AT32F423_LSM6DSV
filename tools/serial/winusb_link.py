@@ -1,10 +1,12 @@
 """Windows-only interface-2 transport. Never resets USB or changes drivers."""
 import ctypes as c
 from ctypes import wintypes as w
-import uuid,time,struct,binascii
+import os,uuid,time,struct,binascii
 
 GUID_TEXT='7b926486-7eee-499c-bffc-1ca59c7dd9ed'
-EXPECTED_SERIAL='22EC987C8068'
+# Physical board serial. Kept in the environment so the repository carries no
+# device identity; empty accepts the single AT32 interface that is present.
+EXPECTED_SERIAL=os.environ.get('GYROA_BOARD_SERIAL','').strip()
 class GUID(c.Structure):
     _fields_=[('bytes',c.c_ubyte*16)]
 class INTERFACE_DATA(c.Structure):
@@ -63,7 +65,7 @@ class WinUSB:
             raw=self.descriptor(1,0,0);vid,pid=struct.unpack_from('<HH',raw,8)
             if (vid,pid)!=(0x2e3c,0xf401):raise RuntimeError('Wrong USB VID/PID')
             self.serial=self.descriptor(3,raw[16],0x409)[2:].decode('utf-16-le')
-            if self.serial!=EXPECTED_SERIAL:raise RuntimeError('Wrong physical board serial')
+            if EXPECTED_SERIAL and self.serial!=EXPECTED_SERIAL:raise RuntimeError('Wrong physical board serial')
             for pipe in [3,0x83]:
                 timeout=w.ULONG(250);self._ok(self.dll.WinUsb_SetPipePolicy(self.handle,pipe,3,c.sizeof(timeout),c.byref(timeout)))
         except BaseException:self.close();raise

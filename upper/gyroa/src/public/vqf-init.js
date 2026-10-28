@@ -1,4 +1,4 @@
-// AT32 AHRS · 静置初始化 VQF 参数（vqfinit1）：协议 + 状态机 + DOM 绑定。规格 /workspace/zaru/host-agent-vqf-static-init.md。
+// AT32 AHRS · 静置初始化 VQF 参数（vqfinit1）：协议 + 状态机 + DOM 绑定。规格见内部文档 host-agent-vqf-static-init.md（不随仓库发布）。
 // 帧仍为 AA 55 | id | len | seq | payload | CRC16-CCITT(LE)，由 app.js 负责收发；本文件只定义：
 //   0x29 查询状态（空）→ 0x0D 28 B（不回 ACK）       0x2A 开始（空，需设置模式）→ ACK + 0x0D
 //   0x2B 取消（空，不需设置模式）→ ACK + 0x0D       0x2C 查询参数（空）→ 0x0E 52 B（不回 ACK）

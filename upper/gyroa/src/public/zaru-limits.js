@@ -1,11 +1,11 @@
 // AT32 AHRS · 零角速保持（ZARU）阈值读写：协议 + 状态机 + 可选 DOM 绑定。纯逻辑与 DOM 分开，供 gyro1 / gyro3 共用。
-// 规格：/workspace/zaru/host-agent-zaru-limits.md（固件尚未烧录；本文件只按规格实现，未经硬件验证）。
+// 规格：内部文档 host-agent-zaru-limits.md（不随仓库发布；固件尚未烧录，本文件只按规格实现，未经硬件验证）。
 // 帧仍为 AA 55 | id | len | seq | payload | CRC16-CCITT(LE)，由 app.js 的 send()/解析器负责；本文件只定义：
 //   0x2E 查询（空载荷；成功只回 0x0F，不回 ACK；非空 → ACK 0x02）
 //   0x2F 写入（20 B，需设置模式；总是先 ACK detail=0，再回 0x0F）
 //   0x0F 阈值消息（40 B，version=1；当前值 @4..21，已保存值 @22..39）
 // 成功 = ACK 0 + 随后 0x0F 的当前值等于写入值（f32 比较）；persist=1 时已保存值也须相等。旧固件 ACK 0x01 → 隐藏编辑区。
-// restore1：0x31 恢复默认（2 B：persist, 0；需设置模式；先 ACK detail=0 再回 0x0F）。规格 /workspace/zaru/host-agent-zaru-restore.md。
+// restore1：0x31 恢复默认（2 B：persist, 0；需设置模式；先 ACK detail=0 再回 0x0F）。规格见内部文档 host-agent-zaru-restore.md。
 //   默认值只来自固件 zaru_limits_default()：上位机不用 0x2F 写默认数，界面显示用回读的 0x0F 填充；
 //   DEFAULTS 只用于核对回读（ACK 0 + 当前值 == 默认表；persist=1 时已保存值也 == 默认表）。旧固件 ACK 0x01 → 只隐藏「恢复默认」。
 // 改阈值不切换姿态稳定性档位，不发送 0x26 / 0x27 / 0x0B 以外的任何滤波命令（实际上一条也不发）。
