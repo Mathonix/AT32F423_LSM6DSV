@@ -1,0 +1,6 @@
+{
+  "$schema": "../node_modules/wrangler/config-schema.json",
+  "name": "gyroa-upper-previous",
+  "pages_build_output_dir": "../dist/pages-previous",
+  "compatibility_date": "2026-10-14"
+}

@@ -40,7 +40,9 @@ jobs:
 
       - name: Build upper/gyroa
         working-directory: upper/gyroa
-        run: npm run build
+        run: |
+          npm run build
+          npm run build:pages
 
       - name: Verify build output
         working-directory: upper/gyroa
@@ -48,6 +50,9 @@ jobs:
           test -s dist/public/index.html
           test -s dist/worker.js
           test -s dist/asset-manifest.json
+          test -s dist/pages/index.html
+          test -s dist/pages/_worker.js
+          test -s dist/pages/_routes.json
 
       - name: Check Cloudflare credentials
         if: github.event_name != 'pull_request' && github.ref == 'refs/heads/master'
@@ -59,15 +64,15 @@ jobs:
             exit 1
           fi
 
-      # Pages is the independently accessible preview/build output.
-      # Run from repository root to avoid loading the Worker's wrangler.jsonc.
+      # Pages includes the firmware Release API through its own configuration.
       - name: Deploy static site to Cloudflare Pages
         if: github.event_name != 'pull_request' && github.ref == 'refs/heads/master'
+        working-directory: upper/gyroa/pages
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: e30118e3ed578608e54c16bd9de66929
         run: |
-          upper/gyroa/node_modules/.bin/wrangler pages deploy upper/gyroa/dist/public \
+          ../node_modules/.bin/wrangler pages deploy \
             --project-name=gyroa-upper \
             --branch=master \
             --commit-hash="$GITHUB_SHA"

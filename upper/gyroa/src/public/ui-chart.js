@@ -153,8 +153,11 @@
     el.querySelector('#czPause').addEventListener('click', () => setPaused(!zoom.frozen));
     el.addEventListener('click', (e) => { if (e.target === el) closeZoom(); });     // 点背景
     const plot = el.querySelector('.cz-plot');
-    plot.addEventListener('mousemove', (e) => { const r = zoom.canvas.getBoundingClientRect(); zoom.hover = { x: e.clientX - r.left, y: e.clientY - r.top }; });
-    plot.addEventListener('mouseleave', () => { zoom.hover = null; zoom.tip.hidden = true; });
+    const inspect = (e) => { const r = zoom.canvas.getBoundingClientRect(); zoom.hover = { x: e.clientX - r.left, y: e.clientY - r.top }; drawZoom(performance.now()); };
+    plot.addEventListener('pointermove', inspect);
+    plot.addEventListener('pointerdown', (e) => { if (e.pointerType !== 'mouse') { e.preventDefault(); plot.setPointerCapture(e.pointerId); } inspect(e); });
+    plot.addEventListener('pointerleave', (e) => { if (e.pointerType === 'mouse') { zoom.hover = null; zoom.tip.hidden = true; } });
+    plot.addEventListener('pointercancel', () => { zoom.hover = null; zoom.tip.hidden = true; });
   }
   // 冻结：复制环形缓冲（CAP 个样本）与冻结时刻；渲染 / 统计 / 悬停都用这份副本
   function freeze(g, now) {
@@ -168,7 +171,7 @@
     b.textContent = on ? '继续' : '暂停'; b.setAttribute('aria-pressed', String(on));
     b.title = on ? '继续：恢复实时显示' : '暂停：冻结放大图（后台继续采集）';
     zoom.el.dataset.paused = String(on);
-    zoom.el.querySelector('.cz-hint').textContent = on ? `已暂停 · 显示冻结数据（后台继续采集）· 悬停查看数值 · Esc 关闭` : `悬停查看数值 · Esc 关闭 · 最近 ${WINDOW_MS / 1000} s`;
+    zoom.el.querySelector('.cz-hint').textContent = on ? `已暂停 · 后台继续采集 · 触摸或悬停查看数值` : `触摸或悬停查看数值 · 最近 ${WINDOW_MS / 1000} s`;
     drawZoom(performance.now());
   }
   function openZoom(g) {
@@ -180,6 +183,8 @@
     zoom.stats.querySelectorAll('.cz-ax i').forEach((node, a) => { node.textContent = (g.labels || AX)[a]; });
     zoom.el.dataset.group = g.name;
     zoom.el.hidden = false; document.body.classList.add('zoom-open');
+    const app = document.querySelector('.app');
+    if (app && !zoom.background) { zoom.background = app; zoom.wasInert = app.inert; app.inert = true; }
     zoom.el.querySelector('#czClose').focus({ preventScroll: true });
     drawZoom(performance.now());
     return true;
@@ -188,6 +193,7 @@
     if (!zoom.el || zoom.el.hidden) return;
     setPaused(false); // 关闭即回到实时
     zoom.el.hidden = true; zoom.g = null; zoom.hover = null; zoom.last = null; document.body.classList.remove('zoom-open');
+    if (zoom.background) { zoom.background.inert = zoom.wasInert; zoom.background = null; }
     if (zoom.opener && document.contains(zoom.opener)) zoom.opener.focus?.({ preventScroll: true });
   }
   function drawZoom(now) {
@@ -220,7 +226,16 @@
     g.zoomBtn = $(`${g.name}ZoomBtn`);
     g.zoomBtn?.addEventListener('click', () => openZoom(g));
   }
-  document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && zoom.g) { e.preventDefault(); e.stopPropagation(); closeZoom(); } }, true);
+  document.addEventListener('keydown', (e) => {
+    if (!zoom.g) return;
+    if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); closeZoom(); }
+    if (e.key === 'Tab') {
+      const buttons = [...zoom.el.querySelectorAll('button:not(:disabled)')];
+      const first = buttons[0], last = buttons.at(-1);
+      if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last?.focus(); }
+      else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first?.focus(); }
+    }
+  }, true);
 
   function loop(now) {
     requestAnimationFrame(loop);

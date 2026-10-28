@@ -687,6 +687,7 @@ let setting = false;
 let lastFrames = 0;
 let lastRateAt = performance.now();
 let frameRate = 0;
+let lastUsbTransferStats = null;
 let justChannels = 3;
 let parseModeValue = 'auto';
 let pose = { yaw: null, pitch: null, roll: null, temp: null };
@@ -2036,6 +2037,7 @@ async function connect(autoConnection = null) {
     badLengthLogged = 0;
     lastFrames = 0;
     lastRateAt = performance.now();
+    lastUsbTransferStats = null;
     lastPoseAt = 0;
     for (const key of ['yaw', 'pitch', 'roll']) poseTimes[key] = 0;
     lastImuAt = 0;
@@ -2151,9 +2153,13 @@ function firmwareStatus(text, phase=firmwarePhase) {
   firmwarePhase=phase; $('firmwareStatus').textContent=text; updateFirmwareUI();
 }
 async function selectFirmwareFile() {
-  const generation=++firmwareFileGeneration, file=$('firmwareFile').files[0];
+  return prepareFirmwareFile($('firmwareFile').files[0]);
+}
+async function prepareFirmwareFile(file) {
+  if(firmwareBusy||firmwareChoosingPort)return false;
+  const generation=++firmwareFileGeneration;
   firmwareImage=null;$('firmwareProgress').value=0;updateFirmwareUI();
-  if(!file) {$('firmwareInfo').textContent='尚未选择固件。';return;}
+  if(!file) {$('firmwareInfo').textContent='尚未选择固件。';firmwareStatus('请选择并下载 Release 固件，或选择本地应用文件。','idle');return false;}
   try {
     if(!/\.bin$/i.test(file.name) || file.size<8 || file.size>firmware.APP_SIZE)
       throw new Error('请选择本板应用 .bin，最大 208 KiB；不接受 Bootloader、整片 Flash 或压缩包。');
@@ -2164,11 +2170,14 @@ async function selectFirmwareFile() {
     firmwareImage={name:file.name,data,...info,sha256};
     $('firmwareInfo').textContent=`${file.name} · ${info.bytes.toLocaleString()} 字节\nCRC32 ${hex(info.crc32,8)}\nSHA256 ${sha256}`;
     firmwareStatus('固件文件检查通过。确认文件适用于当前板卡后点击开始升级。','ready');
+    return true;
   } catch(error) {
     if(generation!==firmwareFileGeneration) return;
     $('firmwareInfo').textContent='固件文件检查失败。';firmwareStatus(error.message,'invalid');
+    return false;
   }
 }
+globalThis.GyroFirmwareFiles={select:prepareFirmwareFile,clear:()=>{$('firmwareFile').value='';return prepareFirmwareFile(null);},busy:()=>firmwareBusy||firmwareChoosingPort};
 const firmwareDelay = ms=>new Promise(resolve=>setTimeout(resolve,ms));
 async function firmwareBounded(promise, ms, text) {
   let timer;
@@ -2509,6 +2518,19 @@ function updateRate() {
   if (now - lastRateAt >= 1000) {
     frameRate = Math.round(lastFrames * 1000 / (now - lastRateAt));
     $('rate').textContent = String(frameRate);
+    const usbStats = port?.webusb ? port.getTransferStats?.() : null;
+    if (usbStats) {
+      const previous = lastUsbTransferStats;
+      const bytesPerSecond = previous?.generation === usbStats.generation
+        ? Math.round((usbStats.readBytes - previous.readBytes) * 1000 / (now - previous.at)) : null;
+      $('statsLabel').title = `WebUSB 接收 ${bytesPerSecond ?? '--'} B/s · 累计 ${usbStats.readBytes} B · ` +
+        `接收队列 ${usbStats.inFlight}/${usbStats.readAhead} · 接收错误 ${usbStats.readErrors} · ` +
+        `最久等待 ${usbStats.maxReadWaitMs.toFixed(1)} ms`;
+      lastUsbTransferStats = {...usbStats, at:now};
+    } else {
+      $('statsLabel').title = '';
+      lastUsbTransferStats = null;
+    }
     lastFrames = 0;
     lastRateAt = now;
   }
@@ -2618,12 +2640,13 @@ function render3D() {
   const { width, height } = canvas;
   context.clearRect(0, 0, width, height);
   const realModel = pcbView?.ready;
-  if (!realModel) { context.fillStyle = '#0d1623'; context.fillRect(0, 0, width, height); }
+  const stageColor = (name, fallback) => window.GyroTheme?.color(name, fallback) || fallback;
   const { R, source } = currentRotation();
   const scene = projectBoard(R, width, height);
   const { cam } = scene;
   // 地面网格（世界系 Z = -1.1 平面）
-  context.strokeStyle = '#1f3350'; context.lineWidth = 1;
+  context.strokeStyle = stageColor('--stage-grid', '#bfc3b7'); context.lineWidth = 1;
+  context.globalAlpha = 0.45;
   for (let k = -3; !realModel && k <= 3; k += 1) {
     const a = projectPoint(cam, [k * 0.5, -1.5, -1.1]); const b = projectPoint(cam, [k * 0.5, 1.5, -1.1]);
     const c = projectPoint(cam, [-1.5, k * 0.5, -1.1]); const d = projectPoint(cam, [1.5, k * 0.5, -1.1]);
@@ -2655,10 +2678,10 @@ function render3D() {
   const screen = realModel ? pcbView.render(R, stale && running) : scene.screen;
   const project = point => realModel ? pcbView.project(point) : projectPoint(cam, point);
   const origin = project([0, 0, 0]);
-  const axes = [[[1.65, 0, 0], '#ff6b6b', 'X'], [[0, 1.4, 0], '#4be08a', 'Y'], [[0, 0, 1.0], '#5aa9ff', 'Z']];
+  const axes = [[[1.65, 0, 0], stageColor('--c-x', '#cb654e'), 'X'], [[0, 1.4, 0], stageColor('--c-y', '#608064'), 'Y'], [[0, 0, 1.0], stageColor('--c-z', '#547ca0'), 'Z']];
   for (const [axis, color, label] of axes) drawArrow(context, origin, project(mulVec(R, axis)), color, label);
   context.globalAlpha = 1;
-  context.fillStyle = '#8fa4bf'; context.font = '13px ui-monospace,monospace';
+  context.fillStyle = stageColor('--tx3', '#777a70'); context.font = '13px ui-monospace,monospace';
   context.fillText(`${realModel ? '真实板卡' : '3D'} · ${source}${stale && running ? ' · 数据超时' : ''}`, 14, 22);
   const hull = convexHull(screen);
   lastProjection = { hullArea: polygonArea(hull), hull, screen: screen.map((p) => [p[0], p[1]]), faces: scene.faces.map((f) => f.name), source, R, model: realModel ? pcbView.state() : null };
@@ -2764,7 +2787,7 @@ if (biasHist) {
 if ($('startupBiasRead')) $('startupBiasRead').onclick = () => sendQuiet(CMD.QUERY_STARTUP_BIAS);
 if (vqfInit) { vqfView = GyroVqf.bindDom(vqfInit, { editable: () => settingEditable(), connected: () => running && !firmwareBusy }); vqfView.render(); }
 resetParser(); updateSettingUI(); draw(); updateRate();
-import('/pcb-view.js?v=20261001fw1-app2').then(async ({ createPCBView }) => {
+import('/pcb-view.js?v=20261024stage1').then(async ({ createPCBView }) => {
   const availability = ready => {
     $('modelStatus').textContent = ready ? '真实板卡 · 拖动旋转视角，滚轮 / 双指缩放' : '真实模型暂不可用，显示简化姿态模型';
     $('modelReset').disabled = !ready;

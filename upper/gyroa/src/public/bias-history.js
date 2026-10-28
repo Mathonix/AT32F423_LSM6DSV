@@ -119,13 +119,13 @@
     let drawn = null, drawnUsage = null;
     function render() {
       const s = ctl.state, p = $('bhPanel'); if (!p) return;
-      set(p, 'hidden', s.supported === false);
+      set(p, 'hidden', s.supported === false && !p.dataset.overview);
       const res = s.reading ? 'reading' : s.result || '';
       if (p.dataset.result !== res) p.dataset.result = res;
       const m = s.meta;
       set($('bhMeta'), 'textContent', m ? `${m.count} 条 · ${RECORD_TEXT[m.recordVersion] || m.recordVersion} · 序号 ${m.sequence}` : '--');
       set($('bhCorrupt'), 'hidden', !(m && m.corrupt));
-      set($('bhMsg'), 'textContent', s.message);
+      set($('bhMsg'), 'textContent', s.supported === false && p.dataset.overview ? '当前固件不支持读取零偏历史，请升级固件后使用。' : s.message);
       set($('bhRead'), 'disabled', !connected() || s.reading || s.supported === false);
       set($('bhRead'), 'textContent', s.reading ? '读取中…' : '读取');
       const list = s.list || [];

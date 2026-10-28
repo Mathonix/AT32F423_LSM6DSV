@@ -1,5 +1,5 @@
-// gyroa · 20261009style1 — theme switch (dark default, light optional), persisted in localStorage('gyroa-theme').
-// Without a saved choice it follows prefers-color-scheme (light → light, otherwise dark).
+// gyroa · 20261009style1 — theme switch (light default, dark optional), persisted in localStorage('gyroa-theme').
+// New visitors start in light mode; an explicit saved theme is always respected.
 // GyroTheme.color('--chart-grid', fallback) lets canvas code read the active palette (cached until the theme changes).
 // UI only: no device, protocol or storage-of-config logic here.
 // 20261009theme2: a click on #themeToggle reveals the new theme as a circle growing from the button (View Transitions API).
@@ -9,13 +9,12 @@
 (function () {
   var KEY = 'gyroa-theme', root = document.documentElement, cache = {};
   var DURATION = 600, EASING = 'cubic-bezier(.65,0,.35,1)', pending = null, active = null, lastPath = '', gen = 0; // gen: a skipped transition's late update callback must not re-apply its theme
-  var mq = window.matchMedia ? matchMedia('(prefers-color-scheme: light)') : null;
   function saved() { try { var v = localStorage.getItem(KEY); return v === 'light' || v === 'dark' ? v : null; } catch (e) { return null; } }
-  function system() { return mq && mq.matches ? 'light' : 'dark'; }
+  function system() { return 'light'; }
   function current() { return saved() || system(); }
   function sync(theme) {
     var meta = document.querySelector('meta[name="theme-color"]');
-    if (meta) meta.setAttribute('content', theme === 'light' ? '#F3F5F8' : '#0B1017');
+    if (meta) meta.setAttribute('content', theme === 'light' ? '#f4f3ef' : '#191c18');
     var b = document.getElementById('themeToggle');
     if (b) {
       var next = theme === 'light' ? '深色' : '浅色';
@@ -28,7 +27,6 @@
     try { window.dispatchEvent(new CustomEvent('gyroa-theme', { detail: theme })); } catch (e) {}
   }
   apply(current());
-  if (mq && mq.addEventListener) mq.addEventListener('change', function () { if (!saved()) apply(system()); });
   window.GyroTheme = {
     get: current,
     set: function (theme) { try { localStorage.setItem(KEY, theme); } catch (e) {} apply(theme); },

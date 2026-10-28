@@ -5,9 +5,12 @@ import {createHash} from 'node:crypto';
 import {execFileSync} from 'node:child_process';
 import {build} from 'esbuild';
 const root=resolve(dirname(fileURLToPath(import.meta.url)),'..');
-const source=join(root,'src/public'),target=resolve(root,'dist/public');
-// Only remove this project's generated public directory; never touch the editable source.
-if(target!==join(root,'dist/public') || !target.startsWith(root+sep) || target===source) throw new Error('Unsafe build target');
+const pages=process.argv.includes('--pages');
+const domain=process.argv.find(arg=>arg.startsWith('--domain='))?.slice('--domain='.length)||(pages?'gyroa-upper.pages.dev':'gyroa.233688.xyz');
+const output=pages?'pages':'public';
+const source=join(root,'src/public'),target=resolve(root,'dist',output);
+// Only remove the selected generated output inside this project's dist folder.
+if(target!==join(root,'dist',output) || !target.startsWith(join(root,'dist')+sep) || target===source) throw new Error('Unsafe build target');
 async function files(dir) {
   const result=[];
   for(const item of await readdir(dir,{withFileTypes:true})) {
@@ -23,9 +26,14 @@ execFileSync(process.execPath,['--check',join(root,'src/index.js')],{stdio:'pipe
 await mkdir(join(root,'dist'),{recursive:true});
 await rm(target,{recursive:true,force:true});
 await cp(source,target,{recursive:true});
-await build({entryPoints:[join(root,'src/index.js')],bundle:true,format:'esm',platform:'browser',target:'es2022',outfile:join(root,'dist/worker.js')});
+await build({entryPoints:[join(root,'src/index.js')],bundle:true,format:'esm',platform:'browser',target:'es2022',outfile:pages?join(target,'_worker.js'):join(root,'dist/worker.js')});
+if(pages) {
+  // Pages Advanced Mode reuses the existing API Worker. All other requests
+  // go directly to Pages static hosting, including the hash-routed UI.
+  await writeFile(join(target,'_routes.json'),JSON.stringify({version:1,include:['/healthz','/api/releases','/api/releases/*'],exclude:[]},null,2)+'\n');
+}
 const hashes={};
 for(const path of await files(target)) hashes[relative(target,path).split(sep).join('/')]=createHash('sha256').update(await readFile(path)).digest('hex');
-const manifest={version:'20261023runtime1',domain:'gyroa.233688.xyz',firmware:'20261023q',firmwareSha256:'86466a07f7ce9a9d8d4d667abe62cda857a26850c6facf919af0fddf7ebf9b01',eskfRuntimeAbi:1,configVersions:[1,2,3,4,5],files:hashes};
-await writeFile(join(root,'dist/asset-manifest.json'),JSON.stringify(manifest,null,2)+'\n');
-console.log(`Built ${assets.length} static assets and worker; target ${manifest.domain}. No deployment performed.`);
+const manifest={version:'20261025webusb1',domain,firmware:'20261023q',firmwareSha256:'86466a07f7ce9a9d8d4d667abe62cda857a26850c6facf919af0fddf7ebf9b01',eskfRuntimeAbi:1,configVersions:[1,2,3,4,5],files:hashes};
+await writeFile(join(root,'dist',pages?'pages-manifest.json':'asset-manifest.json'),JSON.stringify(manifest,null,2)+'\n');
+console.log(`Built ${assets.length} static assets and ${pages?'Pages Functions':'worker'}; target ${manifest.domain}. No deployment performed.`);

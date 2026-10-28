@@ -84,9 +84,9 @@
   const kib = (n) => n >= 1024 ? `${(n / 1024).toFixed(1)} KB` : `${n} B`;
   $('fwRecoveryLink').addEventListener('click', () => { $('fwRecoveryBox').hidden = !$('fwRecoveryBox').hidden; });
   function refreshFirmware() {
-    const file = $('firmwareFile').files?.[0];
+    const file = firmwareImage || $('firmwareFile').files?.[0];
     setText($('fwFileName'), file ? file.name : '请选择固件');
-    setText($('fwFileSize'), file ? `${kib(file.size)}${firmwareImage ? ` · CRC32 ${firmwareImage.crc32.toString(16).padStart(8, '0')}` : ''}` : '');
+    setText($('fwFileSize'), file ? `${kib(file.size ?? file.bytes)}${firmwareImage ? ` · CRC32 ${firmwareImage.crc32.toString(16).padStart(8, '0')}` : ''}` : '');
     setText($('fwPct'), `${$('firmwareProgress').value}%`);
     setHidden($('firmwareStopBtn'), !firmwareBusy);
     if ($('firmwareRecovery').checked) setHidden($('fwRecoveryBox'), false);

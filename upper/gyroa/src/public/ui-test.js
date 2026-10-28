@@ -4,6 +4,8 @@
   const { AXES } = GyroDrift;
   const session = GyroDrift.session = GyroDrift.createSession();
   let diagSupported = true, diagnosticPending = false, lastQuery = 0, lastDraw = 0, wakeLock = null;
+  let exportedSession = null;
+  const unexported = () => session.state.frames > 0 && session.state !== exportedSession;
   GyroDrift.unsupportedDiag = () => { diagSupported = false; };
   const num = (n, digits = 5) => Number.isFinite(n) ? n.toFixed(digits) : '—';
   const clock = ms => { const seconds = Math.ceil(ms / 1000); return `${String(Math.floor(seconds / 60)).padStart(2, '0')}:${String(seconds % 60).padStart(2, '0')}`; };
@@ -32,7 +34,10 @@
     const url = URL.createObjectURL(new Blob([content], { type }));
     const a = document.createElement('a'); a.href = url;
     a.download = `gyroa-drift-${session.summary().requestedSeconds / 60}min-${session.state.startedAt?.replace(/[:.]/g, '-') || 'partial'}.${suffix}`;
-    a.click(); setTimeout(() => URL.revokeObjectURL(url), 1000);
+    a.hidden = true; document.body.append(a);
+    try { a.click(); exportedSession = session.state; }
+    finally { a.remove(); setTimeout(() => URL.revokeObjectURL(url), 60000); }
+    render();
   }
   $('driftCsv').onclick = () => download(session.csv(), 'text/csv;charset=utf-8', 'csv');
   $('driftJson').onclick = () => download(JSON.stringify({ ...session.summary(), seconds: session.rows() }, null, 2), 'application/json', 'json');
@@ -42,7 +47,7 @@
     if (!session.active || !e.target.closest?.(MUTATING)) return;
     e.preventDefault(); e.stopImmediatePropagation(); GyroUI.toast('请先停止零漂测试，再修改设备', 'warn');
   }, true);
-  window.addEventListener('beforeunload', e => { if (session.active) { e.preventDefault(); e.returnValue = ''; } });
+  window.addEventListener('beforeunload', e => { if (session.active || unexported()) { e.preventDefault(); e.returnValue = ''; } });
   document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') { wakeLock = null; void keepAwake(); } });
   const states = { idle: '未开始', waiting: '等待首帧', running: '测试中', complete: '已完成', cancelled: '已停止', interrupted: '测试中断' };
   function render() {
@@ -54,6 +59,8 @@
     $('driftDuration').disabled = session.active;
     $('driftCsv').disabled = $('driftJson').disabled = !s.frames || session.active;
     $('driftReplaceBox').hidden = !s.frames || session.active;
+    const exportHint = $('driftExportHint');
+    if (exportHint) { exportHint.hidden = !s.frames || session.active; exportHint.textContent = unexported() ? '测试结果尚未导出，刷新或关闭页面会丢失。' : '已请求导出，请确认下载文件已保存。'; }
     $('driftConfig').textContent = metadataText(s.metadata || c.metadata);
     const m = s.metadata || c.metadata;
     $('driftHoldWarning').hidden = m.profile !== 3 || m.mode !== 0;

@@ -211,7 +211,7 @@
     function render() {
       const s = ctl.state, on = connected(), st = s.status, cfg = s.settings, act = active(st);
       const panel = $('vqfPanel'); if (!panel) return;
-      set(panel, 'hidden', s.supported === false);
+      set(panel, 'hidden', s.supported === false && !panel.dataset.overview);
       const state = s.supported === false ? 'unsupported' : act ? 'active' : st?.state === STATE.DONE ? 'done' : st?.state === STATE.FAILED ? 'failed' : 'idle';
       if (panel.dataset.state !== state) panel.dataset.state = state;
       set($('vqfSource'), 'textContent', cfg ? SOURCE_TEXT[cfg.source] : '--');
@@ -258,7 +258,7 @@
       set($('vqfLive'), 'textContent', live);
       const moving = act && st && (st.gyroRateDps > 2.0 || st.accDevMs2 > 0.8); // 文档：明显移动门槛（仅用于提示颜色）
       if ($('vqfLive') && $('vqfLive').dataset.warn !== String(!!moving)) $('vqfLive').dataset.warn = String(!!moving);
-      set($('vqfMsg'), 'textContent', s.message);
+      set($('vqfMsg'), 'textContent', s.supported === false && panel.dataset.overview ? '当前固件不支持静置初始化，请升级固件后使用。' : s.message);
       const res = s.pending || !s.result || s.message !== s.result.text ? '' : s.result.kind;
       if (panel.dataset.result !== res) panel.dataset.result = res;
       const ready = on && s.supported === true && !s.pending;

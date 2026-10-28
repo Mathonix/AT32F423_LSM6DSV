@@ -3,6 +3,8 @@
   const RATES=[1,5,10,20,50,100,200,500],COMMAND=0x60,QUERY=0x62,DATA=0x61,CONFIG=0x63,MAX_BYTES=64*1024*1024;
   const HEADER='received_at_utc,elapsed_s,device_time_us,sample_seq,ax_g,ay_g,az_g,gx_dps,gy_dps,gz_dps,yaw_deg,pitch_deg,roll_deg,missing_samples,timing_gap_us,flags,sample_hz,firmware,mode,algorithm,gyro_range_dps,acc_range_g\r\n';
   const escape=x=>/[",\r\n]/.test(String(x??''))?'"'+String(x).replaceAll('"','""')+'"':String(x??'');
+  const ALGORITHMS=['VQF','EKF','ESKF'];
+  const algorithmName=id=>Number.isInteger(id)&&id>=0&&id<ALGORITHMS.length?ALGORITHMS[id]:'未知';
   function decode(id,p){
     const length=id===DATA?56:12;
     if(p.length!==length)return {type:'badLength',id,length:p.length,expected:length};
@@ -39,7 +41,7 @@
         lost=seqDelta-1;gap=dt-m.periodUs*seqDelta;elapsed+=dt;
       }
       const at=now(),received=wall(),meta=s.metadata;
-      const row=[new Date(received).toISOString(),(elapsed/1e6).toFixed(6),m.tsUs,m.sampleSeq,...m.values.map(x=>x.toFixed(6)),lost,gap,m.flags,s.hz,meta.firmware,meta.mode,meta.algorithm===1?'EKF':'VQF',meta.rangeDps,meta.accRangeG].map(escape).join(',')+'\r\n';
+      const row=[new Date(received).toISOString(),(elapsed/1e6).toFixed(6),m.tsUs,m.sampleSeq,...m.values.map(x=>x.toFixed(6)),lost,gap,m.flags,s.hz,meta.firmware,meta.mode,algorithmName(meta.algorithm),meta.rangeDps,meta.accRangeG].map(escape).join(',')+'\r\n';
       const bytes=new TextEncoder().encode(row).length;
       if(s.bytes+bytes>maxBytes){stop('已达到文件大小上限，请导出数据后开始下一轮');return false;}
       lines.push(row);if(lines.length>=256){chunks.push(lines.join(''));lines=[];}
@@ -77,6 +79,6 @@
     function onConfig(m,seq){const p=state.pending;if(!p||p.seq!==seq)return;p.reply=m;complete(p);}
     return {state,reset,onAck,onConfig,query:()=>request('query'),start:(hz,token)=>request('start',hz,token),renew:(hz,token)=>request('renew',hz,token),stop:(hz,token)=>request('stop',hz,token)};
   }
-  root.GyroCapture={RATES,COMMAND,QUERY,DATA,CONFIG,MAX_BYTES,HEADER,decode,payload,createSession,createController,session:createSession(),
+  root.GyroCapture={RATES,COMMAND,QUERY,DATA,CONFIG,MAX_BYTES,HEADER,algorithmName,decode,payload,createSession,createController,session:createSession(),
     busy:()=>!!root.GyroCapture.session.state().active||['start','renew','stop'].includes(root.GyroCapture.control?.state.pending?.kind)};
 })(globalThis);

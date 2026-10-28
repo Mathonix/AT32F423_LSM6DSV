@@ -2,6 +2,8 @@
   'use strict';
   const $=id=>document.getElementById(id),api=GyroCapture,session=api.session,control=api.control,io=GyroCaptureIO;
   let signature=null,leaseAt=0,lastResult=null,wakeLock=null,lastDraw=0;
+  let exportedSession=null;
+  const unexported=()=>session.state().rows>0&&session.state()!==exportedSession;
   const size=n=>n<1024?`${n} B`:n<1024**2?`${(n/1024).toFixed(1)} KB`:`${(n/1024**2).toFixed(2)} MB`;
   const signatureOf=c=>JSON.stringify([c.metadata.firmware,c.metadata.mode,c.metadata.algorithm,c.metadata.rangeDps,c.metadata.accRangeG,c.metadata.profile,c.metadata.restBiasEnabled,c.metadata.motionBiasEnabled,c.metadata.vqfSettings,c.metadata.zaruSettings,c.metadata.gyroScale,c.metadata.vqfTuning]);
   async function awake(){if(!session.state().active||!navigator.wakeLock||document.visibilityState!=='visible'||wakeLock)return;try{wakeLock=await navigator.wakeLock.request('screen');wakeLock.addEventListener('release',()=>wakeLock=null);}catch{}}
@@ -21,12 +23,15 @@
   $('captureCsv').onclick=()=>{
     const s=session.state();if(!s.rows||api.busy())return;
     const blob=new Blob(session.parts(),{type:'text/csv;charset=utf-8'}),url=URL.createObjectURL(blob),a=document.createElement('a');
-    a.href=url;a.download=`imu_${new Date(s.firstWall).toISOString().replace(/[:.]/g,'-')}_${s.hz}Hz.csv`;a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);
+    a.href=url;a.download=`imu_${new Date(s.firstWall).toISOString().replace(/[:.]/g,'-')}_${s.hz}Hz.csv`;a.hidden=true;document.body.append(a);
+    // Some mobile browsers need an attached anchor; large downloads may start asynchronously.
+    try{a.click();exportedSession=s;}finally{a.remove();setTimeout(()=>URL.revokeObjectURL(url),60000);}
+    render();
   };
   // Keep configuration stable across all views while retaining read-only queries.
   const mutating='#gyroScalePrepare,#gyroScaleApply,#gyroScaleRestore,#insStart,#driftStart,#vqfTuningApply,#vqfTuningRestore,#magCalStart,#magCalVerify,#magCalSave,#magCalRestore,#ws2812Enable,#magRejectionEnable,#restBiasEnable,#gyroPrefilterEnable,#gyroPrefilterApply,#algorithmApply,#statusRestartBtn,#testRestartBtn,#applyBtn,#outputApplyAll,#outputApply0,#outputApply1,#rateApplyBtn,#canApply,#canIdBtn,#filterApply,#zaruSave,#zaruRestore,#vqfStart,#vqfRestore,#acc6Btn,#streamApplyBtn,#firmwareStartBtn,#qsFusion button,#qsFilter button,#enterBtn,#exitBtn';
   document.addEventListener('click',e=>{if(api.busy()&&e.target.closest?.(mutating)){e.preventDefault();e.stopImmediatePropagation();GyroUI.toast('请先停止数据采集，再修改设备','warn');}},true);
-  window.addEventListener('beforeunload',e=>{if(session.state().active){e.preventDefault();e.returnValue='';}});
+  window.addEventListener('beforeunload',e=>{if(session.state().active||unexported()){e.preventDefault();e.returnValue='';}});
   document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='visible')void awake();});
   function render(){
     const c=io.context(),s=session.state(),v=control.state,now=performance.now();
@@ -46,7 +51,9 @@
     $('captureRows').textContent=s.rows.toLocaleString();$('captureElapsed').textContent=(s.elapsedUs/1e6).toFixed(1)+' s';$('captureSize').textContent=size(s.bytes);
     $('captureQuality').textContent=`丢失 ${s.lost} 帧 · 损坏 ${s.bad} 帧 · 时间间断 ${s.timingGaps} 次 · 接近量程 ${s.clipped} 帧`;
     const meta=s.metadata||c.metadata;
-    $('captureConfig').textContent=`${meta.mode===0?'六轴':meta.mode===2?'九轴相对角':meta.mode===1?'九轴':'—'} · ${meta.algorithm===1?'EKF':'VQF'} · 陀螺仪 ±${meta.rangeDps??'—'} °/s · 加速度 ±${meta.accRangeG??'—'} g · ${meta.firmware||'—'}`;
+    $('captureConfig').textContent=`${meta.mode===0?'六轴':meta.mode===2?'九轴相对角':meta.mode===1?'九轴':'—'} · ${api.algorithmName(meta.algorithm)} · 陀螺仪 ±${meta.rangeDps??'—'} °/s · 加速度 ±${meta.accRangeG??'—'} g · ${meta.firmware||'—'}`;
+    const exportHint=$('captureExportHint');
+    if(exportHint){exportHint.hidden=!s.rows||s.active;exportHint.textContent=unexported()?'数据尚未导出，刷新或关闭页面会丢失。':'已请求导出，请确认下载文件已保存。';}
     if(s.latest)s.latest.forEach((x,i)=>$('captureValue'+i).textContent=x.toFixed(i<3?4:3));
     else for(let i=0;i<9;i++)$('captureValue'+i).textContent='—';
     if(!s.active&&wakeLock){void wakeLock.release();wakeLock=null;}
