@@ -14,7 +14,13 @@
 
 _Static_assert(sizeof(vqf_static_record_t) == 124U, "static cal record");
 _Static_assert((sizeof(vqf_static_record_t) % 4U) == 0U, "static cal word size");
+#if (APP_FUSION_HZ == 2000U)
 _Static_assert(APP_VQF_STATIC_CAL_MIN_SAMPLES == 108000U, "static cal sample floor");
+#else
+/* Rate sweeps scale the floor with the tick. 60 s of collection still lands
+ * far above the threshold even at half the reference rate. */
+_Static_assert(APP_VQF_STATIC_CAL_MIN_SAMPLES >= 54000U, "static cal sample floor");
+#endif
 _Static_assert(APP_VQF_STATIC_FLASH_SLOT0 + CAL_SECTOR == APP_GYR_BIAS_FLASH_SLOT0_ADDR,
                "static cal slot0 meets gyro bias slot0");
 _Static_assert(APP_VQF_STATIC_FLASH_SLOT1 + CAL_SECTOR == APP_GYR_BIAS_FLASH_SLOT1_ADDR,

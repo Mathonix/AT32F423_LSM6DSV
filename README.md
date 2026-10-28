@@ -1,83 +1,73 @@
 # AT32F423 AHRS
 
-AT32F423KCU7-4 + LSM6DSV + IST8310 姿态固件，当前源码应用版本 `20261023E`。仓库保留固件、配套 Bootloader 与 gyroa 上位机源码和许可证。
+AT32F423KCU7-4（150 MHz，内部 HICK 起振）+ LSM6DSV + IST8310 姿态参考系统。
+仓库包含 APP 固件、配套 Bootloader 与网页上位机 gyroa 的源码，当前源码应用版本 `20261025a`。
 
-**[中文使用指南（末尾附 WS2812 灯语）](docs/使用指南.md)** · [SPI DMA 实板短测与已知问题](docs/SPI_DMA_BOARD_TEST_20261023.md)
+## 在线试用
 
-[下载 PDF 使用说明书（20261023E，8页，末页灯语）](output/pdf/AT32_AHRS_使用说明书_20261023E.pdf)。PDF由公开使用指南生成，构建入口为 `tools/build_current_user_manual.py`（Python、reportlab、Windows微软雅黑字体）；旧版本PDF保留为历史资料。
+上位机已部署到 GitHub Pages，浏览器直接打开，无需安装任何东西：
 
-当前 master 已接入 SPI DMA 采集：单套 ESKF 四元数预测 8 kHz，独立姿态生成 1 kHz；`APP_ESKF_COV_DIV=4`，协方差传播为 2 kHz，加速度输入 2 kHz、完整重力观测标称 500 Hz。不要将它称为“双套完整逐帧协方差 8 kHz ESKF”。60 秒实测 CPU 约76.10%，采集计数闭合；另有20秒 USB序号缺失和自启动1次姿态超龄，仍为限定范围 CONDITIONAL PASS。
+**<https://mathonix.github.io/AT32F423_LSM6DSV/>**
 
-## 构建固件
+- 桌面版 Chrome / Edge 可通过 Web Serial 直连板卡（板载 USB CDC，2 Mbaud）
+- 没有硬件也能看：网址后加 `?mock=1` 进入演示模式，页面顶部会标注「Mock 设备模式」
+- 另有 Cloudflare 镜像 <https://gyroa.233688.xyz/>
 
-需要 GNU Arm Embedded Toolchain、GNU Make，工具链加入 PATH。Windows 可使用 `mingw32-make`；主 Makefile 也支持本机 PlatformIO 工具链路径。
+上位机源码见 [upper/gyroa](upper/gyroa/README.md)（Node.js ≥ 22.12.0）。
+
+![gyroa 状态页](upper/gyroa/docs/preview-status.jpg)
+
+## 固件能力
+
+- **融合算法**：VQF / EKF / ESKF 可切换，六轴 / 九轴可切换；ESKF 采用单套三维姿态误差状态
+- **节拍**：陀螺采样 8 kHz，姿态生成 1 kHz；ESKF 预测 8 kHz、协方差传播 2 kHz、加速度输入 2 kHz、重力观测标称 500 Hz
+- **采集**：SPI1 DMA 读取 LSM6DSV，60 s 实测 CPU 约 76.10%，采集计数闭合
+- **接口**：USB CDC、UART（2 Mbaud）、CAN2，统一 `AA 55 | msg | len | seq | payload | CRC16` 帧
+- **存储**：配置 / 校准区独立于 APP，升级只写 APP，不覆盖 Bootloader 与配置区
+- **校准**：加计六面、陀螺零偏、温度零偏学习、磁椭球；支持后台自动保存
+
+已知限制见 [SPI DMA 实板短测与已知问题](docs/SPI_DMA_BOARD_TEST_20261023.md)：20 秒 USB 序号存在缺失、自启动 1 次姿态超龄，判定为限定范围 CONDITIONAL PASS。
+
+## 目录
+
+| 目录 | 内容 |
+| --- | --- |
+| `src/` `inc/` `linker/` | APP 固件源码 |
+| `bootloader/` | 配套 Bootloader，[说明](bootloader/README.md) |
+| `upper/gyroa/` | 网页上位机，[说明](upper/gyroa/README.md) |
+| `LICENSES/` | 第三方许可证 |
+
+本仓库只发布固件、配套 Bootloader、上位机源码与许可证；采集数据、内部文档与本机工具不在发布范围内。
+
+## 构建
+
+需要 GNU Arm Embedded Toolchain 与 GNU Make（Windows 用 `mingw32-make`），工具链加入 PATH。
 
 ```sh
-# 常用构建，具备九轴能力，可通过保存的配置切换六轴/九轴
-make -B DEBUG_BUILD=0 SIX_AXIS=0 all
-# 强制六轴构建
-make -B DEBUG_BUILD=0 SIX_AXIS=1 all
-# 配套 Bootloader
-make -C bootloader -B all
+make -B DEBUG_BUILD=0 SIX_AXIS=0 all   # 九轴能力，运行时可切六轴
+make -B DEBUG_BUILD=0 SIX_AXIS=1 all   # 强制六轴
+make -C bootloader -B all              # 配套 Bootloader
 ```
 
-Windows 将命令中的 `make` 换成 `mingw32-make`。APP 输出在 `build/lsm6dsv_spi_test/release-9axis/` 或 `release-6axis/`，BL 输出在 `bootloader/build/`。生成 `.bin`、`.hex` 和 `.elf`。
+APP 输出在 `build/lsm6dsv_spi_test/release-9axis/` 或 `release-6axis/`，BL 输出在 `bootloader/build/`，生成 `.bin`、`.hex` 与 `.elf`。
+
+## 烧录
 
 | 区域 | 地址 |
 | --- | --- |
-| Bootloader | `0x08000000`～`0x08007FFF` |
-| APP | `0x08008000`～`0x0803BFFF` |
-| 配置 / 校准 | `0x0803C000`～`0x0803FFFF` |
+| Bootloader | `0x08000000` ~ `0x08007FFF` |
+| APP | `0x08008000` ~ `0x0803BFFF` |
+| 配置 / 校准 | `0x0803C000` ~ `0x0803FFFF` |
 
-首次安装共享启动窗口须用 SWD 配套更新 BL 和 APP，保留配置 / 校准区。网页或串口升级仅更新 APP。[20261004d Release](https://github.com/Mathonix/AT32F423_LSM6DSV/releases/tag/20261004d) 是历史版本，不能作为当前 E 版镜像；本次源码推送不创建新的 Release 或替换其附件。
+首次安装须用 SWD 同时更新 BL 与 APP；之后的升级走 USB CDC / UART / 网页，只写 APP。
 
-## 上位机
+## 文档
 
-最新源码为 [upper/gyroa](upper/gyroa/README.md)，目标域名 `gyroa.233688.xyz`。需要 Node.js ≥22.12.0，在该目录执行：
+- [中文使用指南](docs/使用指南.md)（含单板性能指标摘要，WS2812 灯语见文末，适用版本以文首声明为准）
+- [使用说明书 PDF](output/pdf/AT32_AHRS_使用说明书_20261024c.pdf)
+- [SPI DMA 实板短测与已知问题](docs/SPI_DMA_BOARD_TEST_20261023.md)
+- [上位机说明](upper/gyroa/README.md) · [Bootloader 说明](bootloader/README.md)
 
-```sh
-npm ci
-npm run build
-npm run dev
-```
+## 许可
 
-可编辑页面在 `src/public/`，生成目录为 `dist/public/`，本地默认 `http://127.0.0.1:8833/`。真实 PCB 模型和页面所需脚本已包含，构建无需 STEP 原文件或转换工具。发布网站需自行登录目标 Cloudflare 账户后执行 `npm run deploy`。
-
-## 设备使用
-
-- VQF / EKF / ESKF 姿态融合，六轴 / 九轴 / 九轴相对航向；保留滤波档位、静置检测、零偏跟踪、校准与启动历史。ESKF 使用单套三维姿态误差状态，磁融合开关切换六轴/九轴；不同算法的频率、零偏状态和参数含义不能混用。当前 ESKF 频率与限制见上文及使用指南。
-- gyroa 设置页选择融合算法并“保存并重启”，ACK 和保存回读确认后自动重连原端口。旧配置默认 VQF；算法存储保持旧 BL 可读的 v8 主配置格式，无需为算法切换更新 BL。需 APP20261007a 或更新版本；`0x50` 查询、`0x51` 单字节设置，`0x52` 回复四字节(version/active/saved/restart-required)。
-- APP20261008a 与 gyroa 设置页支持“静置零偏估计”开关，VQF/EKF 六轴、九轴共用，立即生效并保存。关闭后保留启动/已学习的补偿和运动零偏估计，静置检测仍运行；重新开启后重新确认合格静置窗口。`0x55` 查询，`0x56` 设置单字节0/1，`0x57` 回复四字节(version/active/saved/reserved)。旧配置默认开启，无需更新 BL。
-- APP20261008b 针对 EKF 关闭静置零偏估计时调整重力观测噪声，并在加速度异常后连续确认 2 秒可靠观测再恢复运动零偏更新。确认不要求静止；启动/已学补偿保留，零角速更新仍关闭。静置估计开启时沿用原参数，VQF 不变。六轴平放时的不可观测航向零偏仍会累积，离线改善不代表实板长期精度。
-- 启动窗口 T=0～60 秒，默认 2 秒；BL 等待和零偏采集并行，到期采集不合格使用历史，不追加 APP 等待。T=0 使用历史立即启动，仍允许主动进入升级模式。
-- USB CDC 与 UART：2000000 baud；UART TX=PA0、RX=PA1，共地。USB D+=PA12、D-=PA11。
-- CAN2：RX=PA2、TX=PA3，需外接 CAN 收发器；可设置节点、输出字段和输出频率。
-- 空命令 `0x23` 查询版本（回复 `0x32`），`0x35` 查询型号（回复 `0x36`，ASCII `AT32`），`0x37` 查询实际启动零偏来源、初值及当前总补偿（回复 `0x38`）。历史回复 `0x34` v2 单位为 dps；旧 v1 为 rad/s。命令使用现有 AA55 二进制帧，不是直接发送 ASCII 命令编号。
-- 任一 USB/UART 输入 ASCII `vofa`，将两路输出切换为 JustFloat；无需空格或换行，不写入 Flash。
-- APP20261007f 的 EKF 重力更新按当前重力轴限制航向增益，静置零偏更新不回写姿态；运动加速度按方向/模长/瞬态偏差降权。`0x53` 携带一个字节(0=6D，1=9D)查询分项Yaw贡献，回复 `0x54` 60B；查询续租2秒诊断窗口，正常运行未查询时不增加诊断角度计算。回复含四类累计贡献/次数、加速度创新及权重；只有滤波器相同、generation相同且flags bit0/bit1均有效时可以比较。六轴真实正反转停检查及1000帧/s诊断负载检查已通过；短期复测不代表长期精度，六轴没有绝对航向参考。
-
-第三方许可证保留在 `LICENSES/`、SDK 的 `LICENSE` 和上位机 `THIRD-PARTY-NOTICES.txt`。构建产物、旧工程、采集数据及本机工具不纳入当前仓库目录。
-
-### 温度零偏学习与自动保存（当前 master）
-
-后台学习由固件独立运行，新学习范围为芯片温度 10～60°C；静止确认 10 秒后采集 30 秒，通过温度稳定性、噪声及已有记录一致性检查后更新工作表。记录保持 V4 A/B 格式与 26 槽布局，候选、确认和隔离状态分别保留；隔离节点不参与补偿，新模型在下一次启动生效。
-
-有待保存修改时，普通运行模式可以自动写入 Flash，无需上位机或设置模式。首次写入须启动满 30 分钟，后续间隔至少 30 分钟，每次启动最多 4 次尝试，且须连续合格静止 10 秒、无校准或采集等冲突。未读取的普通 USB/WebUSB 遥测不阻挡保存；已排队的控制回复仍须发送完成。保存会短暂停顿采样，沿用采样时间重建和跨间隔样本丢弃处理。
-
-定向检查、APP 编译及实板烧录、重启记录保留检查已通过。本次实板观察没有产生新的合格待保存记录，实际自动提交尚未覆盖，不代表全温度范围或长期姿态精度验证。
-
-### 加速度计量程（20261012a）
-
-上位机“设置 → 设备 → 加速度计量程”支持 ±2、±4、±8、±16 g。默认 ±4 g；与启动配置一起保存，勾选“保存后重启”可自动重启重连后生效。旧固件连接时禁用该选项。切换量程同时更新传感器 CTRL8、原始数据换算、姿态融合、六面校准和全部加速度遥测；现有校准参数保留。
-
-设备配置回复 `0x07` v5 长度 30B，前 28B 沿用 v4，偏移 28/29 是当前/已保存加速度计量程（单位 g）。`0x1E` 新增 8B 写入格式：`mode:u8, fast_start:u8, apply_now:u8, init_ms:u16LE, gyro_range_dps:u16LE, acc_range_g:u8`；旧 3/5/7B 格式保留已保存的加速度计量程。新配置存在 v8 设置日志的 292B 偏移、16B 独立 CRC 扩展，主记录保持旧 BL 可读；旧记录回退 ±4 g，无需更新 BL。
-
-### 20261012c 动态航向修正（历史2 kHz路径）
-
-本节记录当时的实现与回归；当前ESKF采集、预测及可选陀螺预滤波以当前源码和上面的使用指南为准。
-
-融合改为直接积分每个 2000 Hz 采样时刻的、经过温度和比例因子修正的陀螺仪读数。30 Hz 软件滤波保留用于静置校准和噪声诊断；显示仍沿用四元数姿态滤波。三轴角速度先分别低通会改变组合转动的路径，产生锥运动（coning）误差，回到相同物理姿态后仍可能有航向偏差。
-
-原生回归使用已知零航向、起止为同一姿态的 16 个多轴轨迹。6 Hz、±8° 的 10 秒闭合倾斜运动中，旧的 30 Hz 路径偏差约 3.0194°，当前路径低于 0.005°；另验证真实 1°/s 缓慢转动能正常输出。此结果验证了实现问题，不是对实物全部误差的精度承诺。六轴航向无绝对方向观测，残余零偏、比例误差和冲击仍需实物复测。
-
-采集期间仅对正在录制的端口限制普通显示遥测到最多 100 Hz，减少与九通道独立采集流的带宽竞争。命令回复、其他端口、采集频率和持久化参数保留；停止采集后自动恢复日常输出。
+第三方许可证见 `LICENSES/` 与上位机 [`src/public/THIRD-PARTY-NOTICES.txt`](upper/gyroa/src/public/THIRD-PARTY-NOTICES.txt)。

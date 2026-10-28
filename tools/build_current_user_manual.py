@@ -14,7 +14,7 @@ from reportlab.platypus import SimpleDocTemplate,Paragraph,Spacer,Table,TableSty
 
 ROOT=Path(__file__).resolve().parents[1]
 SOURCE=ROOT/'docs/使用指南.md'
-OUT=ROOT/'output/pdf/AT32_AHRS_使用说明书_20261023E.pdf'
+OUT=ROOT/'output/pdf/AT32_AHRS_使用说明书_20261024c.pdf'
 OUT.parent.mkdir(parents=True,exist_ok=True)
 pdfmetrics.registerFont(TTFont('CJK','C:/Windows/Fonts/msyh.ttc',subfontIndex=0))
 pdfmetrics.registerFont(TTFont('CJKB','C:/Windows/Fonts/msyhbd.ttc',subfontIndex=0))
@@ -62,8 +62,8 @@ class Divider(Flowable):
  def draw(self):self.canv.setStrokeColor(TEAL);self.canv.setLineWidth(2);self.canv.line(0,9,CW,9)
 
 md=SOURCE.read_text(encoding='utf8');lines=md.splitlines();story=[]
-story += [Spacer(1,35),para('AT32 AHRS','cover'),para('使用说明书','cover'),para('固件 20261023E  /  2026-10-23','sub'),Divider(),Spacer(1,13)]
-story += [table([['适用对象','说明'],['硬件','AT32F423 / LSM6DSV / IST8310'],['连接与输出','原生USB CDC、WebUSB、UART、CAN'],['上位机','[gyroa.233688.xyz](https://gyroa.233688.xyz/)'],['本版变化','SPI DMA采集、当前ESKF频率说明、验收边界与末尾灯语']]),Spacer(1,16)]
+story += [Spacer(1,35),para('AT32 AHRS','cover'),para('使用说明书','cover'),para('固件 20261024c  /  2026-10-24','sub'),Divider(),Spacer(1,13)]
+story += [table([['适用对象','说明'],['硬件','AT32F423 / LSM6DSV / IST8310'],['连接与输出','原生USB CDC、WebUSB、UART、CAN'],['上位机','[gyroa.233688.xyz](https://gyroa.233688.xyz/)'],['本版变化','SPI DMA采集、当前ESKF频率说明、验收边界、末尾灯语，以及第8节单板性能指标摘要']]),Spacer(1,16)]
 story += [para('阅读导航','sub')]
 sections=[(int(m[1]),m[2]) for line in lines if (m:=re.match(r'^## (\d+)\. (.+)$',line))]
 for number,title in sections:story.append(para(f'{number:02d}  {title.replace("（指南末尾）", "")}','body'))
@@ -95,17 +95,17 @@ while i<len(lines):
  body=[line];i+=1
  while i<len(lines) and lines[i].strip() and not lines[i].startswith(('## ','|','```','- ')) and not re.match(r'^\d+\. ',lines[i]):body.append(lines[i].strip());i+=1
  story.append(para(' '.join(body)))
-assert seen==[1,2,3,4,5,6,7]
+assert seen==[1,2,3,4,5,6,7,8]
 def furniture(c,doc):
  c.saveState();c.setFont('CJK',8);c.setFillColor(MUTED)
  if doc.page>1:
-  c.drawString(46,H-30,'AT32 AHRS  使用说明书');c.drawRightString(W-46,H-30,'20261023E')
+  c.drawString(46,H-30,'AT32 AHRS  使用说明书');c.drawRightString(W-46,H-30,'20261024c')
   c.setStrokeColor(colors.HexColor('#D9E5E9'));c.line(46,H-37,W-46,H-37)
- c.drawString(46,25,'2026-10-23  |  当前源码使用范围');c.drawRightString(W-46,25,str(doc.page));c.restoreState()
+ c.drawString(46,25,'2026-10-24  |  当前源码使用范围');c.drawRightString(W-46,25,str(doc.page));c.restoreState()
 doc=SimpleDocTemplate(str(OUT),pagesize=A4,leftMargin=46,rightMargin=46,topMargin=56,bottomMargin=45,
- title='AT32 AHRS 使用说明书 - 20261023E',author='Mathonix / AT32 AHRS',pageCompression=1)
+ title='AT32 AHRS 使用说明书 - 20261024c',author='Mathonix / AT32 AHRS',pageCompression=1)
 doc.build(story,onFirstPage=furniture,onLaterPages=furniture)
 manifest={'source':str(SOURCE.relative_to(ROOT)),'source_sha256':hashlib.sha256(SOURCE.read_bytes()).hexdigest(),
- 'pdf':OUT.name,'pdf_sha256':hashlib.sha256(OUT.read_bytes()).hexdigest(),'firmware':'20261023E'}
+ 'pdf':OUT.name,'pdf_sha256':hashlib.sha256(OUT.read_bytes()).hexdigest(),'firmware':'20261024c'}
 (OUT.with_suffix('.manifest.json')).write_text(json.dumps(manifest,ensure_ascii=False,indent=2),encoding='utf8')
 print(str(OUT))

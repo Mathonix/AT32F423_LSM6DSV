@@ -29,14 +29,35 @@
 #endif
 
 /* Application label: YYYYMMDD and one letter. The first build of a day is
- * "a". Each later build on that same day uses the next letter. */
+ * "a". Each later build on that same day uses the next letter. Experimental
+ * images may override it from the command line so they never report the same
+ * label as the accepted build. */
+#ifndef APP_FIRMWARE_VERSION
 #ifdef APP_USER_BL_UPDATE
 #define APP_FIRMWARE_VERSION "20261005j"
 #else
-#define APP_FIRMWARE_VERSION "20261023E"
+#define APP_FIRMWARE_VERSION "20261025a"
+#endif
 #endif
 
+/* Application tick: the VQF cadence, the output phase and every slow task.
+ * Overridable so a rate sweep is a compile flag, not a source edit. The 8 kHz
+ * capture path stays armed either way -- only the consumption cadence moves. */
+#ifndef APP_FUSION_HZ
 #define APP_FUSION_HZ             2000U
+#endif
+
+/* Capture-stream decimation. The ring produces APP_SAMPLE_RATE_HZ, the tick
+ * consumes one out of every APP_TICK_DECIM samples, so decimation must be an
+ * exact power of two. 2 kHz tick -> 4, 1 kHz tick -> 8. */
+#define APP_TICK_DECIM        (APP_SAMPLE_RATE_HZ / APP_FUSION_HZ)
+#define APP_TICK_DECIM_MASK   (APP_TICK_DECIM - 1U)
+#if (APP_TICK_DECIM == 0U) || ((APP_SAMPLE_RATE_HZ % APP_FUSION_HZ) != 0U)
+#error "APP_FUSION_HZ must divide APP_SAMPLE_RATE_HZ"
+#endif
+#if ((APP_TICK_DECIM & APP_TICK_DECIM_MASK) != 0U)
+#error "APP_FUSION_HZ must be APP_SAMPLE_RATE_HZ divided by a power of two"
+#endif
 #define APP_GYR_LPF_CUTOFF_HZ    30.0f
 /* Rate smoothing is for calibration/diagnostics. Filtering each body gyro
  * axis before quaternion integration changes multi-axis rotation paths. */
@@ -147,8 +168,12 @@
 /* Default runtime bias estimators; rest estimation is a persistent host switch.
  * Startup averaging remains independent of
  * these switches; rest detection remains available for status and ZARU. */
+#ifndef APP_VQF_MOTION_BIAS_ENABLE
 #define APP_VQF_MOTION_BIAS_ENABLE 1U
+#endif
+#ifndef APP_VQF_REST_BIAS_ENABLE
 #define APP_VQF_REST_BIAS_ENABLE   1U
+#endif
 /* Balanced-gear fallback used only before a profile is applied. */
 #define APP_VQF_TAU_ACC           2.5f
 #define APP_VQF_TAU_MAG           4.0f

@@ -57,6 +57,11 @@ template<unsigned Depth, bool Fast=false> struct TrackerT {
  uint32_t rollback_events,rolled_snapshots;
  uint16_t head,fill,high_run,low_run,ac_run,evidence,static_snaps,history_head;
  bool stationary,previous_stationary,boot_done,enabled;
+ /* Fresh sums for one ring traversal. Rebase the rolling statistics when the
+  * traversal completes: subtracting large motion samples from float square[]
+  * can otherwise leave a permanent positive noise floor after motion stops.
+  * This adds constant work per sample, without a full-window scan at 8 kHz. */
+ float rebuild_sum[3],rebuild_square[3];
 #if APP_ESKF_REST_ACCEL_GUARD
  /* Gravity direction in the body frame, low-passed at two time constants. A
   * slow rotation that the gyro threshold cannot see still moves it: 0.2 dps
@@ -127,9 +132,16 @@ template<unsigned Depth, bool Fast=false> struct TrackerT {
   for(unsigned axis=0;axis<3;axis++) {
    const float old=window[head][axis],value=previous[axis];
    sum[axis]+=value-old;square[axis]+=value*value-old*old;
+   rebuild_sum[axis]+=value;rebuild_square[axis]+=value*value;
    window[head][axis]=value;
   }
-  if(++head==window_size)head=0;
+  if(++head==window_size) {
+   head=0;
+   for(unsigned axis=0;axis<3;axis++) {
+    sum[axis]=rebuild_sum[axis];square[axis]=rebuild_square[axis];
+    rebuild_sum[axis]=rebuild_square[axis]=0.f;
+   }
+  }
   if(fill<window_size)++fill;
   const float inv=1.f/(float)fill;
   level=ac_energy=total_energy=0;
@@ -166,9 +178,9 @@ template<unsigned Depth, bool Fast=false> struct TrackerT {
    high_run=level>gate()?high_run+1:0;
    if(high_run>=(rest_tune.custom?rest_tune.leave:8)){stationary=false;high_run=0;}
   } else {
-   /* Entry needs a low AC energy as well. A constant residual raises `level`
-    * but leaves the variance at the noise floor, so the variance test is what
-    * separates "stale bias" from "slow rotation" and lets the learner run. */
+   /* Entry needs a low AC energy as well to reject vibration. Constant bias
+    * and constant slow rotation can both have low variance; this gyro-only
+    * test cannot distinguish them below the rate gate. */
    low_run=(level<gate()&&ac_energy<.20f)?low_run+1:0;
    if(low_run>=(rest_tune.custom?rest_tune.back:800)){stationary=true;low_run=0;}
   }

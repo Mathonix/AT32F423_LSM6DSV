@@ -543,6 +543,49 @@ int lsm6dsv_init_2khz_ranges(uint16_t gyro_range_dps, uint8_t acc_range_g)
   return 0;
 }
 
+/* Adopt an IMU that is already configured and converting.
+ *
+ * When gyro_init_ms > 0 the bootloader runs lsm6dsv_init_2khz() before its
+ * startup calibration, so by handoff time the part is streaming.  Running the
+ * full init sequence again issues a second SW_RESET while the sensor is live,
+ * which measurably randomises the accelerometer vector (~1.3 mg, 0.08 deg
+ * tilt, 3.5x worse than the single-init path).  Verify the register image and
+ * keep the part running instead; only the accelerometer full scale is touched,
+ * because the bootloader always configures ACC_RANGE_DEFAULT_G.
+ *
+ * Returns 0 when the running configuration can be used as-is.  Any mismatch
+ * returns non-zero so the caller falls back to lsm6dsv_init_2khz_ranges(). */
+int lsm6dsv_adopt_running(uint16_t gyro_range_dps, uint8_t acc_range_g)
+{
+  const uint8_t fs_g = gyro_range_register(gyro_range_dps);
+  const uint8_t fs_xl = acc_range_register(acc_range_g);
+  uint8_t v;
+
+  if(!gyro_range_valid(gyro_range_dps) || !acc_range_valid(acc_range_g)) return -11;
+
+  if(expect_reg(REG_WHO_AM_I, 0xFFU, LSM6DSV_WHO_AM_I_VAL) != 0) return -3;
+  if(expect_reg(REG_CTRL1, 0xFFU, HA01_2000HZ) != 0) return -4;
+  if(expect_reg(REG_CTRL2, 0xFFU, HA01_2000HZ) != 0) return -5;
+  if(expect_reg(REG_HAODR_CFG, 0x03U, HAODR_SEL_HA01) != 0) return -6;
+  if(expect_reg(REG_IF_CFG, IF_CFG_I2C_I3C_DISABLE, IF_CFG_I2C_I3C_DISABLE) != 0) return -10;
+  if(expect_reg(REG_CTRL3, (uint8_t)(CTRL3_BDU | CTRL3_IF_INC),
+                (uint8_t)(CTRL3_BDU | CTRL3_IF_INC)) != 0) return -10;
+  if(expect_reg(REG_CTRL4, CTRL4_DRDY_MASK, CTRL4_DRDY_MASK) != 0) return -10;
+  if(expect_reg(REG_CTRL6, (uint8_t)(0x0FU | CTRL6_XL_HM_MODE), fs_g) != 0) return -12;
+  if(expect_reg(REG_CTRL7, (uint8_t)(LPF1_G_EN | CTRL7_G_HM_MODE), 0x00U) != 0) return -8;
+  if(expect_reg(REG_INT1_CTRL, 0xFFU, INT1_DRDY_G) != 0) return -10;
+
+  if(lsm6dsv_read_reg(REG_CTRL8, &v) != 0) return -10;
+  if((uint8_t)(v & 0x03U) != fs_xl)
+  {
+    if(write_reg_mask(REG_CTRL8, 0x03U, fs_xl) != 0) return -10;
+    if(expect_reg(REG_CTRL8, 0x03U, fs_xl) != 0) return -10;
+    /* Samples already in flight were converted at the old gain. */
+    delay_ms(3U);
+  }
+  return (lsm6dsv_wait_sample(5000U) == 0) ? 0 : -7;
+}
+
 int lsm6dsv_read_sflp_gbias(float gbias_dps[3], uint32_t settle_ms)
 {
   uint8_t buf[7];

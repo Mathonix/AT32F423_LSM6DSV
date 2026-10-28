@@ -13,6 +13,14 @@
 !/AT32F423_Firmware_Library/
 !/upper/
 
+# Current user manual PDF: re-include the directory before its files (git never
+# descends into an excluded directory), then re-hide everything except the pair
+# the public README links to.
+!/output/
+/output/pdf/*
+!/output/pdf/AT32_AHRS_使用说明书_20261024c.pdf
+!/output/pdf/AT32_AHRS_使用说明书_20261024c.manifest.json
+
 # Firmware dependencies selected from the compiler dependency files.
 /AT32F423_Firmware_Library/**
 !/AT32F423_Firmware_Library/libraries/
@@ -78,12 +86,26 @@
 !/upper/gyroa/package.json
 !/upper/gyroa/package-lock.json
 !/upper/gyroa/wrangler.jsonc
+!/upper/gyroa/wrangler.ag.jsonc
 !/upper/gyroa/src/
 !/upper/gyroa/scripts/
 /upper/gyroa/scripts/*
 !/upper/gyroa/scripts/build.mjs
+!/upper/gyroa/scripts/build-previous-pages.mjs
+!/upper/gyroa/pages/
+/upper/gyroa/pages/*
+!/upper/gyroa/pages/wrangler.jsonc
+!/upper/gyroa/pages-previous/
+/upper/gyroa/pages-previous/*
+!/upper/gyroa/pages-previous/wrangler.jsonc
 /upper/gyroa/src/public/models/*
 !/upper/gyroa/src/public/models/pcb.glb
+
+# README preview shot -- the only binary published from the web-host tree.
+# The directory itself must be re-included first: git never descends into an
+# excluded directory, so a file-level negation alone would have no effect.
+!/upper/gyroa/docs/
+!/upper/gyroa/docs/preview-status.jpg
 
 # Local diagnostic sources and unused duplicate/host-only headers.
 /src/diagnostics/

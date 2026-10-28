@@ -215,6 +215,9 @@ static uint8_t app_vqf_pre_cal_bias_valid;
 static uint16_t app_gyro_init_ms;
 static uint16_t app_gyro_range_dps = GYRO_RANGE_DEFAULT_DPS;
 static uint8_t app_acc_range_g = ACC_RANGE_DEFAULT_G;
+/* 1 when this boot reused the sensor configuration the bootloader had already
+ * brought up instead of resetting a live part (see lsm6dsv_adopt_running). */
+static uint8_t app_sensor_adopted;
 static uint8_t app_relative_yaw_enabled;
 /* Common UART/USB telemetry rate, applied live and restored from Flash. */
 static uint16_t app_output_hz = APP_VOFA_OUTPUT_HZ;
@@ -456,6 +459,9 @@ static void protocol_reply_config(protocol_source_t source, uint8_t seq)
   config.active_fast_start = app_fast_start;
   config.saved_fast_start = app_saved_settings.fast_start;
   config.capabilities = 126U | (APP_MAG_FUSION_ENABLE ? 1U : 0U) | (APP_ACC_CAL_ENABLE ? 128U : 0U);
+  /* reserved byte: 1 when the IMU configuration was inherited from the
+   * bootloader instead of being re-initialised by the application. */
+  config.reserved = app_sensor_adopted;
   config.output_hz = app_output_hz;
   memcpy(config.outputs, app_outputs, sizeof(app_outputs));
   config.active_gyro_init_ms = app_gyro_init_ms;
@@ -2264,6 +2270,55 @@ static void app_service_commands(void)
     app_perform_reset(protocol_reset_pending);
 }
 
+/* Fallback gravity for the initial alignment.
+ *
+ * This used to be a single raw sample. At 2 kHz ODR one sample is easily a
+ * few mg off, and 3 mg of acceleration is 0.19 deg of tilt. Static tilt is
+ * unobservable against the accelerometer bias once the filter is running
+ * (the Kalman gain routes the error into ba instead), so a bad first sample
+ * persists for the whole session -- measured as a 0.19 deg roll offset that
+ * never converged over 35 min.
+ *
+ * Averaging a short window costs about 100 ms of boot time. The magnitude
+ * gate only rejects obvious shock or freefall; it is not a static detector.
+ */
+#define STARTUP_ACC_WINDOW     200U  /* ~100 ms at the 2 kHz boot ODR */
+#define STARTUP_ACC_MIN_VALID   50U
+#define STARTUP_ACC_MAX_TRIES  400U
+
+static int startup_acc_average(lsm6dsv_raw_t *last, float acc_ms2[3])
+{
+  float sum[3] = {0.0f, 0.0f, 0.0f};
+  unsigned valid = 0U, tries;
+
+  for(tries = 0U; tries < STARTUP_ACC_MAX_TRIES && valid < STARTUP_ACC_WINDOW; ++tries)
+  {
+    lsm6dsv_raw_t raw;
+    float sample[3];
+    float mag2;
+
+    if(lsm6dsv_wait_sample(2000U) != 0) break;
+    if(lsm6dsv_read_raw(&raw) != 0) continue;
+    *last = raw;
+    for(unsigned k = 0U; k < 3U; ++k)
+    {
+#if APP_ACC_CAL_ENABLE
+      sample[k] = acc_calibrate_g(k, (float)raw.acc[k] * ACC_G_PER_LSB) * G_TO_MS2;
+#else
+      sample[k] = (float)raw.acc[k] * ACC_G_PER_LSB * G_TO_MS2;
+#endif
+    }
+    mag2 = sample[0] * sample[0] + sample[1] * sample[1] + sample[2] * sample[2];
+    if(mag2 < (0.7f * G_TO_MS2) * (0.7f * G_TO_MS2)) continue;   /* freefall */
+    if(mag2 > (1.3f * G_TO_MS2) * (1.3f * G_TO_MS2)) continue;   /* shock */
+    sum[0] += sample[0]; sum[1] += sample[1]; sum[2] += sample[2];
+    ++valid;
+  }
+  if(valid < STARTUP_ACC_MIN_VALID) return 0;
+  for(unsigned k = 0U; k < 3U; ++k) acc_ms2[k] = sum[k] / (float)valid;
+  return 1;
+}
+
 int main(void)
 {
   boot_startup_handoff_t startup_handoff;
@@ -2364,7 +2419,24 @@ int main(void)
   }
 #endif
   live_whoami();
-  err = lsm6dsv_init_2khz_ranges(app_gyro_range_dps, app_acc_range_g);
+  /* A handoff that matches this build's startup settings proves the bootloader
+   * just configured the sensor and left it streaming. */
+  int valid_handoff = startup_handoff_present &&
+      boot_startup_matches(&startup_handoff, app_gyro_init_ms, app_gyro_range_dps);
+  /* Reuse that configuration: a second SW_RESET on a live part randomises the
+   * accelerometer vector and costs about 3x the tilt repeatability.  Anything
+   * unexpected falls back to the full init. */
+  app_sensor_adopted = 0U;
+  if(valid_handoff && startup_handoff.status == BOOT_STARTUP_FRESH &&
+     lsm6dsv_adopt_running(app_gyro_range_dps, app_acc_range_g) == 0)
+  {
+    app_sensor_adopted = 1U;
+    err = 0;
+  }
+  else
+  {
+    err = lsm6dsv_init_2khz_ranges(app_gyro_range_dps, app_acc_range_g);
+  }
   live_whoami();
   if(err != 0)
   {
@@ -2418,22 +2490,12 @@ int main(void)
       vqf_set_bias_sigmas(boot_cal.bias_sigma_init_dps, boot_cal.bias_sigma_rest_dps);
     }
 
-    /* Gravity and temperature for fallback; no second startup window. */
-    (void)lsm6dsv_wait_sample(2000U);
-    if(lsm6dsv_read_raw(&startup_raw) == 0)
-    {
+    /* Gravity and temperature for fallback; no second startup window.
+     * The window average matters: see startup_acc_average(). */
+    if(startup_acc_average(&startup_raw, startup_acc))
       temp_c = update_temperature(startup_raw.temp_raw);
-      for(i = 0U; i < 3U; ++i)
-      {
-#if APP_ACC_CAL_ENABLE
-        startup_acc[i] = acc_calibrate_g(i, (float)startup_raw.acc[i] * ACC_G_PER_LSB) * G_TO_MS2;
-#else
-        startup_acc[i] = (float)startup_raw.acc[i] * ACC_G_PER_LSB * G_TO_MS2;
-#endif
-      }
-    }
-    int valid_handoff = startup_handoff_present &&
-        boot_startup_matches(&startup_handoff, app_gyro_init_ms, app_gyro_range_dps);
+    else if(lsm6dsv_wait_sample(2000U) == 0 && lsm6dsv_read_raw(&startup_raw) == 0)
+      temp_c = update_temperature(startup_raw.temp_raw);
     float model_boot_temp=(valid_handoff&&startup_handoff.status==BOOT_STARTUP_FRESH)?
                            startup_handoff.temperature_c:temp_c;
     gyro_temp_comp_init(model_boot_temp);
@@ -2516,27 +2578,27 @@ int main(void)
 
 #if APP_IMU8K_ENGINE
     /* Drain the capture ring: the ISR produced these at 8 kHz. The ESKF is
-     * stepped on every sample; VQF keeps its 2 kHz cadence and only sees the
-     * newest sample further below. */
+     * stepped on every sample; VQF runs at the application tick and only sees
+     * one sample per APP_TICK_DECIM. */
     unsigned popped = 0U;
     {
       while(popped < 16U && lsm6dsv_8k_pop(&raw, &now_cy))
       {
         for(i = 0U; i < 3U; i++)
           gyr[i] = gyro_dps_from_raw(i, raw.gyr[i], temp_c) * DEG2RAD;
-        /* The engine takes every sample. VQF is fed every fourth one so its
-         * 2 kHz cadence matches the dt it was initialised with. */
+        /* The engine takes every sample. VQF is fed one in APP_TICK_DECIM so
+         * its cadence matches the dt it was initialised with. */
         /* Service USB inside the drain: with the capture ring a pass covers
          * several samples, and the transmit path used to be serviced once per
          * pass, which cannot drain 1 kHz when the pass rate drops below it. */
-        if((popped & 3U) == 0U) usb_cdc_task();
+        if((popped & APP_TICK_DECIM_MASK) == 0U) usb_cdc_task();
         if(fusion_get_algorithm() == FUSION_ALGORITHM_ESKF) {
           perf_mark_t gyro_mark=perf_mark();
           vqf_update_gyr(gyr);
           perf_record(PERF_GYRO,gyro_mark);
           /* Observation cadence follows consumed samples, never loop passes.
            * Preserve gyro -> same-sample accel ordering even while catching up. */
-          if((pop_n & 3U) == 3U) {
+          if((pop_n & APP_TICK_DECIM_MASK) == APP_TICK_DECIM_MASK) {
             float acc_now[3];
             for(i = 0U; i < 3U; i++) {
 #if APP_ACC_CAL_ENABLE
@@ -2552,18 +2614,21 @@ int main(void)
             if(eskf8k_counts[3]!=attempts)perf_record_cycles(PERF_ACCEL_KF,accel_cycles);
           }
         }
-        else if((pop_n & 3U) == 0U)
+        else if((pop_n & APP_TICK_DECIM_MASK) == 0U)
         {
           /* VQF cannot keep up at 8 kHz on this MCU; it is fed complete
-           * gyro+accelerometer pairs at 2 kHz instead. */
+           * gyro+accelerometer pairs once per application tick instead.
+           * Book the step in GYRO so both engines report the same bucket. */
           float acc_now[3];
           for(i = 0U; i < 3U; i++)
             acc_now[i] = acc_calibrate_g(i, (float)raw.acc[i] * ACC_G_PER_LSB) * G_TO_MS2;
+          perf_mark_t vqf_mark=perf_mark();
           vqf_update(gyr, acc_now);
+          perf_record(PERF_GYRO,vqf_mark);
         }
         pop_n++; popped++;pose_source_cy=now_cy;
-        /* Complete the nominal 2k application tick on every fourth sample. */
-        if((pop_n & 3U) == 0U) break;
+        /* Complete one nominal application tick per decimation group. */
+        if((pop_n & APP_TICK_DECIM_MASK) == 0U) break;
       }
       if(popped>max_drain_n)max_drain_n=popped;
       if(popped == 0U)
@@ -2599,7 +2664,7 @@ int main(void)
     dbg_pass_n++;
     app_output_phase += popped;
     app_attitude_phase += popped;
-    if((pop_n & 3U) != 0U) goto service_tasks;
+    if((pop_n & APP_TICK_DECIM_MASK) != 0U) goto service_tasks;
 #endif
     /* Slow work starts only on a complete application boundary. */
     drain_done=dwt_cycles();timing_max(TIME_DRAIN,drain_done-loop_mark);
