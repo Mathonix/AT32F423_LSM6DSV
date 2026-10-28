@@ -81,8 +81,20 @@ jobs:
                   rewritten.append(str(file.relative_to(output)))
 
           index = (output / 'index.html').read_text(encoding='utf-8')
-          if f'href="{prefix}style.css' not in index or f'src="{prefix}app.js' not in index:
-              raise RuntimeError('GitHub Pages asset URL rewrite did not complete')
+          # The shell picks its stylesheets and entry scripts per release, so assert
+          # the property we actually need instead of naming files: no root-absolute
+          # URL survives, and at least one known entry asset carries the prefix.
+          leftover = [m.group('path') for m in html_url.finditer(index)
+                      if not m.group('path').startswith(repository_name + '/')]
+          if leftover:
+              raise RuntimeError(
+                  'GitHub Pages asset URL rewrite left root-absolute URLs: '
+                  + ', '.join(leftover[:5]))
+          entries = [name for name in ('theme.js', 'app.js', 'theme.css', 'screen.css',
+                                       'workspace.css', 'workspace.js')
+                     if f'{prefix}{name}' in index]
+          if not entries:
+              raise RuntimeError('GitHub Pages asset URL rewrite touched no entry asset')
           print(f'GitHub Pages base path: {prefix}; adjusted {len(rewritten)} files: {rewritten}')
           PY
 
