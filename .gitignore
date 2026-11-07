@@ -5,12 +5,13 @@
 !/README.md
 !/Makefile
 !/LICENSES/
-!/src/
-!/inc/
-!/linker/
-!/middleware/
-!/bootloader/
-!/AT32F423_Firmware_Library/
+# CMake + Ninja build (parallel to the Makefile; same byte output).
+!/CMakeLists.txt
+!/CMakePresets.json
+!/cmake/
+# Firmware tree lives under Code/; re-including the directory is enough for git
+# to descend, but every explicit exception below must carry the same prefix.
+!/Code/
 !/upper/
 
 # Current user manual PDF: re-include the directory before its files (git never
@@ -22,61 +23,62 @@
 !/output/pdf/AT32_AHRS_使用说明书_20261024c.manifest.json
 
 # Firmware dependencies selected from the compiler dependency files.
-/AT32F423_Firmware_Library/**
-!/AT32F423_Firmware_Library/libraries/
-!/AT32F423_Firmware_Library/libraries/cmsis/
-!/AT32F423_Firmware_Library/libraries/drivers/
-!/AT32F423_Firmware_Library/libraries/cmsis/cm4/
-!/AT32F423_Firmware_Library/libraries/drivers/inc/
-!/AT32F423_Firmware_Library/libraries/drivers/src/
-!/AT32F423_Firmware_Library/libraries/cmsis/cm4/core_support/
-!/AT32F423_Firmware_Library/libraries/cmsis/cm4/device_support/
-!/AT32F423_Firmware_Library/libraries/cmsis/cm4/device_support/startup/
-!/AT32F423_Firmware_Library/libraries/cmsis/cm4/device_support/startup/gcc/
-!/AT32F423_Firmware_Library/LICENSE
-!/AT32F423_Firmware_Library/libraries/cmsis/cm4/core_support/cmsis_compiler.h
-!/AT32F423_Firmware_Library/libraries/cmsis/cm4/core_support/cmsis_gcc.h
-!/AT32F423_Firmware_Library/libraries/cmsis/cm4/core_support/cmsis_version.h
-!/AT32F423_Firmware_Library/libraries/cmsis/cm4/core_support/core_cm4.h
-!/AT32F423_Firmware_Library/libraries/cmsis/cm4/core_support/mpu_armv7.h
-!/AT32F423_Firmware_Library/libraries/cmsis/cm4/device_support/at32f423.h
-!/AT32F423_Firmware_Library/libraries/cmsis/cm4/device_support/startup/gcc/startup_at32f423.s
-!/AT32F423_Firmware_Library/libraries/cmsis/cm4/device_support/system_at32f423.c
-!/AT32F423_Firmware_Library/libraries/cmsis/cm4/device_support/system_at32f423.h
-!/AT32F423_Firmware_Library/libraries/drivers/inc/at32f423_acc.h
-!/AT32F423_Firmware_Library/libraries/drivers/inc/at32f423_can.h
-!/AT32F423_Firmware_Library/libraries/drivers/inc/at32f423_crm.h
-!/AT32F423_Firmware_Library/libraries/drivers/inc/at32f423_def.h
-!/AT32F423_Firmware_Library/libraries/drivers/inc/at32f423_dma.h
-!/AT32F423_Firmware_Library/libraries/drivers/inc/at32f423_flash.h
-!/AT32F423_Firmware_Library/libraries/drivers/inc/at32f423_gpio.h
-!/AT32F423_Firmware_Library/libraries/drivers/inc/at32f423_misc.h
-!/AT32F423_Firmware_Library/libraries/drivers/inc/at32f423_pwc.h
-!/AT32F423_Firmware_Library/libraries/drivers/inc/at32f423_scfg.h
-!/AT32F423_Firmware_Library/libraries/drivers/inc/at32f423_spi.h
-!/AT32F423_Firmware_Library/libraries/drivers/inc/at32f423_usart.h
-!/AT32F423_Firmware_Library/libraries/drivers/inc/at32f423_usb.h
-!/AT32F423_Firmware_Library/libraries/drivers/src/at32f423_acc.c
-!/AT32F423_Firmware_Library/libraries/drivers/src/at32f423_can.c
-!/AT32F423_Firmware_Library/libraries/drivers/src/at32f423_crm.c
-!/AT32F423_Firmware_Library/libraries/drivers/src/at32f423_dma.c
-!/AT32F423_Firmware_Library/libraries/drivers/src/at32f423_flash.c
-!/AT32F423_Firmware_Library/libraries/drivers/src/at32f423_gpio.c
-!/AT32F423_Firmware_Library/libraries/drivers/src/at32f423_misc.c
-!/AT32F423_Firmware_Library/libraries/drivers/src/at32f423_pwc.c
-!/AT32F423_Firmware_Library/libraries/drivers/src/at32f423_scfg.c
-!/AT32F423_Firmware_Library/libraries/drivers/src/at32f423_spi.c
-!/AT32F423_Firmware_Library/libraries/drivers/src/at32f423_usart.c
-!/AT32F423_Firmware_Library/libraries/drivers/src/at32f423_usb.c
+/Code/AT32F423_Firmware_Library/**
+!/Code/AT32F423_Firmware_Library/libraries/
+!/Code/AT32F423_Firmware_Library/libraries/cmsis/
+!/Code/AT32F423_Firmware_Library/libraries/drivers/
+!/Code/AT32F423_Firmware_Library/libraries/cmsis/cm4/
+!/Code/AT32F423_Firmware_Library/libraries/drivers/inc/
+!/Code/AT32F423_Firmware_Library/libraries/drivers/src/
+!/Code/AT32F423_Firmware_Library/libraries/cmsis/cm4/core_support/
+!/Code/AT32F423_Firmware_Library/libraries/cmsis/cm4/device_support/
+!/Code/AT32F423_Firmware_Library/libraries/cmsis/cm4/device_support/startup/
+!/Code/AT32F423_Firmware_Library/libraries/cmsis/cm4/device_support/startup/gcc/
+!/Code/AT32F423_Firmware_Library/LICENSE
+!/Code/AT32F423_Firmware_Library/libraries/cmsis/cm4/core_support/cmsis_compiler.h
+!/Code/AT32F423_Firmware_Library/libraries/cmsis/cm4/core_support/cmsis_gcc.h
+!/Code/AT32F423_Firmware_Library/libraries/cmsis/cm4/core_support/cmsis_version.h
+!/Code/AT32F423_Firmware_Library/libraries/cmsis/cm4/core_support/core_cm4.h
+!/Code/AT32F423_Firmware_Library/libraries/cmsis/cm4/core_support/mpu_armv7.h
+!/Code/AT32F423_Firmware_Library/libraries/cmsis/cm4/device_support/at32f423.h
+!/Code/AT32F423_Firmware_Library/libraries/cmsis/cm4/device_support/startup/gcc/startup_at32f423.s
+!/Code/AT32F423_Firmware_Library/libraries/cmsis/cm4/device_support/system_at32f423.c
+!/Code/AT32F423_Firmware_Library/libraries/cmsis/cm4/device_support/system_at32f423.h
+!/Code/AT32F423_Firmware_Library/libraries/drivers/inc/at32f423_acc.h
+!/Code/AT32F423_Firmware_Library/libraries/drivers/inc/at32f423_can.h
+!/Code/AT32F423_Firmware_Library/libraries/drivers/inc/at32f423_crm.h
+!/Code/AT32F423_Firmware_Library/libraries/drivers/inc/at32f423_def.h
+!/Code/AT32F423_Firmware_Library/libraries/drivers/inc/at32f423_dma.h
+!/Code/AT32F423_Firmware_Library/libraries/drivers/inc/at32f423_flash.h
+!/Code/AT32F423_Firmware_Library/libraries/drivers/inc/at32f423_gpio.h
+!/Code/AT32F423_Firmware_Library/libraries/drivers/inc/at32f423_misc.h
+!/Code/AT32F423_Firmware_Library/libraries/drivers/inc/at32f423_pwc.h
+!/Code/AT32F423_Firmware_Library/libraries/drivers/inc/at32f423_scfg.h
+!/Code/AT32F423_Firmware_Library/libraries/drivers/inc/at32f423_spi.h
+!/Code/AT32F423_Firmware_Library/libraries/drivers/inc/at32f423_usart.h
+!/Code/AT32F423_Firmware_Library/libraries/drivers/inc/at32f423_usb.h
+!/Code/AT32F423_Firmware_Library/libraries/drivers/src/at32f423_acc.c
+!/Code/AT32F423_Firmware_Library/libraries/drivers/src/at32f423_can.c
+!/Code/AT32F423_Firmware_Library/libraries/drivers/src/at32f423_crm.c
+!/Code/AT32F423_Firmware_Library/libraries/drivers/src/at32f423_dma.c
+!/Code/AT32F423_Firmware_Library/libraries/drivers/src/at32f423_flash.c
+!/Code/AT32F423_Firmware_Library/libraries/drivers/src/at32f423_gpio.c
+!/Code/AT32F423_Firmware_Library/libraries/drivers/src/at32f423_misc.c
+!/Code/AT32F423_Firmware_Library/libraries/drivers/src/at32f423_pwc.c
+!/Code/AT32F423_Firmware_Library/libraries/drivers/src/at32f423_scfg.c
+!/Code/AT32F423_Firmware_Library/libraries/drivers/src/at32f423_spi.c
+!/Code/AT32F423_Firmware_Library/libraries/drivers/src/at32f423_usart.c
+!/Code/AT32F423_Firmware_Library/libraries/drivers/src/at32f423_usb.c
 
 # Bootloader source only; local tools and compiled outputs stay private.
-/bootloader/*
-!/bootloader/Makefile
-!/bootloader/README.md
-!/bootloader/inc/
-!/bootloader/src/
-!/bootloader/linker/
-/bootloader/inc/usb_conf_project.h
+/Code/bootloader/*
+!/Code/bootloader/Makefile
+!/Code/bootloader/CMakeLists.txt
+!/Code/bootloader/README.md
+!/Code/bootloader/inc/
+!/Code/bootloader/src/
+!/Code/bootloader/linker/
+/Code/bootloader/inc/usb_conf_project.h
 
 # Keep only the latest buildable web host.
 /upper/*
@@ -108,12 +110,17 @@
 !/upper/gyroa/docs/preview-status.jpg
 
 # Local diagnostic sources and unused duplicate/host-only headers.
-/src/diagnostics/
-/src/bl_io.c
-/inc/diagnostics/
-/middleware/usb_drivers/inc/usbh_core.h
-/middleware/usb_drivers/inc/usbh_ctrl.h
-/middleware/usb_drivers/inc/usbh_int.h
+/Code/src/diagnostics/
+/Code/src/bl_io.c
+/Code/inc/diagnostics/
+/Code/middleware/usb_drivers/inc/usbh_core.h
+/Code/middleware/usb_drivers/inc/usbh_ctrl.h
+/Code/middleware/usb_drivers/inc/usbh_int.h
+
+# Native test suite stays local; only the published SPI DMA regression script
+# ships. Without this pair the Code/ re-include would expose ~67 local files.
+/Code/tests/*
+!/Code/tests/test_spi_dma_capture.py
 
 # Generated binaries, build state, dependencies and caches.
 build/

@@ -4,10 +4,12 @@ TARGET   ?= lsm6dsv_spi_test
 MCU      := cortex-m4
 CHIP     := AT32F423KCU7_4
 
-LIB      := AT32F423_Firmware_Library
-SRC_DIR  := src
+CODE     := Code
+LIB      := $(CODE)/AT32F423_Firmware_Library
+SRC_DIR  := $(CODE)/src
 APP_MAIN ?= app/main.c
-INC_DIR  := inc
+INC_DIR  := $(CODE)/inc
+MW_DIR   := $(CODE)/middleware
 BUILD    = build/$(TARGET)/$(if $(filter 1,$(DEBUG_BUILD)),debug,release)-$(if $(filter 1,$(SIX_AXIS)),6axis,9axis)
 
 CC       := arm-none-eabi-gcc
@@ -33,7 +35,7 @@ OBJCOPY := $(PIO_GCC)/arm-none-eabi-objcopy
 SIZE    := $(PIO_GCC)/arm-none-eabi-size
 endif
 
-LDSCRIPT := linker/AT32F423_app.ld
+LDSCRIPT := $(CODE)/linker/AT32F423_app.ld
 STARTUP  := $(LIB)/libraries/cmsis/cm4/device_support/startup/gcc/startup_at32f423.s
 
 SRCS := \
@@ -60,12 +62,12 @@ SRCS := \
   $(SRC_DIR)/drivers/can_test.c \
   $(SRC_DIR)/drivers/can_protocol.c \
   $(SRC_DIR)/drivers/usb_cdc.c \
-  middleware/usb_drivers/src/usb_core.c \
-  middleware/usb_drivers/src/usbd_core.c \
-  middleware/usb_drivers/src/usbd_int.c \
-  middleware/usb_drivers/src/usbd_sdr.c \
-  middleware/usbd_class/cdc/cdc_class.c \
-  middleware/usbd_class/cdc/cdc_desc.c \
+  $(MW_DIR)/usb_drivers/src/usb_core.c \
+  $(MW_DIR)/usb_drivers/src/usbd_core.c \
+  $(MW_DIR)/usb_drivers/src/usbd_int.c \
+  $(MW_DIR)/usb_drivers/src/usbd_sdr.c \
+  $(MW_DIR)/usbd_class/cdc/cdc_class.c \
+  $(MW_DIR)/usbd_class/cdc/cdc_desc.c \
   $(SRC_DIR)/drivers/protocol.c \
   $(SRC_DIR)/drivers/inertial_stream.c \
   $(SRC_DIR)/drivers/data_capture.c \
@@ -104,8 +106,8 @@ INCLUDES := \
   -I$(LIB)/libraries/cmsis/cm4/core_support \
   -I$(LIB)/libraries/cmsis/cm4/device_support \
   -I$(LIB)/libraries/drivers/inc \
-  -Imiddleware/usb_drivers/inc \
-  -Imiddleware/usbd_class/cdc
+  -I$(MW_DIR)/usb_drivers/inc \
+  -I$(MW_DIR)/usbd_class/cdc
 
 # Debug/production selects only the factory fast-start default. Both startup
 # paths are compiled; saved host settings override this default after reboot.
@@ -148,15 +150,15 @@ vpath %.c $(SRC_DIR)/app \
   $(SRC_DIR)/fusion \
   $(LIB)/libraries/cmsis/cm4/device_support \
   $(LIB)/libraries/drivers/src \
-  middleware/usb_drivers/src \
-  middleware/usbd_class/cdc
+  $(MW_DIR)/usb_drivers/src \
+  $(MW_DIR)/usbd_class/cdc
 vpath %.cpp $(SRC_DIR)/fusion
 
 .DEFAULT_GOAL := all
 .PHONY: all bootloader clean
 
 bootloader:
-	$(MAKE) -C bootloader -B
+	$(MAKE) -C $(CODE)/bootloader -B
 
 all: $(BUILD)/$(TARGET).elf $(BUILD)/$(TARGET).hex $(BUILD)/$(TARGET).bin
 

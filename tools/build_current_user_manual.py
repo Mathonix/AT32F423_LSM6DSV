@@ -4,7 +4,7 @@ Uses embedded Microsoft YaHei fonts. No board access or private snapshots.
 from pathlib import Path
 from xml.sax.saxutils import escape
 from urllib.parse import quote
-import hashlib,json,re
+import hashlib,json,os,re
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
 from reportlab.lib import colors
@@ -13,7 +13,7 @@ from reportlab.lib.pagesizes import A4
 from reportlab.platypus import SimpleDocTemplate,Paragraph,Spacer,Table,TableStyle,PageBreak,KeepTogether,Flowable
 
 ROOT=Path(__file__).resolve().parents[1]
-SOURCE=ROOT/'docs/使用指南.md'
+SOURCE=ROOT/'docs/guides/使用指南.md'
 OUT=ROOT/'output/pdf/AT32_AHRS_使用说明书_20261024c.pdf'
 OUT.parent.mkdir(parents=True,exist_ok=True)
 pdfmetrics.registerFont(TTFont('CJK','C:/Windows/Fonts/msyh.ttc',subfontIndex=0))
@@ -37,8 +37,8 @@ def inline(s):
  def link(m):
   label,target=m.groups()
   if '://' not in target:
-   target='https://github.com/Mathonix/AT32F423_LSM6DSV/blob/master/'+str((Path('docs')/target)).replace('\\','/')
-   target=target.replace('docs/../','')
+   # links inside docs/guides/*.md are relative to that folder
+   target='https://github.com/Mathonix/AT32F423_LSM6DSV/blob/master/'+os.path.normpath(str(Path('docs/guides')/target)).replace('\\','/')
   key=f'LINKTOKEN{len(tokens)}END'
   tokens[key]=f'<link href="{escape(quote(target,safe=":/#?=&%"))}" color="#087F8C">{escape(label)}</link>'
   return key
