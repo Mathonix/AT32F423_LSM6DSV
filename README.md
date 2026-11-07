@@ -26,14 +26,15 @@ AT32F423KCU7-4（150 MHz，内部 HICK 起振）+ LSM6DSV + IST8310 姿态参考
 - **存储**：配置 / 校准区独立于 APP，升级只写 APP，不覆盖 Bootloader 与配置区
 - **校准**：加计六面、陀螺零偏、温度零偏学习、磁椭球；支持后台自动保存
 
-已知限制见 [SPI DMA 实板短测与已知问题](docs/SPI_DMA_BOARD_TEST_20261023.md)：20 秒 USB 序号存在缺失、自启动 1 次姿态超龄，判定为限定范围 CONDITIONAL PASS。
+已知限制见 [SPI DMA 实板短测与已知问题](docs/hardware/SPI_DMA_BOARD_TEST_20261023.md)：20 秒 USB 序号存在缺失、自启动 1 次姿态超龄，判定为限定范围 CONDITIONAL PASS。
 
 ## 目录
 
 | 目录 | 内容 |
 | --- | --- |
-| `src/` `inc/` `linker/` | APP 固件源码 |
-| `bootloader/` | 配套 Bootloader，[说明](bootloader/README.md) |
+| `Code/src/` `Code/inc/` `Code/linker/` | APP 固件源码 |
+| `Code/bootloader/` | 配套 Bootloader，[说明](Code/bootloader/README.md) |
+| `Code/tests/` `Code/middleware/` | 原生单元测试、USB 协议栈 |
 | `upper/gyroa/` | 网页上位机，[说明](upper/gyroa/README.md) |
 | `LICENSES/` | 第三方许可证 |
 
@@ -41,15 +42,30 @@ AT32F423KCU7-4（150 MHz，内部 HICK 起振）+ LSM6DSV + IST8310 姿态参考
 
 ## 构建
 
-需要 GNU Arm Embedded Toolchain 与 GNU Make（Windows 用 `mingw32-make`），工具链加入 PATH。
+需要 GNU Arm Embedded Toolchain；CMake 方式另需 CMake ≥ 3.21 与 Ninja。两套方式产出**逐字节相同**的镜像，任选其一。
+
+编译器选择规则一致：优先 PlatformIO 自带的 GCC 7.2.1（`~/.platformio/packages/toolchain-gccarmnoneeabi`），找不到才用 PATH 里的 `arm-none-eabi-*`。两套编译器产物字节不同，不能混用。
+
+### CMake + Ninja（推荐）
+
+```sh
+cmake --preset 9axis && cmake --build --preset 9axis    # 九轴能力，运行时可切六轴
+cmake --preset 6axis && cmake --build --preset 6axis    # 强制六轴
+cmake --build --preset bootloader                       # 配套 Bootloader
+```
+
+### GNU Make
 
 ```sh
 make -B DEBUG_BUILD=0 SIX_AXIS=0 all   # 九轴能力，运行时可切六轴
 make -B DEBUG_BUILD=0 SIX_AXIS=1 all   # 强制六轴
-make -C bootloader -B all              # 配套 Bootloader
+make -C Code/bootloader -B all         # 配套 Bootloader
 ```
 
-APP 输出在 `build/lsm6dsv_spi_test/release-9axis/` 或 `release-6axis/`，BL 输出在 `bootloader/build/`，生成 `.bin`、`.hex` 与 `.elf`。
+APP 输出在 `build/lsm6dsv_spi_test/release-9axis/` 或 `release-6axis/`，BL 输出在 `Code/bootloader/build/`，生成 `.bin`、`.hex` 与 `.elf`。
+
+> **BL 的编译器来源**：Makefile 的 BL 链不探测 PlatformIO，一直用 PATH 里的编译器（本机为 15.2.1），交付包的 `bl-20261023s.bin` 就是这么来的。CMake 默认让 APP 与 BL 统一用 7.2.1；要复现交付包的 BL 字节，用 `cmake --preset bl-shipped && cmake --build --preset bootloader-shipped`。
+
 
 ## 烧录
 
@@ -63,10 +79,10 @@ APP 输出在 `build/lsm6dsv_spi_test/release-9axis/` 或 `release-6axis/`，BL 
 
 ## 文档
 
-- [中文使用指南](docs/使用指南.md)（含单板性能指标摘要，WS2812 灯语见文末，适用版本以文首声明为准）
+- [中文使用指南](docs/guides/使用指南.md)（含单板性能指标摘要，WS2812 灯语见文末，适用版本以文首声明为准）
 - [使用说明书 PDF](output/pdf/AT32_AHRS_使用说明书_20261024c.pdf)
-- [SPI DMA 实板短测与已知问题](docs/SPI_DMA_BOARD_TEST_20261023.md)
-- [上位机说明](upper/gyroa/README.md) · [Bootloader 说明](bootloader/README.md)
+- [SPI DMA 实板短测与已知问题](docs/hardware/SPI_DMA_BOARD_TEST_20261023.md)
+- [上位机说明](upper/gyroa/README.md) · [Bootloader 说明](Code/bootloader/README.md)
 
 ## 许可
 

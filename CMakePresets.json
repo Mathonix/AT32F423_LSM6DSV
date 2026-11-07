@@ -1,0 +1,52 @@
+{
+  "version": 3,
+  "cmakeMinimumRequired": { "major": 3, "minor": 21, "patch": 0 },
+  "configurePresets": [
+    {
+      "name": "9axis",
+      "displayName": "九轴 release（默认，等价 mingw32-make）",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/ninja/9axis",
+      "toolchainFile": "${sourceDir}/cmake/arm-none-eabi.cmake",
+      "cacheVariables": { "CMAKE_BUILD_TYPE": "Firmware" }
+    },
+    {
+      "name": "6axis",
+      "displayName": "六轴 release（等价 mingw32-make SIX_AXIS=1）",
+      "inherits": "9axis",
+      "binaryDir": "${sourceDir}/build/ninja/6axis",
+      "cacheVariables": { "SIX_AXIS": "ON" }
+    },
+    {
+      "name": "debug9axis",
+      "displayName": "九轴 debug（等价 mingw32-make DEBUG_BUILD=1）",
+      "inherits": "9axis",
+      "binaryDir": "${sourceDir}/build/ninja/debug9axis",
+      "cacheVariables": { "DEBUG_BUILD": "ON" }
+    },
+    {
+      "name": "bl-shipped",
+      "displayName": "用 PATH 的 GCC 15.2.1 复现交付包里的 BL",
+      "inherits": "9axis",
+      "binaryDir": "${sourceDir}/build/ninja/bl-shipped",
+      "cacheVariables": { "ARM_TOOLCHAIN": "path" }
+    }
+  ],
+  "buildPresets": [
+    { "name": "9axis", "configurePreset": "9axis" },
+    { "name": "6axis", "configurePreset": "6axis" },
+    { "name": "debug9axis", "configurePreset": "debug9axis" },
+    {
+      "name": "bootloader",
+      "displayName": "只编 Bootloader（GCC 7.2.1，与 APP 同编译器）",
+      "configurePreset": "9axis",
+      "targets": [ "bootloader" ]
+    },
+    {
+      "name": "bootloader-shipped",
+      "displayName": "用 15.2.1 编 Bootloader，字节与交付包一致",
+      "configurePreset": "bl-shipped",
+      "targets": [ "bootloader" ]
+    }
+  ]
+}
